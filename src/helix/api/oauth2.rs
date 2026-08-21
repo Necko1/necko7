@@ -11,7 +11,7 @@ pub struct AppTokenResponse {
 }
 
 #[derive(Deserialize)]
-pub struct CodeAuthResponse {
+pub struct UserTokenResponse {
     pub access_token: String,
     pub expires_in: u32,
     pub refresh_token: String,
@@ -22,7 +22,7 @@ pub struct CodeAuthResponse {
 impl HelixClient {
     pub async fn request_app_token(
         &self,
-    ) -> HelixResult<String> {
+    ) -> HelixResult<AppTokenResponse> {
         let params = [
             ("client_id", self.client_id.as_str()),
             ("client_secret", self.client_secret.as_str()),
@@ -39,7 +39,7 @@ impl HelixClient {
         if res.status().is_success() {
             let token = res.json::<AppTokenResponse>().await?;
 
-            return Ok(token.access_token)
+            return Ok(token)
         }
 
         let error_res = res.json::<ErrorResponse>().await?;
@@ -51,7 +51,7 @@ impl HelixClient {
         &self,
         code: &str,
         redirect_uri: &str,
-    ) -> HelixResult<CodeAuthResponse> {
+    ) -> HelixResult<UserTokenResponse> {
         let params = [
             ("client_id", self.client_id.as_str()),
             ("client_secret", self.client_secret.as_str()),
@@ -68,9 +68,38 @@ impl HelixClient {
             .await?;
 
         if res.status().is_success() {
-            let car = res.json::<CodeAuthResponse>().await?;
+            let token = res.json::<UserTokenResponse>().await?;
 
-            return Ok(car)
+            return Ok(token)
+        }
+
+        let error_res = res.json::<ErrorResponse>().await?;
+
+        Err(error_res.into())
+    }
+
+    pub async fn refresh_user_token(
+        &self,
+        refresh_token: &str,
+    ) -> HelixResult<UserTokenResponse> {
+        let params = [
+            ("client_id", self.client_id.as_str()),
+            ("client_secret", self.client_secret.as_str()),
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+        ];
+
+        let res = self
+            .http_client
+            .post("https://id.twitch.tv/oauth2/token")
+            .form(&params)
+            .send()
+            .await?;
+
+        if res.status().is_success() {
+            let token = res.json::<UserTokenResponse>().await?;
+
+            return Ok(token)
         }
 
         let error_res = res.json::<ErrorResponse>().await?;

@@ -8,7 +8,8 @@ use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
 use sha2::Sha256;
 use tracing::{info, warn};
-
+use crate::processor::model::EventSubNotification;
+use crate::processor::process_redemption;
 use crate::state::AppState;
 
 pub const MESSAGE_TYPE_VERIFICATION: &str = "webhook_callback_verification";
@@ -66,7 +67,13 @@ pub async fn handle_eventsub(
                     return StatusCode::NO_CONTENT.into_response();
                 }
 
-                // todo business logic
+                if let Ok(notification) = serde_json::from_slice::<EventSubNotification>(&body) {
+                    let state_clone = state.clone();
+
+                    tokio::spawn(async move {
+                        process_redemption(state_clone, notification).await;
+                    });
+                }
             }
             StatusCode::NO_CONTENT.into_response()
         }

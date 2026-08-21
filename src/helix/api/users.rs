@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
 use crate::helix::error::{HelixError, HelixResult};
-use crate::helix::HelixClient;
 use crate::helix::response::{ErrorResponse, ObjectResponse};
+use crate::helix::HelixClient;
+use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct UserInfo {

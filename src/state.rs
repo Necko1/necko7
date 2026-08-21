@@ -2,14 +2,17 @@ use std::env;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use crate::AppResult;
-use crate::db::app_settings::{KEY_APP_INITIALIZED, KEY_APP_TOKEN};
+use crate::db::app_settings::{KEY_APP_INITIALIZED, KEY_APP_TOKEN, KEY_BOT_ACCESS_TOKEN, KEY_BOT_REFRESH_TOKEN};
 use crate::db::Db;
 use crate::db::error::DbResult;
 use crate::helix::error::HelixError;
 use crate::helix::{api, HelixClient};
+use crate::steam::market::MarketClient;
 
 pub struct AppState {
     pub helix_client: HelixClient,
+    pub market_client: MarketClient,
+
     // env
     pub webhook_secret: String,
     pub client_id: String,
@@ -35,6 +38,7 @@ impl AppState {
 
         Ok(Arc::new(Self {
             helix_client: HelixClient::new(client_id.clone(), client_secret.clone()),
+            market_client: MarketClient::new(),
             webhook_secret: env::var("TWITCH_EVENTSUB_SECRET")
                 .expect("TWITCH_EVENTSUB_SECRET not found in the environment"),
             client_id,
@@ -48,14 +52,116 @@ impl AppState {
 }
 
 impl AppState {
+    pub async fn with_app_token<F, Fut, T>(&self, mut action: F) -> AppResult<T>
+    where
+        F: FnMut(String) -> Fut,
+        Fut: Future<Output = Result<T, HelixError>>,
+    {
+        let mut token = self.get_or_refresh_app_token().await?;
+
+        for attempt in 0..2 {
+            match action(token.clone()).await {
+                Ok(val) => return Ok(val),
+                // Если 401 и это первая попытка — обновляем токен и пробуем снова
+                Err(HelixError::Unauthorized(_)) if attempt == 0 => {
+                    token = self.update_app_access_token().await?;
+                    continue;
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+
+        unreachable!()
+    }
+
+    pub async fn with_broadcaster_token<F, Fut, T>(
+        &self,
+        broadcaster_id: &str,
+        mut action: F,
+    ) -> AppResult<T>
+    where
+        F: FnMut(String) -> Fut,
+        Fut: Future<Output = Result<T, HelixError>>,
+    {
+        let broadcaster = match self.db.get_broadcaster_by_id(broadcaster_id).await? {
+            Some(b) => b,
+            None => {
+                return Err(format!("Couldn't find a broadcaster with ID {}", broadcaster_id).into())
+            }
+        };
+
+        let mut token = broadcaster.user_access_token;
+
+        for attempt in 0..2 {
+            match action(token.clone()).await {
+                Ok(val) => return Ok(val),
+                Err(HelixError::Unauthorized(_)) if attempt == 0 => {
+                    let token_res = self.helix_client
+                        .refresh_user_token(&broadcaster.refresh_token).await?;
+
+                    self.db.update_broadcaster_tokens(
+                        broadcaster_id,
+                        &token_res.access_token, &token_res.refresh_token
+                    ).await?;
+
+                    token = token_res.access_token;
+                    continue;
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+
+        unreachable!()
+    }
+
+    pub async fn with_bot_user_token<F, Fut, T>(
+        &self,
+        mut action: F,
+    ) -> AppResult<T>
+    where
+        F: FnMut(String) -> Fut,
+        Fut: Future<Output = Result<T, HelixError>>,
+    {
+        let token_opt = self.db.get_setting(KEY_BOT_ACCESS_TOKEN).await?;
+
+        let Some(mut token) = token_opt else {
+            return Err("The bot is not initialized".into())
+        };
+
+        for attempt in 0..2 {
+            match action(token.clone()).await {
+                Ok(val) => return Ok(val),
+                Err(HelixError::Unauthorized(_)) if attempt == 0 => {
+                    let refresh_token_opt = self.db.get_setting(KEY_BOT_REFRESH_TOKEN).await?;
+
+                    let Some(refresh_token) = refresh_token_opt else {
+                        return Err("The bot has an access token but no refresh token.".into())
+                    };
+
+                    let token_res = self.helix_client
+                        .refresh_user_token(&refresh_token).await?;
+
+                    self.db.set_setting(KEY_BOT_ACCESS_TOKEN, &token_res.access_token).await?;
+                    self.db.set_setting(KEY_BOT_REFRESH_TOKEN, &token_res.refresh_token).await?;
+
+                    token = token_res.access_token;
+                    continue;
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+
+        unreachable!()
+    }
+
     pub async fn update_app_access_token(
         &self
     ) -> AppResult<String> {
         let app_token = self.helix_client.request_app_token().await?;
 
-        self.db.set_setting(KEY_APP_TOKEN, &app_token).await?;
+        self.db.set_setting(KEY_APP_TOKEN, &app_token.access_token).await?;
 
-        Ok(app_token)
+        Ok(app_token.access_token)
     }
 
     pub async fn get_or_refresh_app_token(&self) -> AppResult<String> {
@@ -72,34 +178,17 @@ impl AppState {
     ) -> AppResult<()> {
         let callback_url = format!("{}/eventsub", self.app_url);
 
-        let mut app_token = self.get_or_refresh_app_token().await?;
+        let body = api::eventsub::format_subscription(
+            &callback_url,
+            &self.webhook_secret,
+            broadcaster_user_id,
+        );
 
-        for attempt in 0..2 {
-            let body = api::eventsub::format_subscription(
-                &callback_url,
-                &self.webhook_secret,
-                broadcaster_user_id,
-            );
-
-            let result = self
-                .helix_client
-                .create_subscription(body, &app_token)
-                .await;
-
-            match result {
-                Ok(()) => return Ok(()),
-
-                Err(HelixError::Unauthorized(_)) if attempt == 0 => {
-                    app_token = self.update_app_access_token().await?;
-                    continue;
-                }
-
-                Err(HelixError::Unauthorized(msg)) => return Err(HelixError::Unauthorized(msg).into()),
-                Err(HelixError::Reqwest(e)) => return Err(e.into()),
-                Err(HelixError::Other(e)) => return Err(e.into()),
+        self.with_app_token(|token| {
+            let body = body.clone();
+            async move {
+                self.helix_client.create_subscription(body, &token).await
             }
-        }
-
-        Ok(())
+        }).await
     }
 }

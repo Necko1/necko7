@@ -1,8 +1,7 @@
-use reqwest::StatusCode;
-use serde_json::Value;
-use crate::helix::error::{HelixError, HelixResult};
-use crate::helix::HelixClient;
+use crate::helix::error::HelixResult;
 use crate::helix::response::ErrorResponse;
+use crate::helix::HelixClient;
+use serde_json::Value;
 
 impl HelixClient {
     pub async fn create_subscription(

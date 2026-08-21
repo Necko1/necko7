@@ -107,6 +107,22 @@ impl Db {
         Ok(redemption)
     }
 
+    pub async fn insert_redemption_if_new(&self, new: &NewRedemption) -> DbResult<Option<Redemption>> {
+        let redemption = sqlx::query_as::<_, Redemption>(
+            "INSERT INTO redemptions (twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, status, fail_cause, fail_description, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, NULL, NULL, NOW(), NOW()) ON CONFLICT (twitch_redemption_id) DO NOTHING RETURNING twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, status, fail_cause, fail_description, created_at, updated_at"
+        )
+        .bind(new.twitch_redemption_id)
+        .bind(new.twitch_reward_id)
+        .bind(&new.user_id)
+        .bind(&new.user_login)
+        .bind(&new.user_trade_link)
+        .bind(new.twitch_points_cost)
+        .bind(&new.status)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(redemption)
+    }
+
     pub async fn upsert_redemption(&self, new: &NewRedemption) -> DbResult<Redemption> {
         let redemption = sqlx::query_as::<_, Redemption>(
             "INSERT INTO redemptions (twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, status, fail_cause, fail_description, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, NULL, NULL, NOW(), NOW()) ON CONFLICT (twitch_redemption_id) DO UPDATE SET twitch_reward_id = EXCLUDED.twitch_reward_id, user_id = EXCLUDED.user_id, user_login = EXCLUDED.user_login, user_trade_link = EXCLUDED.user_trade_link, twitch_points_cost = EXCLUDED.twitch_points_cost, status = EXCLUDED.status, updated_at = NOW() RETURNING twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, status, fail_cause, fail_description, created_at, updated_at"
