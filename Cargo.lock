@@ -1123,6 +1123,7 @@ dependencies = [
  "dotenvy",
  "hex",
  "hmac",
+ "parking_lot",
  "reqwest",
  "serde",
  "serde_json",

@@ -78,6 +78,18 @@ pub async fn process_redemption(
         return;
     }
 
+    let bot_channel_id = {
+        let guard = state.bot_info.read();
+
+        match guard.as_ref() {
+            Some(s) => s.user_id.clone(),
+            None => {
+                error!("Bot account is not initialized.");
+                return;
+            }
+        }
+    };
+
     let trade_link = match TradeLink::parse(&event.user_input) {
         Some(t) => t,
         None => {
@@ -91,7 +103,17 @@ pub async fn process_redemption(
                 Some("Couldn't parse trade link in user input")
             ).await;
 
-            // и отправить в чат сообщение о том что трейд ссылка залупа нерабочая
+            if let Err(e) = state.with_bot_user_token(async |token| {
+                state.helix_client.send_chat_message(
+                    &broadcaster_user_id,
+                    &bot_channel_id,
+                    "не смог спарсить трейд ссылку, вернул баллы.", // fixme hardcoded chat messages
+                    None, None,
+                    &token).await
+            }).await {
+                error!("Failed to send chat message: {}", e);
+                return;
+            }
             return;
         }
     };
@@ -117,7 +139,18 @@ pub async fn process_redemption(
                 error!("DB error: {:?}", e);
                 return;
             }
-            // и отправить в чат сообщение о том что ордер на маркете был создан и ты должен ждать трейда в течении N времени
+
+            if let Err(e) = state.with_bot_user_token(async |token| {
+                state.helix_client.send_chat_message(
+                    &broadcaster_user_id,
+                    &bot_channel_id,
+                    "создал ордер на маркете, ожидай трейда в скорем времени или другого сообщения от меня в чате",
+                    None, None,
+                    &token).await
+            }).await {
+                error!("Failed to send chat message: {}", e);
+                return;
+            }
         }
         Ok(res) => {
             let error_msg = res.error.unwrap_or_else(|| "Unknown market error".to_string());
@@ -132,12 +165,33 @@ pub async fn process_redemption(
                 true,
                 Some(&error_msg)
             ).await;
-            // и отправить в чат сообщение об ошибке и пояснить исходя от кода
+
+            if let Err(e) = state.with_bot_user_token(async |token| {
+                state.helix_client.send_chat_message(
+                    &broadcaster_user_id,
+                    &bot_channel_id,
+                    &format!("не удалось создать ордер на маркете, вернул баллы. ошибка {}: {}", code, error_msg),
+                    None, None,
+                    &token).await
+            }).await {
+                error!("Failed to send chat message: {}", e);
+                return;
+            }
         }
         Err(e) => {
             error!("Failed to send HTTP request to Market: {:?}", e);
+            if let Err(e) = state.with_bot_user_token(async |token| {
+                state.helix_client.send_chat_message(
+                    &broadcaster_user_id,
+                    &bot_channel_id,
+                    "произошла внутренняя ошибка при отправке запроса на маркет. ничего трогать не буду, подробности в логах.",
+                    None, None,
+                    &token).await
+            }).await {
+                error!("Failed to send chat message: {}", e);
+                return;
+            }
             // НЕ ВОЗВРАЩАТЬ БАЛЛЫ И НЕ МЕНЯТЬ СТАТУС
-            // отправить в чат сообщение о том что внутренняя ошибка и бот не может автоматически создать заказ. нужен просмотр логов
         }
     }
 }

@@ -8,8 +8,8 @@ use serde::Deserialize;
 use tracing::{error, info, warn};
 use urlencoding::encode;
 use uuid::Uuid;
-use crate::state::AppState;
-use crate::db::app_settings::{KEY_APP_INITIALIZED, KEY_BOT_ACCESS_TOKEN, KEY_BOT_REFRESH_TOKEN};
+use crate::state::{AppState, BotInfo};
+use crate::db::app_settings::KEY_BOT_AUTH;
 use crate::db::broadcasters::NewBroadcaster;
 
 pub const STREAMER_AUTH_SCOPES: &str = "channel:read:redemptions channel:manage:redemptions channel:bot";
@@ -152,13 +152,27 @@ pub async fn auth_callback(
     let (channel_id, channel_login) = (info.id, info.login);
 
     if query_state.starts_with("bot:") {
-        state.db.set_setting(KEY_BOT_ACCESS_TOKEN, &user_token).await.unwrap();
-        state.db.set_setting(KEY_BOT_REFRESH_TOKEN, &refresh_token).await.unwrap();
-        state.db.set_setting(KEY_APP_INITIALIZED, "true").await.unwrap();
+        let bot_info = BotInfo {
+            user_login: channel_login.clone(),
+            user_id: channel_id.clone(),
+            access_token: user_token,
+            refresh_token,
+        };
+        
+        if let Ok(bot_info_str) = serde_json::to_string(&bot_info) {
+            state.db.set_setting(KEY_BOT_AUTH, &bot_info_str).await.unwrap();
 
-        state.app_initialized.store(true, Ordering::Relaxed);
+            {
+                let mut write_lock = state.bot_info.write();
+                *write_lock = Some(bot_info);
+            }
+            
+            state.app_initialized.store(true, Ordering::Relaxed);
 
-        info!("Bot account {} (ID: {}) successfully authorized!", channel_login, channel_id);
+            info!("Bot account {} (ID: {}) successfully authorized!", channel_login, channel_id);
+        } else {
+            warn!("Failed to save authorized bot account {} (ID: {})", channel_login, channel_id)
+        }
     } else if query_state.starts_with("streamer:") {
         let new_broadcaster = NewBroadcaster {
             channel_id: channel_id.clone(),

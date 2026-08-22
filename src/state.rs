@@ -1,13 +1,24 @@
 use std::env;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use tracing::warn;
 use crate::AppResult;
-use crate::db::app_settings::{KEY_APP_INITIALIZED, KEY_APP_TOKEN, KEY_BOT_ACCESS_TOKEN, KEY_BOT_REFRESH_TOKEN};
+use crate::db::app_settings::{KEY_APP_TOKEN, KEY_BOT_AUTH};
 use crate::db::Db;
 use crate::db::error::DbResult;
 use crate::helix::error::HelixError;
 use crate::helix::{api, HelixClient};
 use crate::steam::market::MarketClient;
+
+#[derive(Serialize, Deserialize)]
+pub struct BotInfo {
+    pub user_login: String,
+    pub user_id: String,
+    pub access_token: String,
+    pub refresh_token: String,
+}
 
 pub struct AppState {
     pub helix_client: HelixClient,
@@ -19,6 +30,8 @@ pub struct AppState {
     pub client_secret: String,
     pub app_url: String,
 
+    pub bot_info: RwLock<Option<BotInfo>>,
+
     pub db: Db,
 
     pub app_initialized: AtomicBool,
@@ -26,10 +39,12 @@ pub struct AppState {
 
 impl AppState {
     pub async fn from_env(db: Db) -> DbResult<Arc<Self>> {
-        let app_initialized = db.get_setting(KEY_APP_INITIALIZED).await?
-            .unwrap_or("false".to_string())
-            .to_lowercase()
-            == "true";
+        let bot_info: Option<BotInfo> = db
+            .get_setting(KEY_BOT_AUTH)
+            .await?
+            .and_then(|json| serde_json::from_str(&json).ok());
+
+        let app_initialized = bot_info.is_some();
 
         let client_id = env::var("TWITCH_CLIENT_ID")
             .expect("TWITCH_CLIENT_ID not found in the environment");
@@ -45,6 +60,7 @@ impl AppState {
             client_secret,
             app_url: env::var("APP_URL")
                 .expect("APP_URL not found in the environment"),
+            bot_info: RwLock::new(bot_info),
             db,
             app_initialized: AtomicBool::new(app_initialized),
         }))
@@ -122,29 +138,39 @@ impl AppState {
         F: FnMut(String) -> Fut,
         Fut: Future<Output = Result<T, HelixError>>,
     {
-        let token_opt = self.db.get_setting(KEY_BOT_ACCESS_TOKEN).await?;
-
-        let Some(mut token) = token_opt else {
-            return Err("The bot is not initialized".into())
+        let (mut token, refresh_token) = {
+            let guard = self.bot_info.read();
+            let info = guard.as_ref().ok_or("The bot is not initialized")?;
+            (info.access_token.clone(), info.refresh_token.clone())
         };
 
         for attempt in 0..2 {
             match action(token.clone()).await {
                 Ok(val) => return Ok(val),
                 Err(HelixError::Unauthorized(_)) if attempt == 0 => {
-                    let refresh_token_opt = self.db.get_setting(KEY_BOT_REFRESH_TOKEN).await?;
-
-                    let Some(refresh_token) = refresh_token_opt else {
-                        return Err("The bot has an access token but no refresh token.".into())
-                    };
-
                     let token_res = self.helix_client
                         .refresh_user_token(&refresh_token).await?;
 
-                    self.db.set_setting(KEY_BOT_ACCESS_TOKEN, &token_res.access_token).await?;
-                    self.db.set_setting(KEY_BOT_REFRESH_TOKEN, &token_res.refresh_token).await?;
+                    let user_info = self.helix_client
+                        .get_user_info_by_token(&token_res.access_token).await?;
 
-                    token = token_res.access_token;
+                    let bot_info = BotInfo {
+                        user_login: user_info.login,
+                        user_id: user_info.id,
+                        access_token: token_res.access_token,
+                        refresh_token: token_res.refresh_token,
+                    };
+
+                    match serde_json::to_string(&bot_info) {
+                        Ok(info_str) => {
+                            self.db.set_setting(KEY_BOT_AUTH, &info_str).await?;
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Failed to serialize bot info as string")
+                        }
+                    }
+
+                    token = bot_info.access_token;
                     continue;
                 }
                 Err(err) => return Err(err.into()),

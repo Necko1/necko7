@@ -3,9 +3,7 @@ use crate::db::error::DbResult;
 use super::Db;
 
 pub const KEY_APP_TOKEN: &str = "app_access_token";
-pub const KEY_BOT_ACCESS_TOKEN: &str = "bot_access_token";
-pub const KEY_BOT_REFRESH_TOKEN: &str = "bot_refresh_token";
-pub const KEY_APP_INITIALIZED: &str = "is_app_initialized";
+pub const KEY_BOT_AUTH: &str = "bot_auth";
 
 #[derive(Debug, Clone, FromRow)]
 pub struct AppSetting {
