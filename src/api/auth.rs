@@ -2,15 +2,20 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use axum::extract::{Query, State};
 use axum::http::header::{COOKIE, SET_COOKIE};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
+use chrono::{Duration, Utc};
 use serde::Deserialize;
 use tracing::{error, info, warn};
 use urlencoding::encode;
 use uuid::Uuid;
+use crate::api::cookie::{build_cookie_string, build_csrf_cookie};
 use crate::state::{AppState, BotInfo};
 use crate::db::app_settings::KEY_BOT_AUTH;
 use crate::db::broadcasters::NewBroadcaster;
+use crate::db::channel_permissions::{ChannelRole, NewChannelPermission};
+use crate::db::sessions::NewSession;
+use crate::db::users::NewUser;
 
 pub const STREAMER_AUTH_SCOPES: &str = "channel:read:redemptions channel:manage:redemptions channel:bot";
 pub const BOT_AUTH_SCOPES: &str = "user:write:chat user:bot";
@@ -31,24 +36,26 @@ pub async fn bot_login_redirect(State(state): State<Arc<AppState>>) -> impl Into
 
     let csrf_state = format!("bot:{}", Uuid::new_v4());
 
+    let cookie = build_csrf_cookie(&state, &csrf_state);
     let auth_url = get_auth_url(state, BOT_AUTH_SCOPES, &csrf_state);
-
-    let cookie = format!(
-        "oauth_state={}; HttpOnly; SameSite=Lax; Path=/auth; Max-Age=300",
-        csrf_state
-    );
 
     ([(SET_COOKIE, cookie)], Redirect::to(&auth_url)).into_response()
 }
 
 pub async fn streamer_login_redirect(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let csrf_state = format!("streamer:{}", Uuid::new_v4());
+
+    let cookie = build_csrf_cookie(&state, &csrf_state);
     let auth_url = get_auth_url(state, &STREAMER_AUTH_SCOPES, &csrf_state);
 
-    let cookie = format!(
-        "oauth_state={}; HttpOnly; SameSite=Lax; Path=/auth; Max-Age=300",
-        csrf_state
-    );
+    ([(SET_COOKIE, cookie)], Redirect::to(&auth_url)).into_response()
+}
+
+pub async fn user_login_redirect(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let csrf_state = format!("user:{}", Uuid::new_v4());
+
+    let cookie = build_csrf_cookie(&state, &csrf_state);
+    let auth_url = get_auth_url(state, "", &csrf_state);
 
     ([(SET_COOKIE, cookie)], Redirect::to(&auth_url)).into_response()
 }
@@ -102,7 +109,7 @@ pub async fn auth_callback(
             }
         });
 
-    let clear_cookie = (SET_COOKIE, "oauth_state=; HttpOnly; SameSite=Lax; Path=/auth; Max-Age=0");
+    let clear_cookie_str = build_cookie_string("oauth_state", "", 0, &state.app_url);
 
     match stored_state {
         Some(expected) if expected == query_state => {
@@ -112,7 +119,7 @@ pub async fn auth_callback(
             error!("CSRF attack detected or session expired. Query state: {}, Cookie state: {:?}", query_state, stored_state);
             return (
                 StatusCode::FORBIDDEN,
-                [clear_cookie],
+                [(SET_COOKIE, clear_cookie_str.as_str())],
                 "CSRF verification failed or session expired",
             ).into_response();
         }
@@ -127,7 +134,7 @@ pub async fn auth_callback(
             error!("Error while exchange code for user token: {:?}", err);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                [clear_cookie],
+                [(SET_COOKIE, clear_cookie_str.as_str())],
                 "Failed to exchange code for user token",
             ).into_response();
         }
@@ -143,7 +150,7 @@ pub async fn auth_callback(
             error!("Failed to get user info: {:?}", err);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                [clear_cookie],
+                [(SET_COOKIE, clear_cookie_str.as_str())],
                 "Failed to get user info"
             ).into_response();
         }
@@ -151,14 +158,25 @@ pub async fn auth_callback(
 
     let (channel_id, channel_login) = (info.id, info.login);
 
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(SET_COOKIE, HeaderValue::from_str(&clear_cookie_str).unwrap());
+
     if query_state.starts_with("bot:") {
+        if state.app_initialized.load(Ordering::Relaxed) {
+            return (
+                StatusCode::EXPECTATION_FAILED,
+                response_headers,
+                "?"
+            ).into_response()
+        }
+
         let bot_info = BotInfo {
             user_login: channel_login.clone(),
             user_id: channel_id.clone(),
             access_token: user_token,
             refresh_token,
         };
-        
+
         if let Ok(bot_info_str) = serde_json::to_string(&bot_info) {
             state.db.set_setting(KEY_BOT_AUTH, &bot_info_str).await.unwrap();
 
@@ -166,7 +184,7 @@ pub async fn auth_callback(
                 let mut write_lock = state.bot_info.write();
                 *write_lock = Some(bot_info);
             }
-            
+
             state.app_initialized.store(true, Ordering::Relaxed);
 
             info!("Bot account {} (ID: {}) successfully authorized!", channel_login, channel_id);
@@ -181,28 +199,92 @@ pub async fn auth_callback(
             refresh_token,
         };
 
-        state.db.upsert_broadcaster(&new_broadcaster).await.unwrap();
+        if let Err(e) = state.db.upsert_broadcaster(&new_broadcaster).await {
+            error!("DB Error: {:?}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "DB Error").into_response();
+        }
 
-        info!("Streamer {} (ID: {}) successfully authorized!", channel_login, channel_id);
+        let new_user = NewUser {
+            twitch_id: channel_id.clone(),
+            login: channel_login.clone(),
+            avatar_url: Some(info.profile_image_url),
+        };
+        let _ = state.db.upsert_user(&new_user).await;
+
+        let new_permission = NewChannelPermission {
+            channel_id: channel_id.clone(),
+            user_id: channel_id.clone(),
+            role: ChannelRole::Owner,
+            granted_by: channel_id.clone(),
+        };
+
+        if let Err(e) = state.db.upsert_permission(&new_permission).await {
+            error!("Failed to upsert OWNER permission: {:?}", e);
+        }
+
+        let state_clone = state.clone();
+        let cid_clone = channel_id.clone();
+        tokio::spawn(async move {
+            if let Err(err) = state_clone.create_eventsub_subscription(&cid_clone).await {
+                error!("Failed to create EventSub subscription: {:?}", err);
+            }
+        });
+
+        info!("Streamer {} (ID: {}) successfully connected the bot!", channel_login, channel_id);
+    } else if query_state.starts_with("user:") {
+        let new_user = NewUser {
+            twitch_id: channel_id.clone(),
+            login: channel_login,
+            avatar_url: Some(info.profile_image_url),
+        };
+
+        let session_id = Uuid::new_v4();
+        let new_session = NewSession {
+            session_id,
+            user_id: channel_id.clone(),
+            expires_at: Utc::now() + Duration::weeks(1),
+        };
+
+        if let Err(e) = state.db.upsert_user(&new_user).await {
+            warn!(error = %e, "DB Error saving user");
+
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                response_headers,
+                "DB Error saving user"
+            ).into_response();
+        }
+        if let Err(e) = state.db.create_session(&new_session).await {
+            warn!(error = %e, "DB Error saving session");
+
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                response_headers,
+                "DB Error saving session"
+            ).into_response();
+        }
+
+        let session_cookie = build_cookie_string(
+            "session_id",
+            &session_id.to_string(),
+            7 * 24 * 60 * 60,
+            &state.app_url,
+        );
+
+        response_headers.append(
+            SET_COOKIE,
+            HeaderValue::from_str(&session_cookie).unwrap()
+        );
+
+        info!("User {} logged into dashboard", channel_id);
     } else {
         warn!("Unknown state prefix: {}", query_state);
     }
 
-    if query_state.starts_with("streamer:") {
-        let state_clone = state.clone();
-        tokio::spawn(async move {
-            if let Err(err) =
-                state_clone.create_eventsub_subscription(&channel_id).await
-            {
-                error!("Failed to create EventSub subscription: {:?}", err);
-                return;
-            }
-        });
-    }
+    let frontend_dashboard_url = format!("{}/dashboard", state.frontend_url);
 
     (
-        StatusCode::OK,
-        [clear_cookie],
-        "Success"
+        response_headers,
+        Redirect::to(&frontend_dashboard_url)
     ).into_response()
 }

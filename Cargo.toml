@@ -29,3 +29,9 @@ parking_lot = "0.12"
 
 sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "uuid", "chrono"] }
 chrono = { version = "0.4", features = ["serde"] }
+
+tower-http = { version = "0.7", features = ["cors"] }
+
+serde_path_to_error = "0.1"
+serde_urlencoded = "0.7"
+form_urlencoded = "1"

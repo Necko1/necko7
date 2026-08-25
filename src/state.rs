@@ -29,6 +29,7 @@ pub struct AppState {
     pub client_id: String,
     pub client_secret: String,
     pub app_url: String,
+    pub frontend_url: String,
 
     pub bot_info: RwLock<Option<BotInfo>>,
 
@@ -60,6 +61,8 @@ impl AppState {
             client_secret,
             app_url: env::var("APP_URL")
                 .expect("APP_URL not found in the environment"),
+            frontend_url: env::var("FRONTEND_URL")
+                .expect("FRONTEND_URL not found in the environment"),
             bot_info: RwLock::new(bot_info),
             db,
             app_initialized: AtomicBool::new(app_initialized),

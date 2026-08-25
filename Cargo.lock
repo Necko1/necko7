@@ -1121,16 +1121,20 @@ dependencies = [
  "axum",
  "chrono",
  "dotenvy",
+ "form_urlencoded",
  "hex",
  "hmac",
  "parking_lot",
  "reqwest",
  "serde",
  "serde_json",
+ "serde_path_to_error",
+ "serde_urlencoded",
  "sha2 0.11.0",
  "sqlx",
  "thiserror",
  "tokio",
+ "tower-http 0.7.0",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -1390,7 +1394,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower",
- "tower-http",
+ "tower-http 0.6.11",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -2155,6 +2159,21 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "url",
+]
+
+[[package]]
+name = "tower-http"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b11f75e912b0c2be01b63d8cf8057b8c3f97cf34abb3d431a3a4c8675498e233"
+dependencies = [
+ "bitflags",
+ "bytes",
+ "http",
+ "percent-encoding",
+ "pin-project-lite",
+ "tower-layer",
+ "tower-service",
 ]
 
 [[package]]

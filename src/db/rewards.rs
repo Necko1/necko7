@@ -19,6 +19,7 @@ pub struct Reward {
     pub global_cooldown_seconds: i32,
     pub max_redemptions_per_stream: i16,
     pub max_redemptions_per_user_per_stream: i16,
+    pub market_autobuy: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -37,6 +38,7 @@ pub struct NewReward {
     pub global_cooldown_seconds: i32,
     pub max_redemptions_per_stream: i16,
     pub max_redemptions_per_user_per_stream: i16,
+    pub market_autobuy: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -52,12 +54,13 @@ pub struct UpdateReward {
     pub global_cooldown_seconds: Option<i32>,
     pub max_redemptions_per_stream: Option<i16>,
     pub max_redemptions_per_user_per_stream: Option<i16>,
+    pub market_autobuy: Option<bool>,
 }
 
 impl Db {
     pub async fn get_reward_by_twitch_id(&self, twitch_id: Uuid) -> DbResult<Option<Reward>> {
         let reward = sqlx::query_as::<_, Reward>(
-            "SELECT twitch_id, is_paused, is_deleted, streamer_id, market_item_name, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, created_at, updated_at FROM rewards WHERE twitch_id = $1"
+            "SELECT twitch_id, is_paused, is_deleted, streamer_id, market_item_name, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, created_at, updated_at FROM rewards WHERE twitch_id = $1"
         )
         .bind(twitch_id)
         .fetch_optional(&self.pool)
@@ -67,7 +70,7 @@ impl Db {
 
     pub async fn get_rewards_by_streamer_id(&self, streamer_id: &str) -> DbResult<Vec<Reward>> {
         let rewards = sqlx::query_as::<_, Reward>(
-            "SELECT twitch_id, is_paused, is_deleted, streamer_id, market_item_name, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, created_at, updated_at FROM rewards WHERE streamer_id = $1"
+            "SELECT twitch_id, is_paused, is_deleted, streamer_id, market_item_name, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, created_at, updated_at FROM rewards WHERE streamer_id = $1"
         )
         .bind(streamer_id)
         .fetch_all(&self.pool)
@@ -77,7 +80,7 @@ impl Db {
 
     pub async fn get_active_rewards_by_streamer_id(&self, streamer_id: &str) -> DbResult<Vec<Reward>> {
         let rewards = sqlx::query_as::<_, Reward>(
-            "SELECT twitch_id, is_paused, is_deleted, streamer_id, market_item_name, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, created_at, updated_at FROM rewards WHERE streamer_id = $1 AND NOT is_deleted AND NOT is_paused"
+            "SELECT twitch_id, is_paused, is_deleted, streamer_id, market_item_name, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, created_at, updated_at FROM rewards WHERE streamer_id = $1 AND NOT is_deleted AND NOT is_paused"
         )
         .bind(streamer_id)
         .fetch_all(&self.pool)
@@ -85,9 +88,26 @@ impl Db {
         Ok(rewards)
     }
 
+    pub async fn get_rewards_by_streamer_filtered(
+        &self,
+        streamer_id: &str,
+        is_paused: Option<bool>,
+        is_deleted: Option<bool>,
+    ) -> DbResult<Vec<Reward>> {
+        let rewards = sqlx::query_as::<_, Reward>(
+            "SELECT twitch_id, is_paused, is_deleted, streamer_id, market_item_name, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, created_at, updated_at FROM rewards WHERE streamer_id = $1 AND ($2::bool IS NULL OR is_paused = $2) AND ($3::bool IS NULL OR is_deleted = $3)"
+        )
+        .bind(streamer_id)
+        .bind(is_paused)
+        .bind(is_deleted)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rewards)
+    }
+
     pub async fn create_reward(&self, new: &NewReward) -> DbResult<Reward> {
         let reward = sqlx::query_as::<_, Reward>(
-            "INSERT INTO rewards (twitch_id, is_paused, is_deleted, streamer_id, market_item_name, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, created_at, updated_at) VALUES ($1, $2, FALSE, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW()) RETURNING twitch_id, is_paused, is_deleted, streamer_id, market_item_name, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, created_at, updated_at"
+            "INSERT INTO rewards (twitch_id, is_paused, is_deleted, streamer_id, market_item_name, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, created_at, updated_at) VALUES ($1, $2, FALSE, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW()) RETURNING twitch_id, is_paused, is_deleted, streamer_id, market_item_name, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, created_at, updated_at"
         )
         .bind(new.twitch_id)
         .bind(new.is_paused)
@@ -101,6 +121,7 @@ impl Db {
         .bind(new.global_cooldown_seconds)
         .bind(new.max_redemptions_per_stream)
         .bind(new.max_redemptions_per_user_per_stream)
+        .bind(new.market_autobuy)
         .fetch_one(&self.pool)
         .await?;
         Ok(reward)
@@ -108,7 +129,7 @@ impl Db {
 
     pub async fn upsert_reward(&self, new: &NewReward) -> DbResult<Reward> {
         let reward = sqlx::query_as::<_, Reward>(
-            "INSERT INTO rewards (twitch_id, is_paused, is_deleted, streamer_id, market_item_name, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, created_at, updated_at) VALUES ($1, $2, FALSE, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW()) ON CONFLICT (twitch_id) DO UPDATE SET is_paused = EXCLUDED.is_paused, is_deleted = FALSE, streamer_id = EXCLUDED.streamer_id, market_item_name = EXCLUDED.market_item_name, twitch_title = EXCLUDED.twitch_title, twitch_description = EXCLUDED.twitch_description, current_market_price = EXCLUDED.current_market_price, permissible_market_price_deviation = EXCLUDED.permissible_market_price_deviation, twitch_price_markup_percentage = EXCLUDED.twitch_price_markup_percentage, global_cooldown_seconds = EXCLUDED.global_cooldown_seconds, max_redemptions_per_stream = EXCLUDED.max_redemptions_per_stream, max_redemptions_per_user_per_stream = EXCLUDED.max_redemptions_per_user_per_stream, updated_at = NOW() RETURNING twitch_id, is_paused, is_deleted, streamer_id, market_item_name, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, created_at, updated_at"
+            "INSERT INTO rewards (twitch_id, is_paused, is_deleted, streamer_id, market_item_name, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, created_at, updated_at) VALUES ($1, $2, FALSE, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW()) ON CONFLICT (twitch_id) DO UPDATE SET is_paused = EXCLUDED.is_paused, is_deleted = FALSE, streamer_id = EXCLUDED.streamer_id, market_item_name = EXCLUDED.market_item_name, twitch_title = EXCLUDED.twitch_title, twitch_description = EXCLUDED.twitch_description, current_market_price = EXCLUDED.current_market_price, permissible_market_price_deviation = EXCLUDED.permissible_market_price_deviation, twitch_price_markup_percentage = EXCLUDED.twitch_price_markup_percentage, global_cooldown_seconds = EXCLUDED.global_cooldown_seconds, max_redemptions_per_stream = EXCLUDED.max_redemptions_per_stream, max_redemptions_per_user_per_stream = EXCLUDED.max_redemptions_per_user_per_stream, market_autobuy = EXCLUDED.market_autobuy, updated_at = NOW() RETURNING twitch_id, is_paused, is_deleted, streamer_id, market_item_name, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, created_at, updated_at"
         )
         .bind(new.twitch_id)
         .bind(new.is_paused)
@@ -122,6 +143,7 @@ impl Db {
         .bind(new.global_cooldown_seconds)
         .bind(new.max_redemptions_per_stream)
         .bind(new.max_redemptions_per_user_per_stream)
+        .bind(new.market_autobuy)
         .fetch_one(&self.pool)
         .await?;
         Ok(reward)
@@ -129,7 +151,7 @@ impl Db {
 
     pub async fn update_reward(&self, twitch_id: Uuid, patch: &UpdateReward) -> DbResult<()> {
         sqlx::query(
-            "UPDATE rewards SET is_paused = COALESCE($2, is_paused), is_deleted = COALESCE($3, is_deleted), market_item_name = COALESCE($4, market_item_name), twitch_title = COALESCE($5, twitch_title), twitch_description = COALESCE($6, twitch_description), current_market_price = COALESCE($7, current_market_price), permissible_market_price_deviation = COALESCE($8, permissible_market_price_deviation), twitch_price_markup_percentage = COALESCE($9, twitch_price_markup_percentage), global_cooldown_seconds = COALESCE($10, global_cooldown_seconds), max_redemptions_per_stream = COALESCE($11, max_redemptions_per_stream), max_redemptions_per_user_per_stream = COALESCE($12, max_redemptions_per_user_per_stream), updated_at = NOW() WHERE twitch_id = $1"
+            "UPDATE rewards SET is_paused = COALESCE($2, is_paused), is_deleted = COALESCE($3, is_deleted), market_item_name = COALESCE($4, market_item_name), twitch_title = COALESCE($5, twitch_title), twitch_description = COALESCE($6, twitch_description), current_market_price = COALESCE($7, current_market_price), permissible_market_price_deviation = COALESCE($8, permissible_market_price_deviation), twitch_price_markup_percentage = COALESCE($9, twitch_price_markup_percentage), global_cooldown_seconds = COALESCE($10, global_cooldown_seconds), max_redemptions_per_stream = COALESCE($11, max_redemptions_per_stream), max_redemptions_per_user_per_stream = COALESCE($12, max_redemptions_per_user_per_stream), market_autobuy = COALESCE($13, market_autobuy), updated_at = NOW() WHERE twitch_id = $1"
         )
         .bind(twitch_id)
         .bind(patch.is_paused)
@@ -143,6 +165,7 @@ impl Db {
         .bind(patch.global_cooldown_seconds)
         .bind(patch.max_redemptions_per_stream)
         .bind(patch.max_redemptions_per_user_per_stream)
+        .bind(patch.market_autobuy)
         .execute(&self.pool)
         .await?;
         Ok(())

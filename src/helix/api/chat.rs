@@ -1,6 +1,5 @@
 use serde::Deserialize;
 use serde_json::json;
-use crate::helix::api::users::UserInfo;
 use crate::helix::error::{HelixError, HelixResult};
 use crate::helix::HelixClient;
 use crate::helix::response::{ErrorResponse, ObjectResponse};

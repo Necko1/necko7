@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone)]
 pub struct CreateCustomReward {
     pub title: String,
     pub cost: u32,
@@ -10,6 +11,7 @@ pub struct CreateCustomReward {
     pub global_cooldown_seconds: Option<u32>,
 }
 
+#[derive(Clone)]
 pub struct UpdateCustomReward {
     pub title: Option<String>,
     pub cost: Option<u32>,

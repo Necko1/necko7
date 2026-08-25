@@ -4,6 +4,9 @@ pub mod rewards;
 pub mod redemptions;
 pub mod broadcaster_settings;
 pub mod error;
+pub mod users;
+pub mod sessions;
+pub mod channel_permissions;
 
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use tracing::info;

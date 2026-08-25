@@ -1,5 +1,3 @@
-use serde::Deserialize;
-
 pub mod error;
 pub mod response;
 pub mod api;

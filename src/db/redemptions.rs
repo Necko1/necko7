@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use crate::db::error::DbResult;
 use super::Db;
 
-#[derive(Debug, Clone, sqlx::Type, PartialEq)]
+#[derive(Debug, Clone, sqlx::Type, PartialEq, serde::Serialize, serde::Deserialize)]
 #[sqlx(type_name = "VARCHAR", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RedemptionStatus {
     Pending,
@@ -203,4 +203,68 @@ impl Db {
             .await?;
         Ok(())
     }
+
+    pub async fn get_redemptions_by_broadcaster(
+        &self,
+        broadcaster_id: &str,
+        status_filter: Option<&str>,
+        reward_id_filter: Option<Uuid>,
+        offset: i64,
+        limit: i64,
+    ) -> DbResult<Vec<Redemption>> {
+        let redemptions = sqlx::query_as::<_, Redemption>(
+            "SELECT r.twitch_redemption_id, r.twitch_reward_id, r.user_id, r.user_login, r.user_trade_link, r.twitch_points_cost, r.market_paid_price, r.status, r.fail_cause, r.fail_description, r.created_at, r.updated_at
+             FROM redemptions r
+             INNER JOIN rewards rw ON r.twitch_reward_id = rw.twitch_id
+             WHERE rw.streamer_id = $1
+             AND ($2::VARCHAR IS NULL OR r.status = $2)
+             AND ($3::UUID IS NULL OR r.twitch_reward_id = $3)
+             ORDER BY r.created_at DESC
+             OFFSET $4 LIMIT $5"
+        )
+        .bind(broadcaster_id)
+        .bind(status_filter)
+        .bind(reward_id_filter)
+        .bind(offset)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(redemptions)
+    }
+
+    pub async fn get_redemption_stats(
+        &self,
+        broadcaster_id: &str,
+        from: chrono::DateTime<chrono::Utc>,
+        to: chrono::DateTime<chrono::Utc>,
+    ) -> DbResult<RedemptionStats> {
+        let stats = sqlx::query_as::<_, RedemptionStats>(
+            "SELECT
+                COUNT(*)::BIGINT AS total_redemptions,
+                COUNT(*) FILTER (WHERE r.status = 'COMPLETED')::BIGINT AS completed,
+                COUNT(*) FILTER (WHERE r.status IN ('FAILED_REFUND', 'FAILED_PENALTY'))::BIGINT AS failed,
+                COALESCE(SUM(r.market_paid_price) FILTER (WHERE r.status = 'COMPLETED'), 0)::BIGINT AS total_spent,
+                COALESCE(SUM(r.twitch_points_cost) FILTER (WHERE r.status = 'COMPLETED'), 0)::BIGINT AS total_points_earned
+             FROM redemptions r
+             INNER JOIN rewards rw ON r.twitch_reward_id = rw.twitch_id
+             WHERE rw.streamer_id = $1
+             AND r.created_at >= $2
+             AND r.created_at < $3"
+        )
+        .bind(broadcaster_id)
+        .bind(from)
+        .bind(to)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(stats)
+    }
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct RedemptionStats {
+    pub total_redemptions: i64,
+    pub completed: i64,
+    pub failed: i64,
+    pub total_spent: i64,
+    pub total_points_earned: i64,
 }
