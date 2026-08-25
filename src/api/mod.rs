@@ -15,7 +15,10 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::http::{Request, StatusCode};
 use tower_http::cors::CorsLayer;
+use utoipa_swagger_ui::SwaggerUi;
+use utoipa::OpenApi;
 use crate::state::AppState;
+use v1::ApiDoc;
 
 async fn app_init_guard(
     State(state): State<Arc<AppState>>,
@@ -46,9 +49,13 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
         .allow_headers([header::AUTHORIZATION, header::ACCEPT, header::CONTENT_TYPE]);
 
+    let swagger = SwaggerUi::new("/swagger-ui")
+        .url("/api-docs/openapi.json", ApiDoc::openapi());
+
     Router::new()
         .merge(init)
         .merge(guarded)
+        .merge(swagger)
         .layer(cors)
         .with_state(state)
 }

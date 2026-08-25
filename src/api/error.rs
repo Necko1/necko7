@@ -2,46 +2,57 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
+use utoipa::ToSchema;
 use crate::db::error::DbError;
 use crate::helix::error::HelixError;
 
-#[derive(Debug)]
+#[derive(Debug, utoipa::IntoResponses)]
 pub enum ApiError {
+    #[response(status = BAD_REQUEST, description = "The request is invalid (bad parameter, missing field, etc.)")]
     BadRequest {
         message: String,
         param: String,
     },
+    #[response(status = UNAUTHORIZED, description = "Authentication required. Provide a valid session cookie.")]
     Unauthorized {
         message: String,
     },
+    #[response(status = FORBIDDEN, description = "You do not have permission to access this resource.")]
     Forbidden {
         message: String,
     },
+    #[response(status = NOT_FOUND, description = "The requested resource was not found.")]
     NotFound {
         message: String,
     },
+    #[response(status = UNPROCESSABLE_ENTITY, description = "Validation failed for the provided data.")]
     UnprocessableEntity {
         message: String,
         param: String,
     },
+    #[response(status = INTERNAL_SERVER_ERROR, description = "An internal server error occurred. This is not your fault.")]
     Internal {
         message: String,
     },
 }
 
-#[derive(Serialize)]
-struct ErrorBody {
-    error: ErrorDetail,
+#[derive(Serialize, ToSchema)]
+pub struct ErrorBody {
+    pub error: ErrorDetail,
 }
 
-#[derive(Serialize)]
-struct ErrorDetail {
-    code: &'static str,
+#[derive(Serialize, ToSchema)]
+pub struct ErrorDetail {
+    /// Error code (e.g. `invalid_request_error`, `authentication_error`)
+    pub code: &'static str,
+    /// Error type category
     #[serde(rename = "type")]
-    error_type: &'static str,
-    message: String,
+    pub error_type: &'static str,
+    /// Human-readable error message
+    pub message: String,
+    /// Parameter name that caused the error (if applicable)
     #[serde(skip_serializing_if = "Option::is_none")]
-    param: Option<String>,
+    pub param: Option<String>,
 }
 
 impl ApiError {
@@ -108,6 +119,15 @@ impl From<DbError> for ApiError {
         tracing::error!("Database error: {:?}", err);
         ApiError::Internal {
             message: "Internal database error".to_string(),
+        }
+    }
+}
+
+impl From<reqwest::Error> for ApiError {
+    fn from(err: reqwest::Error) -> Self {
+        tracing::error!("Reqwest error: {:?}", err);
+        ApiError::Internal {
+            message: "Internal reqwest error".to_string(),
         }
     }
 }

@@ -2,24 +2,37 @@ use std::sync::Arc;
 use axum::extract::{State, Path};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use tracing::error;
 use uuid::Uuid;
+use utoipa::ToSchema;
 use crate::api::error::ApiError;
 use crate::api::extractor::authorized_channel::AuthorizedChannel;
 use crate::db::redemptions::{Redemption, RedemptionStatus};
 use crate::state::AppState;
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct RedemptionResponse {
+    /// Twitch redemption UUID
     pub twitch_redemption_id: Uuid,
+    /// Twitch reward UUID this redemption belongs to
     pub twitch_reward_id: Uuid,
+    /// Twitch user ID who made the redemption
     pub user_id: String,
+    /// Twitch login name of the user
     pub user_login: String,
+    /// Twitch channel points spent
     pub twitch_points_cost: i64,
+    /// Market price paid in cents (if any)
     pub market_paid_price: Option<i64>,
+    /// Current redemption status
     pub status: RedemptionStatus,
+    /// Failure cause code (if failed)
     pub fail_cause: Option<String>,
+    /// Human-readable failure description (if failed)
     pub fail_description: Option<String>,
+    /// Redemption creation timestamp
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Redemption last update timestamp
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -41,14 +54,55 @@ impl From<Redemption> for RedemptionResponse {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema, utoipa::IntoParams)]
 pub struct ListRedemptionsQuery {
+    /// Filter by redemption status (PENDING, ORDER_CREATED, FAILED_REFUND, FAILED_PENALTY, COMPLETED)
     pub status: Option<String>,
+    /// Filter by reward UUID
     pub reward_id: Option<Uuid>,
+    /// Number of records to skip (default: 0)
     pub offset: Option<i64>,
+    /// Maximum number of records to return (default: 50, max: 100)
     pub limit: Option<i64>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/broadcasters/{channel_id}/redemptions",
+    tag = "Redemptions",
+    summary = "List redemptions",
+    description = "Returns redemptions for a specific channel with optional filtering by status and reward. Results are paginated.",
+    params(
+        ("channel_id" = String, Path, description = "Twitch channel ID"),
+        ListRedemptionsQuery,
+    ),
+    responses(
+        (status = 200, description = "List of redemptions", body = Vec<RedemptionResponse>,
+            example = json!([
+                {
+                    "twitch_redemption_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                    "twitch_reward_id": "550e8400-e29b-41d4-a716-446655440000",
+                    "user_id": "987654321",
+                    "user_login": "some_viewer",
+                    "twitch_points_cost": 5000,
+                    "market_paid_price": 3500,
+                    "status": "COMPLETED",
+                    "fail_cause": null,
+                    "fail_description": null,
+                    "created_at": "2026-01-15T12:00:00Z",
+                    "updated_at": "2026-01-15T12:05:00Z"
+                }
+            ])
+        ),
+        (status = 401, description = "Unauthorized — missing or invalid session cookie"),
+        (status = 403, description = "Forbidden — no access to this channel"),
+        (status = 404, description = "Broadcaster settings not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(
+        ("session_id" = [])
+    )
+)]
 pub async fn list_redemptions(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
@@ -68,6 +122,33 @@ pub async fn list_redemptions(
     Ok(Json(redemptions.into_iter().map(RedemptionResponse::from).collect()))
 }
 
+#[utoipa::path(
+    post,
+    path = "/broadcasters/{channel_id}/redemptions/{redemption_id}/retry",
+    tag = "Redemptions",
+    summary = "Retry a failed redemption",
+    description = "Retries a failed redemption by attempting to buy the item from the market again. Only works for redemptions with status FAILED_PENALTY.",
+    params(
+        ("channel_id" = String, Path, description = "Twitch channel ID"),
+        ("redemption_id" = Uuid, Path, description = "Twitch redemption UUID"),
+    ),
+    responses(
+        (status = 200, description = "Retry attempt completed", body = serde_json::Value,
+            example = json!({ "status": "order_created" })
+        ),
+        (status = 200, description = "Market error during retry", body = serde_json::Value,
+            example = json!({ "status": "market_error", "error": "Item not available" })
+        ),
+        (status = 401, description = "Unauthorized — missing or invalid session cookie"),
+        (status = 403, description = "Forbidden — redemption does not belong to this channel"),
+        (status = 404, description = "Redemption or associated reward not found"),
+        (status = 422, description = "Cannot retry — redemption is not in a failed state"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(
+        ("session_id" = [])
+    )
+)]
 pub async fn retry_redemption(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
@@ -90,7 +171,7 @@ pub async fn retry_redemption(
     }
 
     match redemption.status {
-        RedemptionStatus::FailedRefund | RedemptionStatus::FailedPenalty => {}
+        RedemptionStatus::FailedPenalty => {}
         _ => return Err(ApiError::UnprocessableEntity {
             message: "Can only retry failed redemptions".to_string(),
             param: "redemption_id".to_string(),
@@ -114,6 +195,7 @@ pub async fn retry_redemption(
         &setting.market_api_key,
         &reward.market_item_name,
         max_price,
+        setting.market_chance_to_transfer,
         trade_link,
         &redemption.twitch_redemption_id,
     ).await;
@@ -131,10 +213,11 @@ pub async fn retry_redemption(
         }
         Ok(res) => {
             let error_msg = res.error.unwrap_or_else(|| "Unknown market error".to_string());
+
             state.db.update_redemption_status(
                 redemption_id,
-                RedemptionStatus::FailedRefund,
-                Some("market_error"),
+                RedemptionStatus::FailedPenalty, // doesn't change
+                Some("market_retry_failed"),
                 Some(&error_msg),
             ).await?;
 
@@ -149,6 +232,29 @@ pub async fn retry_redemption(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/broadcasters/{channel_id}/redemptions/{redemption_id}/refund",
+    tag = "Redemptions",
+    summary = "Refund a redemption",
+    description = "Manually refunds a redemption. The user's Twitch channel points are restored and the redemption status is set to FAILED_REFUND.",
+    params(
+        ("channel_id" = String, Path, description = "Twitch channel ID"),
+        ("redemption_id" = Uuid, Path, description = "Twitch redemption UUID"),
+    ),
+    responses(
+        (status = 200, description = "Redemption refunded successfully", body = serde_json::Value,
+            example = json!({ "status": "refunded" })
+        ),
+        (status = 401, description = "Unauthorized — missing or invalid session cookie"),
+        (status = 403, description = "Forbidden — redemption does not belong to this channel"),
+        (status = 404, description = "Redemption or associated reward not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(
+        ("session_id" = [])
+    )
+)]
 pub async fn refund_redemption(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
@@ -199,6 +305,29 @@ pub async fn refund_redemption(
     Ok(Json(serde_json::json!({ "status": "refunded" })))
 }
 
+#[utoipa::path(
+    post,
+    path = "/broadcasters/{channel_id}/redemptions/{redemption_id}/penalty",
+    tag = "Redemptions",
+    summary = "Penalize a redemption",
+    description = "Manually penalizes a redemption. The user's Twitch channel points are not restored and the redemption status is set to FAILED_PENALTY.",
+    params(
+        ("channel_id" = String, Path, description = "Twitch channel ID"),
+        ("redemption_id" = Uuid, Path, description = "Twitch redemption UUID"),
+    ),
+    responses(
+        (status = 200, description = "Redemption penalized successfully", body = serde_json::Value,
+            example = json!({ "status": "penalty" })
+        ),
+        (status = 401, description = "Unauthorized — missing or invalid session cookie"),
+        (status = 403, description = "Forbidden — redemption does not belong to this channel"),
+        (status = 404, description = "Redemption or associated reward not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(
+        ("session_id" = [])
+    )
+)]
 pub async fn penalty_redemption(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,

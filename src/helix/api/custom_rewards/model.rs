@@ -11,7 +11,7 @@ pub struct CreateCustomReward {
     pub global_cooldown_seconds: Option<u32>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct UpdateCustomReward {
     pub title: Option<String>,
     pub cost: Option<u32>,

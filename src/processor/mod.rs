@@ -107,7 +107,7 @@ pub async fn process_redemption(
                 state.helix_client.send_chat_message(
                     &broadcaster_user_id,
                     &bot_channel_id,
-                    "не смог спарсить трейд ссылку, вернул баллы.", // fixme hardcoded chat messages
+                    &format!("@{} не смог спарсить трейд ссылку, вернул баллы.", event.user_login), // fixme hardcoded chat messages
                     None, None,
                     &token).await
             }).await {
@@ -125,6 +125,7 @@ pub async fn process_redemption(
         &broadcaster_setting.market_api_key,
         &reward_data.market_item_name,
         max_price,
+        broadcaster_setting.market_chance_to_transfer,
         trade_link,
         &redemption_id
     ).await {
@@ -144,7 +145,7 @@ pub async fn process_redemption(
                 state.helix_client.send_chat_message(
                     &broadcaster_user_id,
                     &bot_channel_id,
-                    "создал ордер на маркете, ожидай трейда в скорем времени или другого сообщения от меня в чате",
+                    &format!("@{} создал ордер на маркете, ожидай трейда в скорем времени (до 5-и минут) или другого сообщения от меня в чате", event.user_login),
                     None, None,
                     &token).await
             }).await {
@@ -170,7 +171,7 @@ pub async fn process_redemption(
                 state.helix_client.send_chat_message(
                     &broadcaster_user_id,
                     &bot_channel_id,
-                    &format!("не удалось создать ордер на маркете, вернул баллы. ошибка {}: {}", code, error_msg),
+                    &format!("@{} не удалось создать ордер на маркете, вернул баллы. ошибка {}: {}", event.user_login, code, error_msg),
                     None, None,
                     &token).await
             }).await {
@@ -184,7 +185,7 @@ pub async fn process_redemption(
                 state.helix_client.send_chat_message(
                     &broadcaster_user_id,
                     &bot_channel_id,
-                    "произошла внутренняя ошибка при отправке запроса на маркет. ничего трогать не буду, подробности в логах.",
+                    &format!("@{} произошла внутренняя ошибка при отправке запроса на маркет. ничего трогать не буду, подробности в логах.", event.user_login),
                     None, None,
                     &token).await
             }).await {

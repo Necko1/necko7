@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use crate::db::error::DbResult;
 use super::Db;
 
-#[derive(Debug, Clone, sqlx::Type, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, sqlx::Type, PartialEq, serde::Serialize, utoipa::ToSchema)]
 #[sqlx(type_name = "VARCHAR", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ChannelRole {
     Owner,

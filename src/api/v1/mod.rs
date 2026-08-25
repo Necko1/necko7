@@ -7,7 +7,77 @@ pub mod stats;
 use axum::Router;
 use axum::routing::{get, post, delete, put};
 use std::sync::Arc;
+use utoipa::OpenApi;
 use crate::state::AppState;
+use crate::api::error::{ErrorBody, ErrorDetail};
+
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        broadcasters::list_broadcasters,
+        broadcasters::get_broadcaster_settings,
+        broadcasters::update_broadcaster_settings,
+        permissions::list_permissions,
+        permissions::grant_permission,
+        permissions::revoke_permission,
+        rewards::list_rewards,
+        rewards::create_reward,
+        rewards::update_reward,
+        rewards::delete_reward,
+        rewards::update_reward_price,
+        rewards::batch_rewards,
+        redemptions::list_redemptions,
+        redemptions::retry_redemption,
+        redemptions::refund_redemption,
+        redemptions::penalty_redemption,
+        stats::get_stats,
+    ),
+    components(schemas(
+        broadcasters::BroadcasterListItem,
+        broadcasters::BroadcasterSettingsResponse,
+        broadcasters::UpdateBroadcasterSettingsBody,
+        permissions::PermissionResponse,
+        permissions::GrantPermissionBody,
+        rewards::RewardResponse,
+        rewards::CreateRewardBody,
+        rewards::UpdateRewardBody,
+        rewards::BatchRewardBody,
+        rewards::ListRewardsQuery,
+        redemptions::RedemptionResponse,
+        redemptions::ListRedemptionsQuery,
+        stats::StatsResponse,
+        stats::StatsQuery,
+        ErrorBody,
+        ErrorDetail,
+        crate::db::channel_permissions::ChannelRole,
+        crate::db::redemptions::RedemptionStatus,
+    )),
+    tags(
+        (name = "Broadcasters", description = "Broadcaster settings and channel management"),
+        (name = "Permissions", description = "Channel access control (owner/editor roles)"),
+        (name = "Rewards", description = "Channel point rewards CRUD and batch operations"),
+        (name = "Redemptions", description = "Redemption tracking and actions (retry, refund, penalty)"),
+        (name = "Stats", description = "Redemption statistics and analytics"),
+    ),
+    modifiers(&SecurityAddon),
+    security(
+        ("session_id" = [])
+    )
+)]
+pub struct ApiDoc;
+
+struct SecurityAddon;
+
+impl utoipa::Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        use utoipa::openapi::security::{SecurityScheme, ApiKey};
+        let components = openapi.components.get_or_insert_with(Default::default);
+        components.add_security_scheme(
+            "session_id",
+            SecurityScheme::ApiKey(ApiKey::Cookie(utoipa::openapi::security::ApiKeyValue::new("session_id"))),
+        );
+    }
+}
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
