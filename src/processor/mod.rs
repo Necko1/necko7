@@ -2,6 +2,9 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 use crate::db::redemptions::{NewRedemption, RedemptionStatus};
+use crate::messages::{
+    MSG_MARKET_ERROR, MSG_ORDER_CREATED, MSG_ORDER_FAILED, MSG_TRADE_LINK_INVALID,
+};
 use crate::processor::model::EventSubNotification;
 use crate::processor::order_watcher::{OrderWatcher, WatcherRedemptionData};
 use crate::state::AppState;
@@ -256,11 +259,16 @@ pub async fn process_redemption(
                 Some("Couldn't parse trade link in user input")
             ).await;
 
+            let msg = state.render_chat_message(
+                &broadcaster_user_id,
+                MSG_TRADE_LINK_INVALID,
+                &[("buyer", &event.user_login)],
+            );
             if let Err(e) = state.with_bot_user_token(async |token| {
                 state.helix_client.send_chat_message(
                     &broadcaster_user_id,
                     &bot_channel_id,
-                    &format!("@{} не смог спарсить трейд ссылку, вернул баллы.", event.user_login),
+                    &msg,
                     None, None,
                     &token).await
             }).await {
@@ -321,11 +329,16 @@ pub async fn process_redemption(
                 order_watcher.track_redemption().await;
             });
 
+            let msg = state.render_chat_message(
+                &broadcaster_user_id,
+                MSG_ORDER_CREATED,
+                &[("buyer", &event.user_login)],
+            );
             if let Err(e) = state.with_bot_user_token(async |token| {
                 state.helix_client.send_chat_message(
                     &broadcaster_user_id,
                     &bot_channel_id,
-                    &format!("@{} создал ордер на маркете, ожидай трейда в скорем времени (до 5-и минут) или другого сообщения от меня в чате", event.user_login),
+                    &msg,
                     None, None,
                     &token).await
             }).await {
@@ -375,11 +388,21 @@ pub async fn process_redemption(
                 Some(&error_msg)
             ).await;
 
+            let code_str = code.to_string();
+            let msg = state.render_chat_message(
+                &broadcaster_user_id,
+                MSG_ORDER_FAILED,
+                &[
+                    ("buyer", &event.user_login),
+                    ("code", &code_str),
+                    ("error", &error_msg),
+                ],
+            );
             if let Err(e) = state.with_bot_user_token(async |token| {
                 state.helix_client.send_chat_message(
                     &broadcaster_user_id,
                     &bot_channel_id,
-                    &format!("@{} не удалось создать ордер на маркете, вернул баллы. ошибка {}: {}", event.user_login, code, error_msg),
+                    &msg,
                     None, None,
                     &token).await
             }).await {
@@ -394,11 +417,16 @@ pub async fn process_redemption(
                 item = %reward_data.market_item_name,
                 "Failed to send HTTP request to Market"
             );
+            let msg = state.render_chat_message(
+                &broadcaster_user_id,
+                MSG_MARKET_ERROR,
+                &[("buyer", &event.user_login)],
+            );
             if let Err(e) = state.with_bot_user_token(async |token| {
                 state.helix_client.send_chat_message(
                     &broadcaster_user_id,
                     &bot_channel_id,
-                    &format!("@{} произошла внутренняя ошибка при отправке запроса на маркет. ничего трогать не буду, подробности в логах.", event.user_login),
+                    &msg,
                     None, None,
                     &token).await
             }).await {

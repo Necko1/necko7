@@ -5,6 +5,7 @@ pub mod api;
 pub mod steam;
 pub mod processor;
 pub mod datetime;
+pub mod messages;
 
 use std::env;
 

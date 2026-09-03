@@ -220,6 +220,7 @@ pub async fn auth_callback(
             refund_if_no_money: true,
             pause_reward_if_no_money: false,
             market_chance_to_transfer: 0,
+            chat_messages: std::collections::HashMap::new(),
         };
         
         if let Err(e) = state.db.upsert_broadcaster_setting(&new_setting).await {

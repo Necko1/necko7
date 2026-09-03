@@ -19,6 +19,8 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         broadcasters::list_broadcasters,
         broadcasters::get_broadcaster_settings,
         broadcasters::update_broadcaster_settings,
+        broadcasters::get_broadcaster_chat_messages,
+        broadcasters::update_broadcaster_chat_messages,
         broadcasters::get_broadcaster_balance,
         permissions::list_permissions,
         permissions::grant_permission,
@@ -40,6 +42,8 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         broadcasters::BroadcasterListItem,
         broadcasters::BroadcasterSettingsResponse,
         broadcasters::UpdateBroadcasterSettingsBody,
+        broadcasters::ChatMessagesResponse,
+        broadcasters::UpdateChatMessagesBody,
         broadcasters::MarketBalanceResponse,
         permissions::PermissionResponse,
         permissions::GrantPermissionBody,
@@ -92,6 +96,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/broadcasters", get(broadcasters::list_broadcasters))
         .route("/broadcasters/{channel_id}", get(broadcasters::get_broadcaster_settings))
         .route("/broadcasters/{channel_id}/settings", put(broadcasters::update_broadcaster_settings))
+        .route("/broadcasters/{channel_id}/messages", get(broadcasters::get_broadcaster_chat_messages).put(broadcasters::update_broadcaster_chat_messages))
         .route("/broadcasters/{channel_id}/market/balance", get(broadcasters::get_broadcaster_balance))
         .route("/broadcasters/{channel_id}/permissions", get(permissions::list_permissions).post(permissions::grant_permission))
         .route("/broadcasters/{channel_id}/permissions/{user_id}", delete(permissions::revoke_permission))

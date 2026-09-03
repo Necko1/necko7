@@ -6,6 +6,10 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 use crate::datetime::DateTimeExt;
 use crate::db::redemptions::RedemptionStatus;
+use crate::messages::{
+    MSG_TRADE_ACCEPTED, MSG_TRADE_CREATED, MSG_TRADE_FAILED_BUYER_PENALTY,
+    MSG_TRADE_FAILED_BUYER_REFUND, MSG_TRADE_FAILED_SELLER_REFUND, MSG_TRADE_TIMEOUT,
+};
 use crate::state::AppState;
 use crate::steam::market::sell_buy::GetBuyInfoData;
 
@@ -126,12 +130,21 @@ impl OrderWatcher {
         let tradeoffer = format!("https://steamcommunity.com/tradeoffer/{}/",
                                  current_trade.trade_id.unwrap());
 
+        let msg = self.state.render_chat_message(
+            &self.broadcaster_id,
+            MSG_TRADE_CREATED,
+            &[
+                ("buyer", &self.redemption.user_login),
+                ("remaining", &remaining),
+                ("tradeoffer", &tradeoffer),
+            ],
+        );
+
         if let Err(e) = self.state.with_bot_user_token(async |token| {
             self.state.helix_client.send_chat_message(
                 &self.broadcaster_id,
                 &sender_id,
-                &format!("@{}, трейд был создан, у тебя есть {} чтобы его принять - {}",
-                         self.redemption.user_login, remaining, tradeoffer),
+                &msg,
                 None, None,
                 &token).await
         }).await {
@@ -165,13 +178,17 @@ impl OrderWatcher {
             None => { return; }
         };
 
+        let msg = self.state.render_chat_message(
+            &self.broadcaster_id,
+            MSG_TRADE_ACCEPTED,
+            &[("buyer", &self.redemption.user_login)],
+        );
+
         if let Err(e) = self.state.with_bot_user_token(async |token| {
             self.state.helix_client.send_chat_message(
                 &self.broadcaster_id,
                 &sender_id,
-                &format!("@{} щекочет мой мозг, видимо трейд принял. \
-                не забудь об отзыве - @(ладно пока не надо отзывов на эту хуйню)",
-                         self.redemption.user_login),
+                &msg,
                 None, None,
                 &token).await
         }).await {
@@ -248,15 +265,19 @@ impl OrderWatcher {
             "Trade was not claimed / timed out on market"
         );
 
-        let message = if refund_on_buyer_fail && buyer_fault {
-            format!("@{} въебал трейд? красавчик. повезло, что стример сказал возвращать баллы в таких случаях.", self.redemption.user_login)
+        let msg_id = if refund_on_buyer_fail && buyer_fault {
+            MSG_TRADE_FAILED_BUYER_REFUND
         } else if !refund_on_buyer_fail && buyer_fault {
-            format!("@{} въебал трейд? красавчик. какое счастье, что стример сказал мне нихуя не возвращать в таких случаях. \
-            в следующий раз будь аккуратнее 😁😁😁😁", self.redemption.user_login)
+            MSG_TRADE_FAILED_BUYER_PENALTY
         } else {
-            format!("@{} сорянчик, продавец долбоёб кажется решил нихуя не отправлять. \
-            ну или другая причина, крч возвращаю баллы, можешь попробовать ещё раз купить", self.redemption.user_login)
+            MSG_TRADE_FAILED_SELLER_REFUND
         };
+
+        let message = self.state.render_chat_message(
+            &self.broadcaster_id,
+            msg_id,
+            &[("buyer", &self.redemption.user_login)],
+        );
 
         if let Err(e) = self.state.with_bot_user_token(async |token| {
             self.state.helix_client.send_chat_message(
@@ -308,11 +329,17 @@ impl OrderWatcher {
             None => return,
         };
 
+        let msg = self.state.render_chat_message(
+            &self.broadcaster_id,
+            MSG_TRADE_TIMEOUT,
+            &[("buyer", &self.redemption.user_login)],
+        );
+
         if let Err(e) = self.state.with_bot_user_token(async |token| {
             self.state.helix_client.send_chat_message(
                 &self.broadcaster_id,
                 &sender_id,
-                &format!("@{} трейд превысил максимальное время ожидания (30 минут). баллы возвращать не буду во избежение потери денег.", self.redemption.user_login),
+                &msg,
                 None, None,
                 &token).await
         }).await {

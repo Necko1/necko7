@@ -44,6 +44,7 @@ pub struct AppState {
 
     pub bot_info: RwLock<Option<BotInfo>>,
     pub market_balances: RwLock<HashMap<String, CachedMarketBalance>>,
+    pub chat_messages: RwLock<HashMap<String, HashMap<String, String>>>,
     pub active_broadcaster_tasks: Mutex<HashSet<String>>,
 
     pub db: Db,
@@ -65,6 +66,12 @@ impl AppState {
         let client_secret = env::var("TWITCH_CLIENT_SECRET")
             .expect("TWITCH_CLIENT_SECRET not found in the environment");
 
+        let all_chat_messages = db.get_all_broadcaster_chat_messages().await.unwrap_or_default();
+        let mut chat_messages_map = HashMap::new();
+        for (channel_id, messages) in all_chat_messages {
+            chat_messages_map.insert(channel_id, messages);
+        }
+
         Ok(Arc::new(Self {
             helix_client: HelixClient::new(client_id.clone(), client_secret.clone()),
             market_client: MarketClient::new(),
@@ -78,6 +85,7 @@ impl AppState {
                 .expect("FRONTEND_URL not found in the environment"),
             bot_info: RwLock::new(bot_info),
             market_balances: RwLock::new(HashMap::new()),
+            chat_messages: RwLock::new(chat_messages_map),
             active_broadcaster_tasks: Mutex::new(HashSet::new()),
             db,
             app_initialized: AtomicBool::new(app_initialized),
@@ -405,4 +413,44 @@ impl AppState {
             }
         }
     }
-}
+
+    /// Retrieve the effective template for a specific message ID, falling back to default if unset.
+    pub fn get_chat_message_template(&self, channel_id: &str, message_id: &str) -> String {
+        if let Some(channel_msgs) = self.chat_messages.read().get(channel_id) {
+            if let Some(tpl) = channel_msgs.get(message_id) {
+                if !tpl.trim().is_empty() {
+                    return tpl.clone();
+                }
+            }
+        }
+        crate::messages::ChatMessageTemplates::get_default_message(message_id)
+            .unwrap_or_else(|| format!("[Missing template for {}]", message_id))
+    }
+
+    /// Render a chat message by replacing placeholders with supplied variables.
+    pub fn render_chat_message(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        vars: &[(&str, &str)],
+    ) -> String {
+        let template = self.get_chat_message_template(channel_id, message_id);
+        crate::messages::render_template(&template, vars)
+    }
+
+    /// Update the in-memory chat messages cache for a channel.
+    pub fn update_chat_messages_cache(&self, channel_id: &str, messages: HashMap<String, String>) {
+        self.chat_messages.write().insert(channel_id.to_string(), messages);
+    }
+
+    /// Get all effective chat messages for a channel (custom overrides merged on top of defaults).
+    pub fn get_channel_chat_messages_merged(&self, channel_id: &str) -> HashMap<String, String> {
+        let custom = self.chat_messages.read().get(channel_id).cloned().unwrap_or_default();
+        crate::messages::ChatMessageTemplates::merge_with_defaults(&custom)
+    }
+
+    /// Get only the custom message overrides configured for a channel.
+    pub fn get_channel_custom_chat_messages(&self, channel_id: &str) -> HashMap<String, String> {
+        self.chat_messages.read().get(channel_id).cloned().unwrap_or_default()
+    }
+}

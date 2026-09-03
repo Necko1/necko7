@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use axum::extract::State;
 use axum::Json;
@@ -90,6 +91,8 @@ pub struct BroadcasterSettingsResponse {
     pub pause_reward_if_no_money: bool,
     /// Market chance percentage to transfer item
     pub market_chance_to_transfer: i16,
+    /// Effective Twitch chat message templates for this broadcaster
+    pub chat_messages: HashMap<String, String>,
 }
 
 #[utoipa::path(
@@ -113,7 +116,10 @@ pub struct BroadcasterSettingsResponse {
                 "refund_on_buyer_fail": true,
                 "refund_if_no_money": false,
                 "pause_reward_if_no_money": true,
-                "market_chance_to_transfer": 80
+                "market_chance_to_transfer": 80,
+                "chat_messages": {
+                    "trade_created": "@{buyer}, трейд был создан, у тебя есть {remaining} чтобы его принять - {tradeoffer}"
+                }
             })
         ),
         (status = 401, description = "Unauthorized — missing or invalid session cookie"),
@@ -140,6 +146,7 @@ pub async fn get_broadcaster_settings(
     };
 
     let channel_login = broadcaster.map(|b| b.channel_login).unwrap_or_default();
+    let chat_messages = state.get_channel_chat_messages_merged(&auth.channel_id);
 
     Ok(Json(BroadcasterSettingsResponse {
         channel_id: setting.channel_id,
@@ -152,6 +159,7 @@ pub async fn get_broadcaster_settings(
         refund_if_no_money: setting.refund_if_no_money,
         pause_reward_if_no_money: setting.pause_reward_if_no_money,
         market_chance_to_transfer: setting.market_chance_to_transfer,
+        chat_messages,
     }))
 }
 
@@ -173,6 +181,8 @@ pub struct UpdateBroadcasterSettingsBody {
     pub pause_reward_if_no_money: Option<bool>,
     /// Market chance percentage to transfer item
     pub market_chance_to_transfer: Option<i16>,
+    /// Twitch chat message templates to customize (message_id -> template_text)
+    pub chat_messages: Option<HashMap<String, String>>,
 }
 
 #[utoipa::path(
@@ -197,7 +207,10 @@ pub struct UpdateBroadcasterSettingsBody {
                 "refund_on_buyer_fail": true,
                 "refund_if_no_money": false,
                 "pause_reward_if_no_money": true,
-                "market_chance_to_transfer": 80
+                "market_chance_to_transfer": 80,
+                "chat_messages": {
+                    "trade_created": "@{buyer}, трейд был создан, у тебя есть {remaining} чтобы его принять - {tradeoffer}"
+                }
             })
         ),
         (status = 400, description = "Invalid request body (bad parameter name or value)"),
@@ -218,6 +231,10 @@ pub async fn update_broadcaster_settings(
 ) -> Result<Json<BroadcasterSettingsResponse>, ApiError> {
     let _setting = state.db.get_or_create_broadcaster_setting(&auth.channel_id).await?;
 
+    if let Some(ref msgs) = body.chat_messages {
+        state.update_chat_messages_cache(&auth.channel_id, msgs.clone());
+    }
+
     let patch = crate::db::broadcaster_settings::UpdateBroadcasterSetting {
         is_active: body.is_active,
         market_api_key: body.market_api_key,
@@ -227,6 +244,7 @@ pub async fn update_broadcaster_settings(
         refund_if_no_money: body.refund_if_no_money,
         pause_reward_if_no_money: body.pause_reward_if_no_money,
         market_chance_to_transfer: body.market_chance_to_transfer,
+        chat_messages: body.chat_messages,
     };
 
     state.db.update_broadcaster_setting(&auth.channel_id, &patch).await?;
@@ -242,6 +260,7 @@ pub async fn update_broadcaster_settings(
     let setting = state.db.get_broadcaster_setting(&auth.channel_id).await?.unwrap();
     let broadcaster = state.db.get_broadcaster_by_id(&auth.channel_id).await?;
     let channel_login = broadcaster.map(|b| b.channel_login).unwrap_or_default();
+    let chat_messages = state.get_channel_chat_messages_merged(&auth.channel_id);
 
     Ok(Json(BroadcasterSettingsResponse {
         channel_id: setting.channel_id,
@@ -254,6 +273,113 @@ pub async fn update_broadcaster_settings(
         refund_if_no_money: setting.refund_if_no_money,
         pause_reward_if_no_money: setting.pause_reward_if_no_money,
         market_chance_to_transfer: setting.market_chance_to_transfer,
+        chat_messages,
+    }))
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct ChatMessagesResponse {
+    /// Twitch channel ID
+    pub channel_id: String,
+    /// Effective templates currently in use (custom overrides + defaults for unset)
+    pub messages: HashMap<String, String>,
+    /// Custom overrides saved for this channel
+    pub custom_messages: HashMap<String, String>,
+    /// Global default templates
+    pub default_messages: HashMap<String, String>,
+    /// Supported placeholders for each message ID
+    pub placeholders: HashMap<String, Vec<String>>,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct UpdateChatMessagesBody {
+    /// Map of message_id to template text
+    pub messages: HashMap<String, String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/broadcasters/{channel_id}/messages",
+    tag = "Broadcasters",
+    summary = "Get broadcaster chat message templates",
+    description = "Returns the broadcaster's Twitch chat message templates, including effective templates, custom overrides, defaults, and supported placeholders.",
+    params(
+        ("channel_id" = String, Path, description = "Twitch channel ID of the broadcaster"),
+    ),
+    responses(
+        (status = 200, description = "Chat message templates retrieved successfully", body = ChatMessagesResponse),
+        (status = 401, description = "Unauthorized — missing or invalid session cookie"),
+        (status = 403, description = "Forbidden — no access to this channel"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(
+        ("session_id" = [])
+    )
+)]
+pub async fn get_broadcaster_chat_messages(
+    auth: AuthorizedChannel,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ChatMessagesResponse>, ApiError> {
+    let effective = state.get_channel_chat_messages_merged(&auth.channel_id);
+    let custom = state.get_channel_custom_chat_messages(&auth.channel_id);
+    let defaults = crate::messages::ChatMessageTemplates::default().to_map();
+    let placeholders = crate::messages::ChatMessageTemplates::all_placeholders();
+
+    Ok(Json(ChatMessagesResponse {
+        channel_id: auth.channel_id,
+        messages: effective,
+        custom_messages: custom,
+        default_messages: defaults,
+        placeholders,
+    }))
+}
+
+#[utoipa::path(
+    put,
+    path = "/broadcasters/{channel_id}/messages",
+    tag = "Broadcasters",
+    summary = "Update broadcaster chat message templates",
+    description = "Updates the broadcaster's custom Twitch chat message templates in DB and in-memory cache.",
+    params(
+        ("channel_id" = String, Path, description = "Twitch channel ID of the broadcaster"),
+    ),
+    request_body = UpdateChatMessagesBody,
+    responses(
+        (status = 200, description = "Chat message templates updated successfully", body = ChatMessagesResponse),
+        (status = 400, description = "Invalid request body"),
+        (status = 401, description = "Unauthorized — missing or invalid session cookie"),
+        (status = 403, description = "Forbidden — no access to this channel"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(
+        ("session_id" = [])
+    )
+)]
+pub async fn update_broadcaster_chat_messages(
+    auth: AuthorizedChannel,
+    State(state): State<Arc<AppState>>,
+    JsonArg(body): JsonArg<UpdateChatMessagesBody>,
+) -> Result<Json<ChatMessagesResponse>, ApiError> {
+    state.db.update_broadcaster_chat_messages(&auth.channel_id, &body.messages).await?;
+    state.update_chat_messages_cache(&auth.channel_id, body.messages);
+
+    tracing::info!(
+        channel_id = %auth.channel_id,
+        user_id = %auth.user_id,
+        "Broadcaster chat messages updated by authorized user"
+    );
+
+    let effective = state.get_channel_chat_messages_merged(&auth.channel_id);
+    let custom = state.get_channel_custom_chat_messages(&auth.channel_id);
+    let defaults = crate::messages::ChatMessageTemplates::default().to_map();
+    let placeholders = crate::messages::ChatMessageTemplates::all_placeholders();
+
+    Ok(Json(ChatMessagesResponse {
+        channel_id: auth.channel_id,
+        messages: effective,
+        custom_messages: custom,
+        default_messages: defaults,
+        placeholders,
     }))
 }
 
