@@ -231,6 +231,14 @@ pub async fn update_broadcaster_settings(
 
     state.db.update_broadcaster_setting(&auth.channel_id, &patch).await?;
 
+    tracing::info!(
+        channel_id = %auth.channel_id,
+        user_id = %auth.user_id,
+        is_active = ?patch.is_active,
+        base_multiplier = ?patch.base_price_multiplier,
+        "Broadcaster settings updated by authorized user"
+    );
+
     let setting = state.db.get_broadcaster_setting(&auth.channel_id).await?.unwrap();
     let broadcaster = state.db.get_broadcaster_by_id(&auth.channel_id).await?;
     let channel_login = broadcaster.map(|b| b.channel_login).unwrap_or_default();
@@ -294,9 +302,12 @@ pub async fn get_broadcaster_balance(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<MarketBalanceResponse>, ApiError> {
     let balance = state.get_cached_or_fetch_balance(&auth.channel_id).await
-        .map_err(|e| ApiError::BadRequest {
-            message: format!("Failed to retrieve market balance: {}", e),
-            param: "market_api_key".to_string(),
+        .map_err(|e| {
+            tracing::warn!(error = %e, channel_id = %auth.channel_id, "Failed to retrieve market balance");
+            ApiError::BadRequest {
+                message: format!("Failed to retrieve market balance: {}", e),
+                param: "market_api_key".to_string(),
+            }
         })?;
 
     Ok(Json(MarketBalanceResponse {

@@ -2,7 +2,7 @@ use serde_json::json;
 use crate::helix::api::custom_rewards::model::CustomRewardRedemptionInfo;
 use crate::helix::error::{HelixError, HelixResult};
 use crate::helix::HelixClient;
-use crate::helix::response::{ErrorResponse, ObjectResponse};
+use crate::helix::response::{parse_helix_error, ObjectResponse};
 
 impl HelixClient {
     pub async fn update_redemption_status(
@@ -37,13 +37,11 @@ impl HelixClient {
             let res_list = res.json::<ObjectResponse<CustomRewardRedemptionInfo>>().await?;
 
             return res_list.data.into_iter().next()
-                .ok_or(HelixError::Other(
+                .ok_or_else(|| HelixError::Other(
                     "Got empty data list while updating redemption status".to_string()
                 ));
         }
 
-        let error_res = res.json::<ErrorResponse>().await?;
-
-        Err(error_res.into())
+        Err(parse_helix_error(res).await)
     }
 }

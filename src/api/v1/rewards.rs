@@ -313,6 +313,16 @@ pub async fn create_reward(
 
     let reward = state.db.create_reward(&new_reward).await?;
 
+    tracing::info!(
+        reward_id = %reward.twitch_id,
+        reward_title = %reward.twitch_title,
+        channel_id = %auth.channel_id,
+        user_id = %auth.user_id,
+        market_item = %reward.market_item_name,
+        market_price = reward.current_market_price,
+        "Custom reward created successfully"
+    );
+
     Ok(Json(RewardResponse::from(reward)))
 }
 
@@ -452,6 +462,13 @@ pub async fn update_reward(
 
     state.db.update_reward(reward_id, &patch).await?;
 
+    tracing::info!(
+        reward_id = %reward_id,
+        channel_id = %auth.channel_id,
+        user_id = %auth.user_id,
+        "Custom reward updated successfully"
+    );
+
     let updated = state.db.get_reward_by_twitch_id(reward_id).await?
         .ok_or_else(|| ApiError::Internal {
             message: "Failed to fetch updated reward".to_string(),
@@ -517,6 +534,13 @@ pub async fn delete_reward(
     }).await?;
 
     state.db.set_reward_deleted(reward_id).await?;
+
+    tracing::info!(
+        reward_id = %reward_id,
+        channel_id = %auth.channel_id,
+        user_id = %auth.user_id,
+        "Custom reward deleted from Twitch and DB"
+    );
 
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
@@ -623,6 +647,14 @@ pub async fn update_reward_price(
         ..Default::default()
     }).await?;
 
+    tracing::info!(
+        reward_id = %reward_id,
+        channel_id = %auth.channel_id,
+        new_market_price = cheapest_item.price,
+        new_cost = twitch_points_cost,
+        "Reward price manually recalculated"
+    );
+
     Ok(Json(serde_json::json!({ "updated": true })))
 }
 
@@ -721,6 +753,15 @@ pub async fn batch_rewards(
             }),
         }
     }
+
+    tracing::info!(
+        action = %body.action,
+        requested_count = body.reward_ids.len(),
+        affected = affected,
+        channel_id = %auth.channel_id,
+        user_id = %auth.user_id,
+        "Batch rewards action completed"
+    );
 
     Ok(Json(serde_json::json!({ "affected": affected })))
 }

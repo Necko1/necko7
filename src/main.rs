@@ -24,25 +24,57 @@ async fn main() -> AppResult<()> {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("necko7=debug,info")),
         )
+        .with_target(true)
+        .with_line_number(true)
         .init();
+
+    info!("Starting necko7 bot service...");
 
     let addr = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
 
-    let db = Db::connect(&env::var("DATABASE_URL")
-        .expect("DATABASE_URL not found in the environment")).await?;
+    let database_url = env::var("DATABASE_URL")
+        .map_err(|e| {
+            tracing::error!("DATABASE_URL environment variable is not set!");
+            e
+        })?;
 
-    let state = AppState::from_env(db).await?;
+    info!("Connecting to database...");
+    let db = Db::connect(&database_url).await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to connect to PostgreSQL database");
+            e
+        })?;
+    info!("Database connection established");
 
+    info!("Initializing AppState from environment...");
+    let state = AppState::from_env(db).await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to initialize AppState");
+            e
+        })?;
+    info!("AppState initialized successfully");
+
+    info!("Starting background processor tasks...");
     processor::start_background_tasks(state.clone()).await;
 
     let app = api::build_router(state);
 
-    info!("Starting HTTP server on {addr}");
-    let listener = TcpListener::bind(&addr).await?;
+    info!("Binding TCP listener on {}", addr);
+    let listener = TcpListener::bind(&addr).await
+        .map_err(|e| {
+            tracing::error!(error = %e, addr = %addr, "Failed to bind TCP listener");
+            e
+        })?;
 
-    axum::serve(listener, app).await?;
+    info!("HTTP server listening on http://{}", addr);
+    axum::serve(listener, app).await
+        .map_err(|e| {
+            tracing::error!(error = %e, "HTTP server error");
+            e
+        })?;
 
     Ok(())
 }

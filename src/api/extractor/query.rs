@@ -25,6 +25,12 @@ where
                 let param_name = err.path().to_string();
                 let inner_err = err.into_inner();
 
+                tracing::debug!(
+                    param = %param_name,
+                    error = %inner_err,
+                    "Query parameter deserialization failed"
+                );
+
                 let message = format!(
                     "Failed to parse query parameter '{}': {}",
                     param_name, inner_err

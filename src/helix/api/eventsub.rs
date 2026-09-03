@@ -1,5 +1,5 @@
 use crate::helix::error::HelixResult;
-use crate::helix::response::ErrorResponse;
+use crate::helix::response::parse_helix_error;
 use crate::helix::HelixClient;
 use serde_json::Value;
 
@@ -22,9 +22,7 @@ impl HelixClient {
             return Ok(())
         }
 
-        let error_res = res.json::<ErrorResponse>().await?;
-
-        Err(error_res.into())
+        Err(parse_helix_error(res).await)
     }
 }
 

@@ -262,11 +262,27 @@ pub async fn retry_redemption(
             tokio::spawn(async move {
                 order_watcher.track_redemption().await;
             });
+
+            tracing::info!(
+                redemption_id = %redemption_id,
+                channel_id = %auth.channel_id,
+                user_id = %auth.user_id,
+                paid_price = paid_price,
+                "Manual redemption retry succeeded, new order created on market"
+            );
             
             Ok(Json(serde_json::json!({ "status": "order_created" })))
         }
         Ok(res) => {
             let error_msg = res.error.unwrap_or_else(|| "Unknown market error".to_string());
+
+            tracing::warn!(
+                redemption_id = %redemption_id,
+                channel_id = %auth.channel_id,
+                user_id = %auth.user_id,
+                error = %error_msg,
+                "Manual redemption retry rejected by market"
+            );
 
             state.db.update_redemption_status(
                 redemption_id,
@@ -280,9 +296,17 @@ pub async fn retry_redemption(
                 "error": error_msg
             })))
         }
-        Err(e) => Err(ApiError::Internal {
-            message: format!("Market API request failed: {}", e),
-        }),
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                redemption_id = %redemption_id,
+                channel_id = %auth.channel_id,
+                "Manual redemption retry failed due to market HTTP error"
+            );
+            Err(ApiError::Internal {
+                message: format!("Market API request failed: {}", e),
+            })
+        }
     }
 }
 
@@ -357,6 +381,13 @@ pub async fn refund_redemption(
         Some("Manually refunded by channel owner/editor"),
     ).await?;
 
+    tracing::info!(
+        redemption_id = %redemption_id,
+        channel_id = %auth.channel_id,
+        user_id = %auth.user_id,
+        "Redemption manually refunded by editor"
+    );
+
     Ok(Json(serde_json::json!({ "status": "refunded" })))
 }
 
@@ -430,6 +461,13 @@ pub async fn penalty_redemption(
         Some("manual_penalty"),
         Some("Manually penalized by channel owner/editor"),
     ).await?;
+
+    tracing::info!(
+        redemption_id = %redemption_id,
+        channel_id = %auth.channel_id,
+        user_id = %auth.user_id,
+        "Redemption manually penalized by editor"
+    );
 
     Ok(Json(serde_json::json!({ "status": "penalty" })))
 }

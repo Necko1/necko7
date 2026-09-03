@@ -137,6 +137,14 @@ pub async fn grant_permission(
 
     let perm = state.db.upsert_permission(&new_perm).await?;
 
+    tracing::info!(
+        channel_id = %auth.channel_id,
+        granted_to = %perm.user_id,
+        granted_to_login = %user.login,
+        granted_by = %auth.user_id,
+        "Channel editor permission granted"
+    );
+
     Ok(Json(PermissionResponse {
         channel_id: perm.channel_id,
         user_id: perm.user_id,
@@ -191,6 +199,12 @@ pub async fn revoke_permission(
 
     state.db.delete_permission(&auth.channel_id, &user_id).await?;
 
-    Ok(Json(serde_json::json!({ "deleted": true }))
-    )
+    tracing::info!(
+        channel_id = %auth.channel_id,
+        revoked_from = %user_id,
+        revoked_by = %auth.user_id,
+        "Channel editor permission revoked"
+    );
+
+    Ok(Json(serde_json::json!({ "deleted": true })))
 }

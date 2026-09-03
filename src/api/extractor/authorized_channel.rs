@@ -48,42 +48,66 @@ impl FromRequestParts<Arc<AppState>> for AuthorizedChannel {
 
         let session_id = match session_id {
             Some(s) => s,
-            None => return Err(ApiError::Unauthorized {
-                message: "Missing session".to_string(),
-            }),
+            None => {
+                tracing::debug!("AuthorizedChannel rejected: missing session_id cookie");
+                return Err(ApiError::Unauthorized {
+                    message: "Missing session".to_string(),
+                });
+            }
         };
 
         let uuid = match Uuid::parse_str(session_id) {
             Ok(u) => u,
-            Err(_) => return Err(ApiError::Unauthorized {
-                message: "Invalid session".to_string(),
-            }),
+            Err(e) => {
+                tracing::warn!(error = %e, session_str = session_id, "AuthorizedChannel rejected: invalid session UUID format");
+                return Err(ApiError::Unauthorized {
+                    message: "Invalid session".to_string(),
+                });
+            }
         };
 
         let user_id = match state.db.get_valid_session(uuid).await {
             Ok(Some(session)) => session.user_id,
-            _ => return Err(ApiError::Unauthorized {
-                message: "Invalid or expired session".to_string(),
-            }),
+            Ok(None) => {
+                tracing::debug!(session_uuid = %uuid, "AuthorizedChannel rejected: session not found or expired in DB");
+                return Err(ApiError::Unauthorized {
+                    message: "Invalid or expired session".to_string(),
+                });
+            }
+            Err(e) => {
+                tracing::error!(error = %e, session_uuid = %uuid, "AuthorizedChannel DB error checking session");
+                return Err(ApiError::Internal {
+                    message: "Database error during session check".to_string(),
+                });
+            }
         };
 
         let Path(params) = Path::<HashMap<String, String>>::from_request_parts(parts, state)
             .await
-            .map_err(|_| ApiError::BadRequest {
-                message: "Missing channel_id in path".to_string(),
-                param: "channel_id".to_string(),
+            .map_err(|e| {
+                tracing::debug!(error = %e, "AuthorizedChannel: failed to extract path params");
+                ApiError::BadRequest {
+                    message: "Missing channel_id in path".to_string(),
+                    param: "channel_id".to_string(),
+                }
             })?;
 
         let channel_id = params.get("channel_id")
-            .ok_or_else(|| ApiError::BadRequest {
-                message: "Missing channel_id in path".to_string(),
-                param: "channel_id".to_string(),
+            .ok_or_else(|| {
+                tracing::debug!("AuthorizedChannel: channel_id param absent in path");
+                ApiError::BadRequest {
+                    message: "Missing channel_id in path".to_string(),
+                    param: "channel_id".to_string(),
+                }
             })?
             .clone();
 
         let permission = state.db.get_permission(&channel_id, &user_id).await?
-            .ok_or_else(|| ApiError::Forbidden {
-                message: format!("No access to channel {}", channel_id),
+            .ok_or_else(|| {
+                tracing::warn!(user_id = %user_id, channel_id = %channel_id, "AuthorizedChannel rejected: user lacks permissions for channel");
+                ApiError::Forbidden {
+                    message: format!("No access to channel {}", channel_id),
+                }
             })?;
 
         Ok(AuthorizedChannel {

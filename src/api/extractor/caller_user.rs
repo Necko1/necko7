@@ -33,25 +33,40 @@ impl FromRequestParts<Arc<AppState>> for CallerUser {
 
         let session_id = match session_id {
             Some(s) => s,
-            None => return Err(ApiError::Unauthorized {
-                message: "Missing session".to_string(),
-            }),
+            None => {
+                tracing::debug!("CallerUser rejected: missing session_id cookie");
+                return Err(ApiError::Unauthorized {
+                    message: "Missing session".to_string(),
+                });
+            }
         };
 
         let uuid = match Uuid::parse_str(session_id) {
             Ok(u) => u,
-            Err(_) => return Err(ApiError::Unauthorized {
-                message: "Invalid session".to_string(),
-            }),
+            Err(e) => {
+                tracing::warn!(error = %e, session_str = session_id, "CallerUser rejected: invalid session UUID format");
+                return Err(ApiError::Unauthorized {
+                    message: "Invalid session".to_string(),
+                });
+            }
         };
 
         match state.db.get_valid_session(uuid).await {
             Ok(Some(session)) => Ok(CallerUser {
                 user_id: session.user_id,
             }),
-            _ => Err(ApiError::Unauthorized {
-                message: "Invalid or expired session".to_string(),
-            }),
+            Ok(None) => {
+                tracing::debug!(session_uuid = %uuid, "CallerUser rejected: session not found or expired in DB");
+                Err(ApiError::Unauthorized {
+                    message: "Invalid or expired session".to_string(),
+                })
+            }
+            Err(e) => {
+                tracing::error!(error = %e, session_uuid = %uuid, "CallerUser DB error checking session");
+                Err(ApiError::Internal {
+                    message: "Database error during session validation".to_string(),
+                })
+            }
         }
     }
 }

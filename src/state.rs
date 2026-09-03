@@ -97,7 +97,8 @@ impl AppState {
             match action(token.clone()).await {
                 Ok(val) => return Ok(val),
                 // Если 401 и это первая попытка — обновляем токен и пробуем снова
-                Err(HelixError::Unauthorized(_)) if attempt == 0 => {
+                Err(HelixError::Unauthorized(ref msg)) if attempt == 0 => {
+                    tracing::info!(reason = %msg, "App access token received 401 Unauthorized; refreshing token...");
                     token = self.update_app_access_token().await?;
                     continue;
                 }
@@ -129,7 +130,13 @@ impl AppState {
         for attempt in 0..2 {
             match action(token.clone()).await {
                 Ok(val) => return Ok(val),
-                Err(HelixError::Unauthorized(_)) if attempt == 0 => {
+                Err(HelixError::Unauthorized(ref msg)) if attempt == 0 => {
+                    tracing::info!(
+                        broadcaster_id = %broadcaster_id,
+                        broadcaster_login = %broadcaster.channel_login,
+                        reason = %msg,
+                        "Broadcaster token received 401 Unauthorized; refreshing via refresh_token..."
+                    );
                     let token_res = self.helix_client
                         .refresh_user_token(&broadcaster.refresh_token).await?;
 
@@ -165,7 +172,8 @@ impl AppState {
         for attempt in 0..2 {
             match action(token.clone()).await {
                 Ok(val) => return Ok(val),
-                Err(HelixError::Unauthorized(_)) if attempt == 0 => {
+                Err(HelixError::Unauthorized(ref msg)) if attempt == 0 => {
+                    tracing::info!(reason = %msg, "Bot user token received 401 Unauthorized; refreshing token...");
                     let token_res = self.helix_client
                         .refresh_user_token(&refresh_token).await?;
 
@@ -228,6 +236,12 @@ impl AppState {
             broadcaster_user_id,
         );
 
+        tracing::info!(
+            broadcaster_id = %broadcaster_user_id,
+            callback = %callback_url,
+            "Creating Twitch EventSub subscription"
+        );
+
         self.with_app_token(|token| {
             let body = body.clone();
             async move {
@@ -260,6 +274,7 @@ impl AppState {
         let money_res = self.market_client.get_money(&setting.market_api_key).await?;
         if !money_res.success {
             let err = money_res.error.unwrap_or_else(|| "Unknown market API error".to_string());
+            tracing::warn!(error = %err, channel_id = %channel_id, "Market get_money returned failure");
             return Err(format!("Market API error: {}", err).into());
         }
 
@@ -269,6 +284,14 @@ impl AppState {
             currency: money_res.currency.unwrap_or_else(|| "RUB".to_string()),
             updated_at: Utc::now(),
         };
+
+        tracing::debug!(
+            channel_id = %channel_id,
+            money = balance.money,
+            settlement = balance.money_settlement,
+            currency = %balance.currency,
+            "Refreshed broadcaster market balance"
+        );
 
         {
             let mut guard = self.market_balances.write();
@@ -361,9 +384,18 @@ impl AppState {
                     };
 
                     if is_active {
-                        tracing::info!("Subscribing EventSub for broadcaster {} ({})", broadcaster.channel_login, broadcaster.channel_id);
+                        tracing::info!(
+                            broadcaster_login = %broadcaster.channel_login,
+                            broadcaster_id = %broadcaster.channel_id,
+                            "Subscribing EventSub for active broadcaster on startup"
+                        );
                         if let Err(e) = self.create_eventsub_subscription(&broadcaster.channel_id).await {
-                            tracing::warn!(error = %e, "Failed to recover EventSub subscription for {}", broadcaster.channel_login);
+                            tracing::warn!(
+                                error = %e,
+                                broadcaster_login = %broadcaster.channel_login,
+                                broadcaster_id = %broadcaster.channel_id,
+                                "Failed to recover EventSub subscription"
+                            );
                         }
                     }
                 }

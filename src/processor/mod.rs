@@ -16,9 +16,12 @@ pub fn start_broadcaster_tasks(state: Arc<AppState>, channel_id: String) {
     {
         let mut tasks = state.active_broadcaster_tasks.lock();
         if !tasks.insert(channel_id.clone()) {
+            debug!(channel_id = %channel_id, "Broadcaster tasks already running, skipping duplicate startup");
             return;
         }
     }
+
+    info!(channel_id = %channel_id, "Starting broadcaster background tasks (price updater, balance updater)");
 
     let price_updater = price_updater::PriceUpdater::new(state.clone(), channel_id.clone());
     tokio::spawn(async move {
@@ -86,13 +89,33 @@ async fn recover_active_orders(state: Arc<AppState>) {
     for order in active_orders {
         let reward = match state.db.get_reward_by_twitch_id(order.twitch_reward_id).await {
             Ok(Some(r)) => r,
-            _ => continue,
+            Ok(None) => {
+                warn!(redemption_id = %order.twitch_redemption_id, reward_id = %order.twitch_reward_id, "Active order has missing reward in DB, skipping recovery");
+                continue;
+            }
+            Err(e) => {
+                error!(error = %e, redemption_id = %order.twitch_redemption_id, "DB error fetching reward during order recovery");
+                continue;
+            }
         };
 
         let setting = match state.db.get_broadcaster_setting(&reward.streamer_id).await {
             Ok(Some(s)) if !s.market_api_key.trim().is_empty() => s,
-            _ => continue,
+            Ok(Some(_)) => {
+                warn!(streamer_id = %reward.streamer_id, redemption_id = %order.twitch_redemption_id, "Broadcaster has no market API key configured, skipping order recovery");
+                continue;
+            }
+            Ok(None) => {
+                warn!(streamer_id = %reward.streamer_id, redemption_id = %order.twitch_redemption_id, "Broadcaster setting not found in DB, skipping order recovery");
+                continue;
+            }
+            Err(e) => {
+                error!(error = %e, streamer_id = %reward.streamer_id, "DB error fetching broadcaster setting during order recovery");
+                continue;
+            }
         };
+
+        info!(redemption_id = %order.twitch_redemption_id, user_login = %order.user_login, "Resuming OrderWatcher for recovered active order");
 
         let order_watcher = OrderWatcher::new(
             state.clone(),
@@ -120,22 +143,30 @@ pub async fn process_redemption(
     let reward_id = event.reward.id;
     let broadcaster_user_id = event.broadcaster_user_id;
 
-    info!("Processing redemption {} for user {}", redemption_id, event.user_login);
+    info!(
+        redemption_id = %redemption_id,
+        reward_id = %reward_id,
+        broadcaster_id = %broadcaster_user_id,
+        user_login = %event.user_login,
+        "Processing EventSub redemption"
+    );
 
     let reward_data = match state.db.get_reward_by_twitch_id(reward_id).await {
         Ok(Some(r)) => r,
         Ok(None) => {
-            debug!("Reward {} redeemed but not found in DB", reward_id);
-            // it's just prolly not created by the bot lol
+            debug!(reward_id = %reward_id, redemption_id = %redemption_id, "Reward redeemed but not found in DB (ignoring)");
             return;
         }
         Err(e) => {
-            error!("DB error: {:?}", e);
+            error!(error = %e, reward_id = %reward_id, redemption_id = %redemption_id, "DB error fetching reward during redemption processing");
             return;
         }
     };
 
-    if !reward_data.market_autobuy { return; }
+    if !reward_data.market_autobuy {
+        debug!(reward_id = %reward_id, redemption_id = %redemption_id, "Reward has market_autobuy disabled, skipping processing");
+        return;
+    }
 
     match state.db.insert_redemption_if_new(&NewRedemption {
         twitch_redemption_id: redemption_id,
@@ -149,11 +180,11 @@ pub async fn process_redemption(
     }).await {
         Ok(Some(_)) => {},
         Ok(None) => {
-            info!("Redemption {} is already being processed. Ignoring.", redemption_id);
+            info!(redemption_id = %redemption_id, "Redemption is already being processed, ignoring duplicate");
             return;
         }
         Err(e) => {
-            error!("DB error: {:?}", e);
+            error!(error = %e, redemption_id = %redemption_id, reward_id = %reward_id, "DB error inserting new redemption record");
             return;
         }
     }
@@ -161,17 +192,28 @@ pub async fn process_redemption(
     let broadcaster_setting = match state.db.get_broadcaster_setting(&broadcaster_user_id).await {
         Ok(Some(s)) => s,
         Ok(None) => {
-            error!("Broadcaster {} ({}) not found in DB",
-                event.broadcaster_user_login, broadcaster_user_id);
+            error!(
+                broadcaster_user_id = %broadcaster_user_id,
+                broadcaster_login = %event.broadcaster_user_login,
+                redemption_id = %redemption_id,
+                "Broadcaster settings not found in DB during redemption processing"
+            );
             return;
         }
         Err(e) => {
-            error!("DB error: {:?}", e);
+            error!(error = %e, broadcaster_user_id = %broadcaster_user_id, redemption_id = %redemption_id, "DB error fetching broadcaster setting");
             return;
         }
     };
 
     if !broadcaster_setting.is_active || reward_data.is_deleted || reward_data.is_paused {
+        warn!(
+            redemption_id = %redemption_id,
+            broadcaster_active = broadcaster_setting.is_active,
+            reward_deleted = reward_data.is_deleted,
+            reward_paused = reward_data.is_paused,
+            "Redemption cancelled: broadcaster is inactive or reward is deleted/paused"
+        );
         update_redemption_status_failed(
             state.clone(),
             &broadcaster_user_id,
@@ -190,7 +232,7 @@ pub async fn process_redemption(
         match guard.as_ref() {
             Some(s) => s.user_id.clone(),
             None => {
-                error!("Bot account is not initialized.");
+                error!(redemption_id = %redemption_id, "Bot account is not initialized in AppState; cannot process redemption");
                 return;
             }
         }
@@ -199,7 +241,12 @@ pub async fn process_redemption(
     let trade_link = match TradeLink::parse(&event.user_input) {
         Some(t) => t,
         None => {
-            warn!("Invalid trade link provided by {}", event.user_login);
+            warn!(
+                redemption_id = %redemption_id,
+                user_login = %event.user_login,
+                user_input = %event.user_input,
+                "Failed to parse Steam trade link from redemption user input"
+            );
             update_redemption_status_failed(
                 state.clone(),
                 &broadcaster_user_id,
@@ -213,11 +260,11 @@ pub async fn process_redemption(
                 state.helix_client.send_chat_message(
                     &broadcaster_user_id,
                     &bot_channel_id,
-                    &format!("@{} не смог спарсить трейд ссылку, вернул баллы.", event.user_login), // fixme hardcoded chat messages
+                    &format!("@{} не смог спарсить трейд ссылку, вернул баллы.", event.user_login),
                     None, None,
                     &token).await
             }).await {
-                error!("Failed to send chat message: {}", e);
+                error!(error = %e, redemption_id = %redemption_id, broadcaster_id = %broadcaster_user_id, "Failed to send chat message informing user of invalid trade link");
                 return;
             }
             return;
@@ -236,7 +283,13 @@ pub async fn process_redemption(
         &redemption_id
     ).await {
         Ok(res) if res.success => {
-            info!("Market buy-for success for redemption {}", redemption_id);
+            info!(
+                redemption_id = %redemption_id,
+                item = %reward_data.market_item_name,
+                price = ?res.price,
+                market_id = ?res.id,
+                "Market buy-for succeeded, order created"
+            );
 
             let state_for_balance = state.clone();
             let bc_id_for_balance = broadcaster_user_id.clone();
@@ -250,7 +303,7 @@ pub async fn process_redemption(
                 redemption_id,
                 paid_price,
             ).await {
-                error!("DB error: {:?}", e);
+                error!(error = %e, redemption_id = %redemption_id, "DB error setting redemption status to order_created");
                 return;
             }
 
@@ -276,14 +329,19 @@ pub async fn process_redemption(
                     None, None,
                     &token).await
             }).await {
-                error!("Failed to send chat message: {}", e);
+                error!(error = %e, redemption_id = %redemption_id, broadcaster_id = %broadcaster_user_id, "Failed to send chat message for created order");
                 return;
             }
         }
         Ok(res) => {
             let error_msg = res.error.unwrap_or_else(|| "Unknown market error".to_string());
             let code = res.code.unwrap_or(0);
-            warn!("Market rejected buy-for (code {}): {}", code, error_msg);
+            warn!(
+                redemption_id = %redemption_id,
+                code = code,
+                error = %error_msg,
+                "Market rejected buy-for"
+            );
 
             let mut return_channel_points = true;
 
@@ -325,12 +383,17 @@ pub async fn process_redemption(
                     None, None,
                     &token).await
             }).await {
-                error!("Failed to send chat message: {}", e);
+                error!(error = %e, redemption_id = %redemption_id, broadcaster_id = %broadcaster_user_id, "Failed to send chat message for rejected order");
                 return;
             }
         }
         Err(e) => {
-            error!("Failed to send HTTP request to Market: {:?}", e);
+            error!(
+                error = %e,
+                redemption_id = %redemption_id,
+                item = %reward_data.market_item_name,
+                "Failed to send HTTP request to Market"
+            );
             if let Err(e) = state.with_bot_user_token(async |token| {
                 state.helix_client.send_chat_message(
                     &broadcaster_user_id,
@@ -339,10 +402,9 @@ pub async fn process_redemption(
                     None, None,
                     &token).await
             }).await {
-                error!("Failed to send chat message: {}", e);
+                error!(error = %e, redemption_id = %redemption_id, broadcaster_id = %broadcaster_user_id, "Failed to send chat message for market network error");
                 return;
             }
-            // НЕ ВОЗВРАЩАТЬ БАЛЛЫ И НЕ МЕНЯТЬ СТАТУС
         }
     }
 }
@@ -364,7 +426,14 @@ async fn update_redemption_status_failed(
             return_channel_points,
             &token).await
     }).await {
-        error!("Failed to update redemption status: {}", e);
+        error!(
+            error = %e,
+            redemption_id = %redemption_id,
+            reward_id = %reward_id,
+            broadcaster_user_id = %broadcaster_user_id,
+            return_points = return_channel_points,
+            "Failed to update redemption status on Twitch Helix"
+        );
         return;
     }
 
@@ -378,7 +447,20 @@ async fn update_redemption_status_failed(
         None,
         fail_description
     ).await {
-        error!("DB error: {:?}", e);
+        error!(
+            error = %e,
+            redemption_id = %redemption_id,
+            status = ?redemption_status,
+            fail_description = ?fail_description,
+            "DB error updating failed redemption status"
+        );
         return;
     }
+
+    info!(
+        redemption_id = %redemption_id,
+        status = ?redemption_status,
+        fail_description = ?fail_description,
+        "Redemption status marked as failed successfully"
+    );
 }

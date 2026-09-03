@@ -112,12 +112,16 @@ pub async fn auth_callback(
 
     let clear_cookie_str = build_cookie_string("oauth_state", "", 0, &state.app_url);
 
-    match stored_state {
+        match stored_state {
         Some(expected) if expected == query_state => {
             // success
         }
         _ => {
-            error!("CSRF attack detected or session expired. Query state: {}, Cookie state: {:?}", query_state, stored_state);
+            warn!(
+                query_state = %query_state,
+                stored_state = ?stored_state,
+                "OAuth CSRF verification failed: state mismatch or missing cookie"
+            );
             return (
                 StatusCode::FORBIDDEN,
                 [(SET_COOKIE, clear_cookie_str.as_str())],
@@ -132,7 +136,7 @@ pub async fn auth_callback(
     {
         Ok(data) => data,
         Err(err) => {
-            error!("Error while exchange code for user token: {:?}", err);
+            error!(error = %err, "Failed to exchange authorization code for user token");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 [(SET_COOKIE, clear_cookie_str.as_str())],
@@ -148,7 +152,7 @@ pub async fn auth_callback(
     {
         Ok(info) => info,
         Err(err) => {
-            error!("Failed to get user info: {:?}", err);
+            error!(error = %err, "Failed to get user info from Twitch Helix after token exchange");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 [(SET_COOKIE, clear_cookie_str.as_str())],
@@ -164,10 +168,11 @@ pub async fn auth_callback(
 
     if query_state.starts_with("bot:") {
         if state.app_initialized.load(Ordering::Relaxed) {
+            warn!(channel_login = %channel_login, channel_id = %channel_id, "Bot authorization attempted on already-initialized application");
             return (
                 StatusCode::EXPECTATION_FAILED,
                 response_headers,
-                "?"
+                "Bot already initialized"
             ).into_response()
         }
 
@@ -188,9 +193,9 @@ pub async fn auth_callback(
 
             state.app_initialized.store(true, Ordering::Relaxed);
 
-            info!("Bot account {} (ID: {}) successfully authorized!", channel_login, channel_id);
+            info!(bot_login = %channel_login, bot_id = %channel_id, "Bot account successfully authorized and saved to DB");
         } else {
-            warn!("Failed to save authorized bot account {} (ID: {})", channel_login, channel_id)
+            error!(bot_login = %channel_login, bot_id = %channel_id, "Failed to serialize bot account info to JSON");
         }
     } else if query_state.starts_with("streamer:") {
         let new_broadcaster = NewBroadcaster {
@@ -201,7 +206,7 @@ pub async fn auth_callback(
         };
 
         if let Err(e) = state.db.upsert_broadcaster(&new_broadcaster).await {
-            error!("DB Error: {:?}", e);
+            error!(error = %e, channel_id = %channel_id, "DB Error saving broadcaster");
             return (StatusCode::INTERNAL_SERVER_ERROR, "DB Error").into_response();
         }
 
@@ -218,7 +223,7 @@ pub async fn auth_callback(
         };
         
         if let Err(e) = state.db.upsert_broadcaster_setting(&new_setting).await {
-            error!("DB Error: {:?}", e);
+            error!(error = %e, channel_id = %channel_id, "DB Error saving broadcaster setting");
             return (StatusCode::INTERNAL_SERVER_ERROR, "DB Error").into_response();
         }
 
@@ -230,24 +235,24 @@ pub async fn auth_callback(
         };
 
         if let Err(e) = state.db.upsert_permission(&new_permission).await {
-            error!("Failed to upsert OWNER permission: {:?}", e);
+            error!(error = %e, channel_id = %channel_id, "Failed to upsert OWNER permission in DB");
         }
 
         let state_clone = state.clone();
         let cid_clone = channel_id.clone();
         tokio::spawn(async move {
             if let Err(err) = state_clone.create_eventsub_subscription(&cid_clone).await {
-                error!("Failed to create EventSub subscription: {:?}", err);
+                error!(error = %err, channel_id = %cid_clone, "Failed to create EventSub subscription for new streamer");
             }
         });
 
         crate::processor::start_broadcaster_tasks(state.clone(), channel_id.clone());
 
-        info!("Streamer {} (ID: {}) successfully connected the bot!", channel_login, channel_id);
+        info!(channel_login = %channel_login, channel_id = %channel_id, "Streamer successfully connected the bot");
     } else if query_state.starts_with("user:") {
         let new_user = NewUser {
             twitch_id: channel_id.clone(),
-            login: channel_login,
+            login: channel_login.clone(),
             avatar_url: Some(info.profile_image_url),
         };
 
@@ -259,8 +264,7 @@ pub async fn auth_callback(
         };
 
         if let Err(e) = state.db.upsert_user(&new_user).await {
-            warn!(error = %e, "DB Error saving user");
-
+            error!(error = %e, user_id = %channel_id, "DB Error saving user in auth callback");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 response_headers,
@@ -268,8 +272,7 @@ pub async fn auth_callback(
             ).into_response();
         }
         if let Err(e) = state.db.create_session(&new_session).await {
-            warn!(error = %e, "DB Error saving session");
-
+            error!(error = %e, user_id = %channel_id, "DB Error saving session in auth callback");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 response_headers,
@@ -289,9 +292,9 @@ pub async fn auth_callback(
             HeaderValue::from_str(&session_cookie).unwrap()
         );
 
-        info!("User {} logged into dashboard", channel_id);
+        info!(user_id = %channel_id, user_login = %channel_login, session_id = %session_id, "User logged in to dashboard successfully");
     } else {
-        warn!("Unknown state prefix: {}", query_state);
+        warn!(state = %query_state, "Unknown OAuth state prefix received in callback");
     }
 
     let frontend_dashboard_url = format!("{}/dashboard", state.frontend_url);
@@ -324,7 +327,10 @@ pub async fn logout(
 
     if let Some(sid_str) = session_id {
         if let Ok(uuid) = Uuid::parse_str(sid_str) {
-            let _ = state.db.delete_session(uuid).await;
+            info!(session_id = %uuid, "Logging out user: deleting session from DB");
+            if let Err(e) = state.db.delete_session(uuid).await {
+                warn!(error = %e, session_id = %uuid, "Failed to delete session from DB during logout");
+            }
         }
     }
 

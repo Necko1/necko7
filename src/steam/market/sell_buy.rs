@@ -104,13 +104,34 @@ impl MarketClient {
 
         self.limiter.until_key_ready(&api_key.to_string()).await;
 
-        self.http_client
+        let res = self.http_client
             .get("https://market.csgo.com/api/v2/buy-for")
             .query(&params)
             .send()
-            .await?
-            .json::<MarketBuyForResponse>()
-            .await
+            .await?;
+
+        let status = res.status();
+        let text = res.text().await?;
+
+        match serde_json::from_str::<MarketBuyForResponse>(&text) {
+            Ok(data) => Ok(data),
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    status = status.as_u16(),
+                    raw_body = %text,
+                    custom_id = %custom_id,
+                    "Failed to deserialize Market buy-for response"
+                );
+                Ok(MarketBuyForResponse {
+                    id: None,
+                    price: None,
+                    success: false,
+                    error: Some(format!("HTTP {}: {}", status.as_u16(), text)),
+                    code: Some(status.as_u16() as u32),
+                })
+            }
+        }
     }
 
     pub async fn get_buy_info(
@@ -125,12 +146,31 @@ impl MarketClient {
 
         self.limiter.until_key_ready(&api_key.to_string()).await;
 
-        self.http_client
+        let res = self.http_client
             .get("https://market.csgo.com/api/v2/get-buy-info-by-custom-id")
             .query(&params)
             .send()
-            .await?
-            .json::<GetBuyInfoResponse>()
-            .await
+            .await?;
+
+        let status = res.status();
+        let text = res.text().await?;
+
+        match serde_json::from_str::<GetBuyInfoResponse>(&text) {
+            Ok(data) => Ok(data),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    status = status.as_u16(),
+                    raw_body = %text,
+                    custom_id = %custom_id,
+                    "Failed to deserialize Market get-buy-info response"
+                );
+                Ok(GetBuyInfoResponse {
+                    data: None,
+                    success: false,
+                    error: Some(format!("HTTP {}: {}", status.as_u16(), text)),
+                })
+            }
+        }
     }
 }

@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use crate::db::error::DbResult;
 use super::Db;
 
-#[derive(Debug, Clone, sqlx::Type, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, sqlx::Type, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[sqlx(type_name = "VARCHAR", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RedemptionStatus {
     Pending,

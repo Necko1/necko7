@@ -1,5 +1,5 @@
 use crate::helix::error::{HelixError, HelixResult};
-use crate::helix::response::{ErrorResponse, ObjectResponse};
+use crate::helix::response::{parse_helix_error, ObjectResponse};
 use crate::helix::HelixClient;
 use serde::Deserialize;
 
@@ -35,13 +35,11 @@ impl HelixClient {
             let res_list = res.json::<ObjectResponse<UserInfo>>().await?;
 
             return res_list.data.into_iter().next()
-                .ok_or(HelixError::Other(
+                .ok_or_else(|| HelixError::Other(
                     "Could not find the user based on the provided token".to_string()
                 ));
         }
 
-        let error_res = res.json::<ErrorResponse>().await?;
-
-        Err(error_res.into())
+        Err(parse_helix_error(res).await)
     }
 }

@@ -5,7 +5,7 @@ use serde_json::json;
 use crate::helix::api::custom_rewards::model::{CreateCustomReward, CustomRewardInfo, TwitchUpdateRewardPayload, UpdateCustomReward};
 use crate::helix::error::{HelixError, HelixResult};
 use crate::helix::HelixClient;
-use crate::helix::response::{ErrorResponse, ObjectResponse};
+use crate::helix::response::{parse_helix_error, ObjectResponse};
 
 impl HelixClient {
     pub async fn create_custom_reward(
@@ -45,14 +45,12 @@ impl HelixClient {
             let res_list = res.json::<ObjectResponse<CustomRewardInfo>>().await?;
 
             return res_list.data.into_iter().next()
-                .ok_or(HelixError::Other(
+                .ok_or_else(|| HelixError::Other(
                     "Got empty data list while creating custom reward".to_string()
                 ));
         }
 
-        let error_res = res.json::<ErrorResponse>().await?;
-
-        Err(error_res.into())
+        Err(parse_helix_error(res).await)
     }
 
     pub async fn delete_custom_reward(
@@ -79,9 +77,7 @@ impl HelixClient {
             return Ok(())
         }
 
-        let error_res = res.json::<ErrorResponse>().await?;
-
-        Err(error_res.into())
+        Err(parse_helix_error(res).await)
     }
 
     pub async fn update_custom_reward(
@@ -142,13 +138,11 @@ impl HelixClient {
             let res_list = res.json::<ObjectResponse<CustomRewardInfo>>().await?;
 
             return res_list.data.into_iter().next()
-                .ok_or(HelixError::Other(
+                .ok_or_else(|| HelixError::Other(
                     "Got empty data list while updating custom reward".to_string()
                 ));
         }
 
-        let error_res = res.json::<ErrorResponse>().await?;
-
-        Err(error_res.into())
+        Err(parse_helix_error(res).await)
     }
 }

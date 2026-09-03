@@ -36,6 +36,12 @@ where
                     )
                 };
 
+                tracing::debug!(
+                    param = %param_name,
+                    error = %message,
+                    "Path parameter deserialization failed"
+                );
+
                 Err(ApiError::BadRequest { message, param: param_name })
             }
         }

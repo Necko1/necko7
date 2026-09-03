@@ -43,42 +43,73 @@ pub async fn handle_eventsub(
         || msg_signature.is_empty()
         || msg_type.is_empty()
     {
+        warn!(
+            has_id = !msg_id.is_empty(),
+            has_timestamp = !msg_timestamp.is_empty(),
+            has_signature = !msg_signature.is_empty(),
+            has_type = !msg_type.is_empty(),
+            "EventSub webhook rejected: missing required Twitch headers"
+        );
         return StatusCode::BAD_REQUEST.into_response();
     }
 
     if !verify_signature(&state.webhook_secret, msg_id, msg_timestamp, &body, msg_signature)
     {
+        warn!(
+            msg_id,
+            msg_timestamp,
+            "EventSub webhook rejected: HMAC signature verification failed"
+        );
         return StatusCode::FORBIDDEN.into_response();
     }
 
     match msg_type {
         MESSAGE_TYPE_VERIFICATION => {
-            if let Ok(payload) = serde_json::from_slice::<TwitchChallenge>(&body) {
-                return (StatusCode::OK, payload.challenge).into_response();
+            match serde_json::from_slice::<TwitchChallenge>(&body) {
+                Ok(payload) => {
+                    info!(msg_id, "EventSub webhook verification challenge answered successfully");
+                    (StatusCode::OK, payload.challenge).into_response()
+                }
+                Err(e) => {
+                    error!(
+                        error = %e,
+                        msg_id,
+                        body = %String::from_utf8_lossy(&body),
+                        "Failed to parse EventSub verification challenge payload"
+                    );
+                    StatusCode::BAD_REQUEST.into_response()
+                }
             }
-            StatusCode::BAD_REQUEST.into_response()
         }
         MESSAGE_TYPE_NOTIFICATION => {
-            if let Ok(_notification) = serde_json::from_slice::<serde_json::Value>(&body) {
-                let event_type = get_header(&headers, "twitch-eventsub-subscription-type");
-                info!("Received event: {}", event_type);
+            let event_type = get_header(&headers, "twitch-eventsub-subscription-type");
+            info!(msg_id, event_type, "Received EventSub notification");
 
-                if !event_type.eq("channel.channel_points_custom_reward_redemption.add") {
-                    return StatusCode::NO_CONTENT.into_response();
-                }
+            if !event_type.eq("channel.channel_points_custom_reward_redemption.add") {
+                tracing::debug!(event_type, "Ignoring non-redemption EventSub notification");
+                return StatusCode::NO_CONTENT.into_response();
+            }
 
-                if let Ok(notification) = serde_json::from_slice::<EventSubNotification>(&body) {
+            match serde_json::from_slice::<EventSubNotification>(&body) {
+                Ok(notification) => {
                     let state_clone = state.clone();
-
                     tokio::spawn(async move {
                         process_redemption(state_clone, notification).await;
                     });
+                }
+                Err(e) => {
+                    error!(
+                        error = %e,
+                        msg_id,
+                        body = %String::from_utf8_lossy(&body),
+                        "CRITICAL: Failed to deserialize EventSubNotification payload; redemption was NOT processed!"
+                    );
                 }
             }
             StatusCode::NO_CONTENT.into_response()
         }
         MESSAGE_TYPE_REVOCATION => {
-            warn!("Twitch revoked event subs.");
+            warn!("Twitch EventSub subscription revocation notification received");
             if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&body) {
                 let status = val.pointer("/subscription/status").and_then(|v| v.as_str()).unwrap_or("");
                 let broadcaster_id = val.pointer("/subscription/condition/broadcaster_user_id").and_then(|v| v.as_str());
@@ -104,7 +135,7 @@ pub async fn handle_eventsub(
             StatusCode::NO_CONTENT.into_response()
         }
         _ => {
-            warn!("Unknown message type: {}", msg_type);
+            warn!("Unknown EventSub message type: {}", msg_type);
             StatusCode::NO_CONTENT.into_response()
         }
     }

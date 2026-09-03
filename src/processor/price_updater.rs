@@ -65,7 +65,13 @@ impl PriceUpdater {
 
         for reward in rewards {
             if let Err(e) = update_reward_price_inner(&self.state, setting, &reward).await {
-                warn!(error = %e, reward = %reward.twitch_title, "Failed to update price for reward");
+                warn!(
+                    error = %e,
+                    reward = %reward.twitch_title,
+                    reward_id = %reward.twitch_id,
+                    broadcaster_id = %self.broadcaster_id,
+                    "Failed to update price for reward"
+                );
             }
         }
 
@@ -152,6 +158,7 @@ pub async fn update_reward_price_inner(
     state.db.update_reward(reward.twitch_id, &update_patch).await?;
 
     info!(
+        reward_id = %reward.twitch_id,
         reward = %reward.twitch_title,
         old_market_price = reward.current_market_price,
         new_market_price = cheapest.price,

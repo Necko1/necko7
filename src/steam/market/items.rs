@@ -32,12 +32,32 @@ impl MarketClient {
 
         self.limiter.until_key_ready(&api_key.to_string()).await;
 
-        self.http_client
+        let res = self.http_client
             .get("https://market.csgo.com/api/v2/search-item-by-hash-name")
             .query(&params)
             .send()
-            .await?
-            .json::<MarketSearchItemList>()
-            .await
+            .await?;
+
+        let status = res.status();
+        let text = res.text().await?;
+
+        match serde_json::from_str::<MarketSearchItemList>(&text) {
+            Ok(data) => Ok(data),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    status = status.as_u16(),
+                    raw_body = %text,
+                    item_name = %item_name,
+                    "Failed to deserialize Market search-item response"
+                );
+                Ok(MarketSearchItemList {
+                    success: false,
+                    currency: None,
+                    data: None,
+                    error: Some(format!("HTTP {}: {}", status.as_u16(), text)),
+                })
+            }
+        }
     }
 }

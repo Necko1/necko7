@@ -1,7 +1,7 @@
 use crate::helix::error::HelixResult;
 use crate::helix::HelixClient;
 use serde::Deserialize;
-use crate::helix::response::ErrorResponse;
+use crate::helix::response::parse_helix_error;
 
 #[derive(Deserialize)]
 pub struct AppTokenResponse {
@@ -42,9 +42,7 @@ impl HelixClient {
             return Ok(token)
         }
 
-        let error_res = res.json::<ErrorResponse>().await?;
-
-        Err(error_res.into())
+        Err(parse_helix_error(res).await)
     }
 
     pub async fn exchange_code_for_user_token(
@@ -73,9 +71,7 @@ impl HelixClient {
             return Ok(token)
         }
 
-        let error_res = res.json::<ErrorResponse>().await?;
-
-        Err(error_res.into())
+        Err(parse_helix_error(res).await)
     }
 
     pub async fn refresh_user_token(
@@ -102,8 +98,6 @@ impl HelixClient {
             return Ok(token)
         }
 
-        let error_res = res.json::<ErrorResponse>().await?;
-
-        Err(error_res.into())
+        Err(parse_helix_error(res).await)
     }
 }

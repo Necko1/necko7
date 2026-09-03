@@ -20,12 +20,58 @@ use utoipa::OpenApi;
 use crate::state::AppState;
 use v1::ApiDoc;
 
+async fn request_logger_middleware(
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let start = std::time::Instant::now();
+
+    let res = next.run(req).await;
+
+    let duration_ms = start.elapsed().as_millis();
+    let status = res.status();
+
+    if status.is_server_error() {
+        tracing::error!(
+            method = %method,
+            path = %uri.path(),
+            status = status.as_u16(),
+            duration_ms = duration_ms,
+            "HTTP request completed with 5xx server error"
+        );
+    } else if status.is_client_error() {
+        tracing::warn!(
+            method = %method,
+            path = %uri.path(),
+            status = status.as_u16(),
+            duration_ms = duration_ms,
+            "HTTP request completed with 4xx client error"
+        );
+    } else {
+        tracing::info!(
+            method = %method,
+            path = %uri.path(),
+            status = status.as_u16(),
+            duration_ms = duration_ms,
+            "HTTP request completed"
+        );
+    }
+
+    res
+}
+
 async fn app_init_guard(
     State(state): State<Arc<AppState>>,
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
     if !state.app_initialized.load(Ordering::Relaxed) {
+        tracing::warn!(
+            path = %req.uri().path(),
+            "Request rejected by app_init_guard: bot account not initialized yet. Visit /auth/init/bot first."
+        );
         return StatusCode::NOT_FOUND.into_response();
     }
     next.run(req).await
@@ -57,6 +103,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(init)
         .merge(guarded)
         .merge(swagger)
+        .layer(middleware::from_fn(request_logger_middleware))
         .layer(cors)
         .with_state(state)
 }

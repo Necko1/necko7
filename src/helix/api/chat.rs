@@ -2,7 +2,7 @@ use serde::Deserialize;
 use serde_json::json;
 use crate::helix::error::{HelixError, HelixResult};
 use crate::helix::HelixClient;
-use crate::helix::response::{ErrorResponse, ObjectResponse};
+use crate::helix::response::{parse_helix_error, ObjectResponse};
 
 #[derive(Deserialize)]
 pub struct SentMessageResponse {
@@ -47,14 +47,25 @@ impl HelixClient {
         if res.status().is_success() {
             let res_list = res.json::<ObjectResponse<SentMessageResponse>>().await?;
 
-            return res_list.data.into_iter().next()
-                .ok_or(HelixError::Other(
+            let sent_msg = res_list.data.into_iter().next()
+                .ok_or_else(|| HelixError::Other(
                     "Got empty data list while sending chat message".to_string()
-                ));
+                ))?;
+
+            if !sent_msg.is_sent {
+                if let Some(ref drop_reason) = sent_msg.drop_reason {
+                    tracing::warn!(
+                        drop_code = %drop_reason.code,
+                        drop_message = %drop_reason.message,
+                        broadcaster_id = %broadcaster_id,
+                        "Twitch chat message was dropped by moderation"
+                    );
+                }
+            }
+
+            return Ok(sent_msg);
         }
 
-        let error_res = res.json::<ErrorResponse>().await?;
-
-        Err(error_res.into())
+        Err(parse_helix_error(res).await)
     }
 }

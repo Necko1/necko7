@@ -100,23 +100,53 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        let status = self.status_code();
         let (code, error_type) = self.code_and_type();
+        let message = self.message();
+        let param = self.param();
+
+        if status.is_server_error() {
+            tracing::error!(
+                status = status.as_u16(),
+                error_code = code,
+                error_type = error_type,
+                error_message = message,
+                param = ?param,
+                "API request failed with internal server error"
+            );
+        } else if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            tracing::warn!(
+                status = status.as_u16(),
+                error_code = code,
+                error_message = message,
+                "API request rejected by authentication/authorization"
+            );
+        } else {
+            tracing::debug!(
+                status = status.as_u16(),
+                error_code = code,
+                error_message = message,
+                param = ?param,
+                "API request client error"
+            );
+        }
+
         let body = ErrorBody {
             error: ErrorDetail {
                 code,
                 error_type,
-                message: self.message().to_string(),
-                param: self.param().map(String::from),
+                message: message.to_string(),
+                param: param.map(String::from),
             },
         };
 
-        (self.status_code(), Json(body)).into_response()
+        (status, Json(body)).into_response()
     }
 }
 
 impl From<DbError> for ApiError {
     fn from(err: DbError) -> Self {
-        tracing::error!("Database error: {:?}", err);
+        tracing::error!(error = %err, "Database error mapped to ApiError::Internal");
         ApiError::Internal {
             message: "Internal database error".to_string(),
         }
@@ -125,7 +155,12 @@ impl From<DbError> for ApiError {
 
 impl From<reqwest::Error> for ApiError {
     fn from(err: reqwest::Error) -> Self {
-        tracing::error!("Reqwest error: {:?}", err);
+        tracing::error!(
+            error = %err,
+            url = ?err.url().map(|u| u.as_str()),
+            status = ?err.status().map(|s| s.as_u16()),
+            "Reqwest HTTP error mapped to ApiError::Internal"
+        );
         ApiError::Internal {
             message: "Internal reqwest error".to_string(),
         }
@@ -135,10 +170,21 @@ impl From<reqwest::Error> for ApiError {
 impl From<HelixError> for ApiError {
     fn from(err: HelixError) -> Self {
         match err {
-            HelixError::Unauthorized(msg) => ApiError::Unauthorized { message: msg },
-            HelixError::Other(msg) => ApiError::Internal { message: msg },
+            HelixError::Unauthorized(msg) => {
+                tracing::warn!(reason = %msg, "HelixError::Unauthorized mapped to ApiError::Unauthorized");
+                ApiError::Unauthorized { message: msg }
+            }
+            HelixError::Other(msg) => {
+                tracing::error!(reason = %msg, "HelixError::Other mapped to ApiError::Internal");
+                ApiError::Internal { message: msg }
+            }
             HelixError::Reqwest(err) => {
-                tracing::error!("HTTP client error: {:?}", err);
+                tracing::error!(
+                    error = %err,
+                    url = ?err.url().map(|u| u.as_str()),
+                    status = ?err.status().map(|s| s.as_u16()),
+                    "HelixError::Reqwest mapped to ApiError::Internal"
+                );
                 ApiError::Internal {
                     message: "Upstream HTTP request failed".to_string(),
                 }
@@ -149,7 +195,7 @@ impl From<HelixError> for ApiError {
 
 impl From<Box<dyn std::error::Error>> for ApiError {
     fn from(err: Box<dyn std::error::Error>) -> Self {
-        tracing::error!("Boxed error: {:?}", err);
+        tracing::error!(error = %err, "Boxed dyn Error mapped to ApiError::Internal");
         ApiError::Internal {
             message: err.to_string(),
         }
@@ -158,7 +204,7 @@ impl From<Box<dyn std::error::Error>> for ApiError {
 
 impl From<Box<dyn std::error::Error + Send + Sync>> for ApiError {
     fn from(err: Box<dyn std::error::Error + Send + Sync>) -> Self {
-        tracing::error!("Boxed error: {:?}", err);
+        tracing::error!(error = %err, "Boxed dyn Error + Send + Sync mapped to ApiError::Internal");
         ApiError::Internal {
             message: err.to_string(),
         }

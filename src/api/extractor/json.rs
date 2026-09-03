@@ -46,6 +46,12 @@ where
                 let param_name = err.path().to_string();
                 let inner_err = err.into_inner();
 
+                tracing::debug!(
+                    field = %param_name,
+                    error = %inner_err,
+                    "JSON request body deserialization failed"
+                );
+
                 let message = format!(
                     "Failed to parse JSON field '{}': {}",
                     param_name, inner_err

@@ -27,7 +27,11 @@ impl BalanceUpdater {
 
             let setting = match self.state.db.get_broadcaster_setting(&self.broadcaster_id).await {
                 Ok(Some(s)) => s,
-                _ => continue,
+                Ok(None) => continue,
+                Err(e) => {
+                    tracing::error!(error = %e, broadcaster_id = %self.broadcaster_id, "DB error fetching broadcaster setting for balance updater");
+                    continue;
+                }
             };
 
             if setting.is_active && !setting.market_api_key.trim().is_empty() {
