@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use crate::api::error::ApiError;
 use crate::api::extractor::authorized_channel::AuthorizedChannel;
+use crate::api::extractor::query::QueryArg;
 use crate::state::AppState;
 
 #[derive(Serialize, ToSchema)]
@@ -65,7 +66,7 @@ pub struct StatsQuery {
 pub async fn get_stats(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
-    axum::extract::Query(query): axum::extract::Query<StatsQuery>,
+    QueryArg(query): QueryArg<StatsQuery>,
 ) -> Result<Json<StatsResponse>, ApiError> {
     let now = Utc::now();
 

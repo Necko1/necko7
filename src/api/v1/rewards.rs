@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use axum::extract::{State, Path};
+use axum::extract::State;
 use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -8,10 +8,18 @@ use uuid::Uuid;
 use utoipa::ToSchema;
 use crate::api::error::ApiError;
 use crate::api::extractor::authorized_channel::AuthorizedChannel;
+use crate::api::extractor::json::JsonArg;
+use crate::api::extractor::query::QueryArg;
+use crate::api::extractor::path::PathArg;
 use crate::db::rewards::Reward;
 use crate::state::AppState;
 use crate::helix::api::custom_rewards::model::CreateCustomReward;
 use crate::steam::market;
+
+#[derive(Deserialize)]
+pub struct RewardPath {
+    pub reward_id: Uuid,
+}
 
 #[derive(Serialize, ToSchema)]
 pub struct RewardResponse {
@@ -43,6 +51,8 @@ pub struct RewardResponse {
     pub max_redemptions_per_user_per_stream: i16,
     /// Whether to automatically buy from the market
     pub market_autobuy: bool,
+    /// Currency code (e.g. "RUB", "USD")
+    pub currency: String,
     /// Reward creation timestamp
     pub created_at: chrono::DateTime<Utc>,
     /// Reward last update timestamp
@@ -66,6 +76,7 @@ impl From<Reward> for RewardResponse {
             max_redemptions_per_stream: r.max_redemptions_per_stream,
             max_redemptions_per_user_per_stream: r.max_redemptions_per_user_per_stream,
             market_autobuy: r.market_autobuy,
+            currency: r.currency,
             created_at: r.created_at,
             updated_at: r.updated_at,
         }
@@ -125,7 +136,7 @@ pub struct ListRewardsQuery {
 pub async fn list_rewards(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
-    axum::extract::Query(query): axum::extract::Query<ListRewardsQuery>,
+    QueryArg(query): QueryArg<ListRewardsQuery>,
 ) -> Result<Json<Vec<RewardResponse>>, ApiError> {
     let rewards = state.db.get_rewards_by_streamer_filtered(
         &auth.channel_id,
@@ -205,7 +216,7 @@ pub struct CreateRewardBody {
 pub async fn create_reward(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
-    Json(body): Json<CreateRewardBody>,
+    JsonArg(body): JsonArg<CreateRewardBody>,
 ) -> Result<Json<RewardResponse>, ApiError> {
     let setting = state.db.get_or_create_broadcaster_setting(&auth.channel_id).await?;
 
@@ -239,9 +250,12 @@ pub async fn create_reward(
         return Err(ApiError::Internal { message: msg.into() })
     }
 
-    let cheapest_item = items.data.iter().min_by_key(|item| item.price)
+    let items_data = items.data.unwrap();
+
+    let cheapest_item = items_data.iter().min_by_key(|item| item.price)
         .ok_or(ApiError::NotFound { message: "Can't find specified item on the market".into() })?;
-    let price_decimal = market::minor_to_major(cheapest_item.price, &items.currency);
+    let currency = items.currency.clone().unwrap_or_else(|| "RUB".to_string());
+    let price_decimal = market::minor_to_major(cheapest_item.price, &currency);
 
     let markup_factor = 1.0 + (body.twitch_price_markup_percentage as f64 / 100.0).max(0.0);
 
@@ -294,6 +308,7 @@ pub async fn create_reward(
         max_redemptions_per_stream: body.max_redemptions_per_stream,
         max_redemptions_per_user_per_stream: body.max_redemptions_per_user_per_stream,
         market_autobuy: body.market_autobuy,
+        currency,
     };
 
     let reward = state.db.create_reward(&new_reward).await?;
@@ -371,9 +386,10 @@ pub struct UpdateRewardBody {
 pub async fn update_reward(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
-    Path(reward_id): Path<Uuid>,
-    Json(body): Json<UpdateRewardBody>,
+    PathArg(path): PathArg<RewardPath>,
+    JsonArg(body): JsonArg<UpdateRewardBody>,
 ) -> Result<Json<RewardResponse>, ApiError> {
+    let reward_id = path.reward_id;
     let existing = state.db.get_reward_by_twitch_id(reward_id).await?
         .ok_or_else(|| ApiError::NotFound {
             message: "Reward not found".to_string(),
@@ -431,6 +447,7 @@ pub async fn update_reward(
         max_redemptions_per_stream: body.max_redemptions_per_stream,
         max_redemptions_per_user_per_stream: body.max_redemptions_per_user_per_stream,
         market_autobuy: body.market_autobuy,
+        currency: None,
     };
 
     state.db.update_reward(reward_id, &patch).await?;
@@ -469,8 +486,9 @@ pub async fn update_reward(
 pub async fn delete_reward(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
-    Path(reward_id): Path<Uuid>,
+    PathArg(path): PathArg<RewardPath>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let reward_id = path.reward_id;
     let existing = state.db.get_reward_by_twitch_id(reward_id).await?
         .ok_or_else(|| ApiError::NotFound {
             message: "Reward not found".to_string(),
@@ -529,8 +547,9 @@ pub async fn delete_reward(
 pub async fn update_reward_price(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
-    Path(reward_id): Path<Uuid>,
+    PathArg(path): PathArg<RewardPath>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let reward_id = path.reward_id;
     let existing = state.db.get_reward_by_twitch_id(reward_id).await?
         .ok_or_else(|| ApiError::NotFound {
             message: "Reward not found".to_string(),
@@ -562,9 +581,12 @@ pub async fn update_reward_price(
         return Err(ApiError::Internal { message: msg.into() })
     }
 
-    let cheapest_item = items.data.iter().min_by_key(|item| item.price)
+    let items_data = items.data.unwrap();
+
+    let cheapest_item = items_data.iter().min_by_key(|item| item.price)
         .ok_or(ApiError::NotFound { message: "Can't find specified item on the market".into() })?;
-    let price_decimal = market::minor_to_major(cheapest_item.price, &items.currency);
+    let currency = items.currency.clone().unwrap_or_else(|| existing.currency.clone());
+    let price_decimal = market::minor_to_major(cheapest_item.price, &currency);
 
     let markup_factor = 1.0 + (existing.twitch_price_markup_percentage as f64 / 100.0).max(0.0);
 
@@ -595,7 +617,11 @@ pub async fn update_reward_price(
         }
     }).await?;
 
-    state.db.update_reward_market_price(reward_id, cheapest_item.price as i32).await?;
+    state.db.update_reward(reward_id, &crate::db::rewards::UpdateReward {
+        current_market_price: Some(cheapest_item.price as i32),
+        currency: items.currency,
+        ..Default::default()
+    }).await?;
 
     Ok(Json(serde_json::json!({ "updated": true })))
 }
@@ -635,7 +661,7 @@ pub struct BatchRewardBody {
 pub async fn batch_rewards(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
-    Json(body): Json<BatchRewardBody>,
+    JsonArg(body): JsonArg<BatchRewardBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let mut affected = 0u32;
     let broadcaster_id = auth.channel_id.clone();

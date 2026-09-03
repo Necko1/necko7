@@ -4,6 +4,7 @@ pub mod helix;
 pub mod api;
 pub mod steam;
 pub mod processor;
+pub mod datetime;
 
 use std::env;
 
@@ -15,7 +16,7 @@ use tracing_subscriber::EnvFilter;
 use state::AppState;
 use crate::db::Db;
 
-pub type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
+pub type AppResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[tokio::main]
 async fn main() -> AppResult<()> {
@@ -30,9 +31,12 @@ async fn main() -> AppResult<()> {
     let addr = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
 
     let db = Db::connect(&env::var("DATABASE_URL")
-        .expect("APP_URL not found in the environment")).await?;
+        .expect("DATABASE_URL not found in the environment")).await?;
 
     let state = AppState::from_env(db).await?;
+
+    processor::start_background_tasks(state.clone()).await;
+
     let app = api::build_router(state);
 
     info!("Starting HTTP server on {addr}");

@@ -1,9 +1,29 @@
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 use crate::steam::market::MarketClient;
 use crate::steam::trade_link::TradeLink;
-use serde_with::{serde_as, TimestampSeconds, DisplayFromStr};
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
+use serde_with::{serde_as, TimestampSeconds};
+use uuid::Uuid;
+
+fn deserialize_price_opt<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum PriceValue {
+        Int(i64),
+        Float(f64),
+        Str(String),
+    }
+
+    match Option::<PriceValue>::deserialize(deserializer)? {
+        Some(PriceValue::Int(i)) => Ok(Some(i)),
+        Some(PriceValue::Float(f)) => Ok(Some(f as i64)),
+        Some(PriceValue::Str(s)) => s.parse::<i64>().map(Some).map_err(serde::de::Error::custom),
+        None => Ok(None),
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct MarketBuyForResponse {
@@ -11,6 +31,8 @@ pub struct MarketBuyForResponse {
     pub id: Option<String>,
     pub error: Option<String>,
     pub code: Option<u32>,
+    #[serde(default, deserialize_with = "deserialize_price_opt")]
+    pub price: Option<i64>, // in minor
 }
 
 #[derive(Deserialize)]
@@ -41,9 +63,9 @@ pub struct GetBuyInfoData {
     #[serde_as(as = "Option<TimestampSeconds<String>>")]
     pub receive_until: Option<DateTime<Utc>>,
     pub stage: String,
-    pub causer: String,
+    pub causer: Option<String>,
     pub paid: f64,
-    pub refund: Refund,
+    pub refund: Option<Refund>,
     pub currency: String,
     #[serde(rename = "for")]
     pub r#for: String,
@@ -55,7 +77,7 @@ pub struct GetBuyInfoData {
 #[derive(Deserialize)]
 pub struct GetBuyInfoResponse {
     pub success: bool,
-    pub data: GetBuyInfoData,
+    pub data: Option<GetBuyInfoData>,
 
     pub error: Option<String>,
 }

@@ -155,3 +155,12 @@ impl From<Box<dyn std::error::Error>> for ApiError {
         }
     }
 }
+
+impl From<Box<dyn std::error::Error + Send + Sync>> for ApiError {
+    fn from(err: Box<dyn std::error::Error + Send + Sync>) -> Self {
+        tracing::error!("Boxed error: {:?}", err);
+        ApiError::Internal {
+            message: err.to_string(),
+        }
+    }
+}

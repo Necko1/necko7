@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use crate::api::error::ApiError;
 use crate::api::extractor::authorized_channel::AuthorizedChannel;
+use crate::api::extractor::json::JsonArg;
+use crate::api::extractor::path::PathArg;
 use crate::db::channel_permissions::{ChannelRole, NewChannelPermission};
 use crate::state::AppState;
 
@@ -117,7 +119,7 @@ pub struct GrantPermissionBody {
 pub async fn grant_permission(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
-    Json(body): Json<GrantPermissionBody>,
+    JsonArg(body): JsonArg<GrantPermissionBody>,
 ) -> Result<Json<PermissionResponse>, ApiError> {
     auth.require_owner()?;
 
@@ -142,6 +144,11 @@ pub async fn grant_permission(
         granted_by: perm.granted_by,
         user_login: user.login,
     }))
+}
+
+#[derive(Deserialize)]
+pub struct RevokePermissionPath {
+    pub user_id: String,
 }
 
 #[utoipa::path(
@@ -170,9 +177,11 @@ pub async fn grant_permission(
 pub async fn revoke_permission(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
-    axum::extract::Path(user_id): axum::extract::Path<String>,
+    PathArg(params): PathArg<RevokePermissionPath>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     auth.require_owner()?;
+
+    let user_id = params.user_id;
 
     if user_id == auth.user_id {
         return Err(ApiError::Forbidden {

@@ -18,7 +18,7 @@ impl HelixClient {
             .send()
             .await?;
 
-        if res.status().is_success() {
+        if res.status().is_success() || res.status() == reqwest::StatusCode::CONFLICT {
             return Ok(())
         }
 

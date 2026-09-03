@@ -1,7 +1,9 @@
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use parking_lot::RwLock;
+use chrono::{DateTime, Duration, Utc};
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 use crate::AppResult;
@@ -9,8 +11,9 @@ use crate::db::app_settings::{KEY_APP_TOKEN, KEY_BOT_AUTH};
 use crate::db::Db;
 use crate::db::error::DbResult;
 use crate::helix::error::HelixError;
+use crate::helix::api::custom_rewards::model::UpdateCustomReward;
 use crate::helix::{api, HelixClient};
-use crate::steam::market::MarketClient;
+use crate::steam::market::{self, MarketClient};
 
 #[derive(Serialize, Deserialize)]
 pub struct BotInfo {
@@ -18,6 +21,14 @@ pub struct BotInfo {
     pub user_id: String,
     pub access_token: String,
     pub refresh_token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedMarketBalance {
+    pub money: f64,
+    pub money_settlement: f64,
+    pub currency: String,
+    pub updated_at: DateTime<Utc>,
 }
 
 pub struct AppState {
@@ -32,6 +43,8 @@ pub struct AppState {
     pub frontend_url: String,
 
     pub bot_info: RwLock<Option<BotInfo>>,
+    pub market_balances: RwLock<HashMap<String, CachedMarketBalance>>,
+    pub active_broadcaster_tasks: Mutex<HashSet<String>>,
 
     pub db: Db,
 
@@ -64,6 +77,8 @@ impl AppState {
             frontend_url: env::var("FRONTEND_URL")
                 .expect("FRONTEND_URL not found in the environment"),
             bot_info: RwLock::new(bot_info),
+            market_balances: RwLock::new(HashMap::new()),
+            active_broadcaster_tasks: Mutex::new(HashSet::new()),
             db,
             app_initialized: AtomicBool::new(app_initialized),
         }))
@@ -219,5 +234,143 @@ impl AppState {
                 self.helix_client.create_subscription(body, &token).await
             }
         }).await
+    }
+
+    pub async fn get_cached_or_fetch_balance(&self, channel_id: &str) -> AppResult<CachedMarketBalance> {
+        {
+            let guard = self.market_balances.read();
+            if let Some(cached) = guard.get(channel_id) {
+                if Utc::now() - cached.updated_at < Duration::minutes(5) {
+                    return Ok(cached.clone());
+                }
+            }
+        }
+
+        self.refresh_broadcaster_balance(channel_id).await
+    }
+
+    pub async fn refresh_broadcaster_balance(&self, channel_id: &str) -> AppResult<CachedMarketBalance> {
+        let setting = self.db.get_broadcaster_setting(channel_id).await?
+            .ok_or_else(|| format!("Broadcaster setting not found for channel {}", channel_id))?;
+
+        if setting.market_api_key.trim().is_empty() {
+            return Err("Market API key is not configured for this broadcaster".into());
+        }
+
+        let money_res = self.market_client.get_money(&setting.market_api_key).await?;
+        if !money_res.success {
+            let err = money_res.error.unwrap_or_else(|| "Unknown market API error".to_string());
+            return Err(format!("Market API error: {}", err).into());
+        }
+
+        let balance = CachedMarketBalance {
+            money: money_res.money.unwrap_or(0.0),
+            money_settlement: money_res.money_settlement.unwrap_or(0.0),
+            currency: money_res.currency.unwrap_or_else(|| "RUB".to_string()),
+            updated_at: Utc::now(),
+        };
+
+        {
+            let mut guard = self.market_balances.write();
+            guard.insert(channel_id.to_string(), balance.clone());
+        }
+
+        if setting.pause_reward_if_no_money {
+            self.sync_rewards_pause_by_balance(channel_id, balance.money).await;
+        }
+
+        Ok(balance)
+    }
+
+    pub async fn sync_rewards_pause_by_balance(&self, channel_id: &str, current_balance: f64) {
+        let rewards = match self.db.get_rewards_by_streamer_filtered(channel_id, None, Some(false)).await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, channel_id = %channel_id, "Failed to fetch rewards for balance pause sync");
+                return;
+            }
+        };
+
+        for reward in rewards {
+            if reward.current_market_price <= 0 {
+                continue;
+            }
+
+            let max_price = (reward.current_market_price as i64)
+                + ((reward.current_market_price as i64 * reward.permissible_market_price_deviation as i64) / 100);
+            let cost = market::minor_to_major(max_price, &reward.currency);
+            let has_enough_money = current_balance >= cost;
+
+            let target_paused = !has_enough_money;
+
+            if reward.is_paused == target_paused {
+                continue;
+            }
+
+            let r_id_str = reward.twitch_id.to_string();
+            let bc_id = channel_id.to_string();
+            let update_res = self.with_broadcaster_token(channel_id, |token| {
+                let r_str = r_id_str.clone();
+                let b_str = bc_id.clone();
+                async move {
+                    self.helix_client.update_custom_reward(
+                        &b_str,
+                        &r_str,
+                        UpdateCustomReward {
+                            is_paused: Some(target_paused),
+                            ..Default::default()
+                        },
+                        &token,
+                    ).await
+                }
+            }).await;
+
+            match update_res {
+                Ok(_) => {
+                    if let Err(e) = self.db.set_reward_paused(reward.twitch_id, target_paused).await {
+                        warn!(error = %e, reward_id = %reward.twitch_id, "Failed to update reward pause status in DB");
+                    } else {
+                        tracing::info!(
+                            reward_id = %reward.twitch_id,
+                            title = %reward.twitch_title,
+                            paused = target_paused,
+                            cost = cost,
+                            balance = current_balance,
+                            "Auto-updated reward pause status due to balance check"
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        reward_id = %reward.twitch_id,
+                        "Failed to update custom reward pause status on Twitch during balance check"
+                    );
+                }
+            }
+        }
+    }
+
+    pub async fn recover_eventsub_subscriptions(&self) {
+        match self.db.get_all_broadcasters().await {
+            Ok(broadcasters) => {
+                for broadcaster in broadcasters {
+                    let is_active = match self.db.get_broadcaster_setting(&broadcaster.channel_id).await {
+                        Ok(Some(s)) => s.is_active,
+                        _ => true,
+                    };
+
+                    if is_active {
+                        tracing::info!("Subscribing EventSub for broadcaster {} ({})", broadcaster.channel_login, broadcaster.channel_id);
+                        if let Err(e) = self.create_eventsub_subscription(&broadcaster.channel_id).await {
+                            tracing::warn!(error = %e, "Failed to recover EventSub subscription for {}", broadcaster.channel_login);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to get broadcasters from DB for EventSub recovery");
+            }
+        }
     }
 }

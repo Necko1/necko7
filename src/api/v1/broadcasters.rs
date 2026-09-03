@@ -6,6 +6,7 @@ use utoipa::ToSchema;
 use crate::api::error::ApiError;
 use crate::api::extractor::caller_user::CallerUser;
 use crate::api::extractor::authorized_channel::AuthorizedChannel;
+use crate::api::extractor::json::JsonArg;
 use crate::db::channel_permissions::ChannelRole;
 use crate::state::AppState;
 
@@ -77,8 +78,6 @@ pub struct BroadcasterSettingsResponse {
     pub is_active: bool,
     /// Whether a market API key is configured
     pub market_api_key_set: bool,
-    /// Market currency used for item purchases (e.g. "USD")
-    pub market_currency: String,
     /// Base price multiplier for reward pricing (percentage, e.g. 150 = 150%)
     pub base_price_multiplier: i16,
     /// Period (in seconds) between automatic price updates
@@ -109,7 +108,6 @@ pub struct BroadcasterSettingsResponse {
                 "channel_login": "some_streamer",
                 "is_active": true,
                 "market_api_key_set": true,
-                "market_currency": "USD",
                 "base_price_multiplier": 150,
                 "update_prices_period": 300,
                 "refund_on_buyer_fail": true,
@@ -148,7 +146,6 @@ pub async fn get_broadcaster_settings(
         channel_login,
         is_active: setting.is_active,
         market_api_key_set: !setting.market_api_key.is_empty(),
-        market_currency: setting.market_currency,
         base_price_multiplier: setting.base_price_multiplier,
         update_prices_period: setting.update_prices_period,
         refund_on_buyer_fail: setting.refund_on_buyer_fail,
@@ -164,8 +161,6 @@ pub struct UpdateBroadcasterSettingsBody {
     pub is_active: Option<bool>,
     /// Market API key for item purchases
     pub market_api_key: Option<String>,
-    /// Market currency (e.g. "USD", "EUR")
-    pub market_currency: Option<String>,
     /// Base price multiplier for reward pricing (percentage)
     pub base_price_multiplier: Option<i16>,
     /// Period (in seconds) between automatic price updates
@@ -197,7 +192,6 @@ pub struct UpdateBroadcasterSettingsBody {
                 "channel_login": "some_streamer",
                 "is_active": true,
                 "market_api_key_set": true,
-                "market_currency": "USD",
                 "base_price_multiplier": 150,
                 "update_prices_period": 300,
                 "refund_on_buyer_fail": true,
@@ -220,14 +214,13 @@ pub struct UpdateBroadcasterSettingsBody {
 pub async fn update_broadcaster_settings(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
-    Json(body): Json<UpdateBroadcasterSettingsBody>,
+    JsonArg(body): JsonArg<UpdateBroadcasterSettingsBody>,
 ) -> Result<Json<BroadcasterSettingsResponse>, ApiError> {
     let _setting = state.db.get_or_create_broadcaster_setting(&auth.channel_id).await?;
 
     let patch = crate::db::broadcaster_settings::UpdateBroadcasterSetting {
         is_active: body.is_active,
         market_api_key: body.market_api_key,
-        market_currency: body.market_currency,
         base_price_multiplier: body.base_price_multiplier,
         update_prices_period: body.update_prices_period,
         refund_on_buyer_fail: body.refund_on_buyer_fail,
@@ -247,12 +240,69 @@ pub async fn update_broadcaster_settings(
         channel_login,
         is_active: setting.is_active,
         market_api_key_set: !setting.market_api_key.is_empty(),
-        market_currency: setting.market_currency,
         base_price_multiplier: setting.base_price_multiplier,
         update_prices_period: setting.update_prices_period,
         refund_on_buyer_fail: setting.refund_on_buyer_fail,
         refund_if_no_money: setting.refund_if_no_money,
         pause_reward_if_no_money: setting.pause_reward_if_no_money,
         market_chance_to_transfer: setting.market_chance_to_transfer,
+    }))
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct MarketBalanceResponse {
+    /// Available market balance
+    pub money: f64,
+    /// Balance in settlement (hold)
+    pub money_settlement: f64,
+    /// Currency code (e.g. "RUB", "USD")
+    pub currency: String,
+    /// Last updated timestamp
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/broadcasters/{channel_id}/market/balance",
+    tag = "Broadcasters",
+    summary = "Get broadcaster market balance",
+    description = "Returns the broadcaster's CS:GO market balance (cached, refreshed automatically or when stale).",
+    params(
+        ("channel_id" = String, Path, description = "Twitch channel ID of the broadcaster"),
+    ),
+    responses(
+        (status = 200, description = "Market balance retrieved successfully", body = MarketBalanceResponse,
+            example = json!({
+                "money": 1520.50,
+                "money_settlement": 0.0,
+                "currency": "RUB",
+                "updated_at": "2026-01-15T12:00:00Z"
+            })
+        ),
+        (status = 400, description = "Market API key is not configured or market API error"),
+        (status = 401, description = "Unauthorized — missing or invalid session cookie"),
+        (status = 403, description = "Forbidden — no access to this channel"),
+        (status = 404, description = "Broadcaster settings not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(
+        ("session_id" = [])
+    )
+)]
+pub async fn get_broadcaster_balance(
+    auth: AuthorizedChannel,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<MarketBalanceResponse>, ApiError> {
+    let balance = state.get_cached_or_fetch_balance(&auth.channel_id).await
+        .map_err(|e| ApiError::BadRequest {
+            message: format!("Failed to retrieve market balance: {}", e),
+            param: "market_api_key".to_string(),
+        })?;
+
+    Ok(Json(MarketBalanceResponse {
+        money: balance.money,
+        money_settlement: balance.money_settlement,
+        currency: balance.currency,
+        updated_at: balance.updated_at,
     }))
 }

@@ -38,7 +38,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     let guarded = Router::new()
         .route("/auth/connect", get(auth::streamer_login_redirect))
         .route("/auth/login", get(auth::user_login_redirect))
-        .route("/auth/callback", get(auth::auth_callback))
+        .route("/auth/logout", post(auth::logout).get(auth::logout))
         .route("/eventsub", post(eventsub::handle_eventsub))
         .merge(v1::router())
         .layer(middleware::from_fn_with_state(state.clone(), app_init_guard));
@@ -53,6 +53,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .url("/api-docs/openapi.json", ApiDoc::openapi());
 
     Router::new()
+        .route("/auth/callback", get(auth::auth_callback))
         .merge(init)
         .merge(guarded)
         .merge(swagger)

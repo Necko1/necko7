@@ -1,11 +1,14 @@
-use serde::{Deserialize, Serialize};
 use crate::steam::market::MarketClient;
+use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct MarketGetMoney {
-    pub money: f64,
-    pub money_settlement: f64,
-    pub currency: String,
+    #[serde(default)]
+    pub money: Option<f64>,
+    #[serde(default)]
+    pub money_settlement: Option<f64>,
+    #[serde(default)]
+    pub currency: Option<String>,
     pub success: bool,
     pub error: Option<String>,
 }
@@ -18,7 +21,7 @@ impl MarketClient {
         self.limiter.until_key_ready(&api_key.to_string()).await;
 
         self.http_client
-            .get("https://market.csgo.com/api/v2/search-item-by-hash-name")
+            .get("https://market.csgo.com/api/v2/get-money")
             .query(&[("key", api_key), ])
             .send()
             .await?

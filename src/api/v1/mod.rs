@@ -3,6 +3,7 @@ pub mod permissions;
 pub mod rewards;
 pub mod redemptions;
 pub mod stats;
+pub mod users;
 
 use axum::Router;
 use axum::routing::{get, post, delete, put};
@@ -14,9 +15,11 @@ use crate::api::error::{ErrorBody, ErrorDetail};
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        users::get_current_user,
         broadcasters::list_broadcasters,
         broadcasters::get_broadcaster_settings,
         broadcasters::update_broadcaster_settings,
+        broadcasters::get_broadcaster_balance,
         permissions::list_permissions,
         permissions::grant_permission,
         permissions::revoke_permission,
@@ -33,9 +36,11 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         stats::get_stats,
     ),
     components(schemas(
+        users::UserResponse,
         broadcasters::BroadcasterListItem,
         broadcasters::BroadcasterSettingsResponse,
         broadcasters::UpdateBroadcasterSettingsBody,
+        broadcasters::MarketBalanceResponse,
         permissions::PermissionResponse,
         permissions::GrantPermissionBody,
         rewards::RewardResponse,
@@ -44,6 +49,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         rewards::BatchRewardBody,
         rewards::ListRewardsQuery,
         redemptions::RedemptionResponse,
+        redemptions::PaginatedRedemptionsResponse,
         redemptions::ListRedemptionsQuery,
         stats::StatsResponse,
         stats::StatsQuery,
@@ -53,6 +59,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         crate::db::redemptions::RedemptionStatus,
     )),
     tags(
+        (name = "Users", description = "User profile and session information"),
         (name = "Broadcasters", description = "Broadcaster settings and channel management"),
         (name = "Permissions", description = "Channel access control (owner/editor roles)"),
         (name = "Rewards", description = "Channel point rewards CRUD and batch operations"),
@@ -81,9 +88,11 @@ impl utoipa::Modify for SecurityAddon {
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/users/me", get(users::get_current_user))
         .route("/broadcasters", get(broadcasters::list_broadcasters))
         .route("/broadcasters/{channel_id}", get(broadcasters::get_broadcaster_settings))
         .route("/broadcasters/{channel_id}/settings", put(broadcasters::update_broadcaster_settings))
+        .route("/broadcasters/{channel_id}/market/balance", get(broadcasters::get_broadcaster_balance))
         .route("/broadcasters/{channel_id}/permissions", get(permissions::list_permissions).post(permissions::grant_permission))
         .route("/broadcasters/{channel_id}/permissions/{user_id}", delete(permissions::revoke_permission))
         .route("/broadcasters/{channel_id}/rewards", get(rewards::list_rewards).post(rewards::create_reward))

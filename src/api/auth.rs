@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::api::cookie::{build_cookie_string, build_csrf_cookie};
 use crate::state::{AppState, BotInfo};
 use crate::db::app_settings::KEY_BOT_AUTH;
+use crate::db::broadcaster_settings::NewBroadcasterSetting;
 use crate::db::broadcasters::NewBroadcaster;
 use crate::db::channel_permissions::{ChannelRole, NewChannelPermission};
 use crate::db::sessions::NewSession;
@@ -204,12 +205,22 @@ pub async fn auth_callback(
             return (StatusCode::INTERNAL_SERVER_ERROR, "DB Error").into_response();
         }
 
-        let new_user = NewUser {
-            twitch_id: channel_id.clone(),
-            login: channel_login.clone(),
-            avatar_url: Some(info.profile_image_url),
+        let new_setting = NewBroadcasterSetting {
+            channel_id: channel_id.clone(),
+            is_active: true,
+            market_api_key: "".to_string(),
+            base_price_multiplier: 200,
+            update_prices_period: 3600,
+            refund_on_buyer_fail: false,
+            refund_if_no_money: true,
+            pause_reward_if_no_money: false,
+            market_chance_to_transfer: 0,
         };
-        let _ = state.db.upsert_user(&new_user).await;
+        
+        if let Err(e) = state.db.upsert_broadcaster_setting(&new_setting).await {
+            error!("DB Error: {:?}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "DB Error").into_response();
+        }
 
         let new_permission = NewChannelPermission {
             channel_id: channel_id.clone(),
@@ -229,6 +240,8 @@ pub async fn auth_callback(
                 error!("Failed to create EventSub subscription: {:?}", err);
             }
         });
+
+        crate::processor::start_broadcaster_tasks(state.clone(), channel_id.clone());
 
         info!("Streamer {} (ID: {}) successfully connected the bot!", channel_login, channel_id);
     } else if query_state.starts_with("user:") {
@@ -286,5 +299,43 @@ pub async fn auth_callback(
     (
         response_headers,
         Redirect::to(&frontend_dashboard_url)
+    ).into_response()
+}
+
+pub async fn logout(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    let cookie_header = headers
+        .get(COOKIE)
+        .and_then(|val| val.to_str().ok())
+        .unwrap_or("");
+
+    let session_id = cookie_header
+        .split(';')
+        .find_map(|c| {
+            let mut parts = c.trim().splitn(2, '=');
+            if parts.next()? == "session_id" {
+                parts.next()
+            } else {
+                None
+            }
+        });
+
+    if let Some(sid_str) = session_id {
+        if let Ok(uuid) = Uuid::parse_str(sid_str) {
+            let _ = state.db.delete_session(uuid).await;
+        }
+    }
+
+    let clear_cookie = build_cookie_string("session_id", "", 0, &state.app_url);
+    let mut response_headers = HeaderMap::new();
+    if let Ok(hv) = HeaderValue::from_str(&clear_cookie) {
+        response_headers.insert(SET_COOKIE, hv);
+    }
+
+    (
+        response_headers,
+        axum::Json(serde_json::json!({ "success": true }))
     ).into_response()
 }

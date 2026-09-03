@@ -1,14 +1,21 @@
-use std::sync::Arc;
-use axum::extract::{State, Path};
-use axum::Json;
-use serde::{Deserialize, Serialize};
-use tracing::error;
-use uuid::Uuid;
-use utoipa::ToSchema;
 use crate::api::error::ApiError;
 use crate::api::extractor::authorized_channel::AuthorizedChannel;
+use crate::api::extractor::path::PathArg;
+use crate::api::extractor::query::QueryArg;
 use crate::db::redemptions::{Redemption, RedemptionStatus};
 use crate::state::AppState;
+use axum::extract::State;
+use axum::Json;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use utoipa::ToSchema;
+use uuid::Uuid;
+use crate::processor::order_watcher::{OrderWatcher, WatcherRedemptionData};
+
+#[derive(Deserialize)]
+pub struct RedemptionPath {
+    pub redemption_id: Uuid,
+}
 
 #[derive(Serialize, ToSchema)]
 pub struct RedemptionResponse {
@@ -24,6 +31,8 @@ pub struct RedemptionResponse {
     pub twitch_points_cost: i64,
     /// Market price paid in cents (if any)
     pub market_paid_price: Option<i64>,
+    /// Currency code (e.g. "RUB", "USD")
+    pub currency: String,
     /// Current redemption status
     pub status: RedemptionStatus,
     /// Failure cause code (if failed)
@@ -45,6 +54,7 @@ impl From<Redemption> for RedemptionResponse {
             user_login: r.user_login,
             twitch_points_cost: r.twitch_points_cost,
             market_paid_price: r.market_paid_price,
+            currency: r.currency,
             status: r.status,
             fail_cause: r.fail_cause,
             fail_description: r.fail_description,
@@ -52,6 +62,18 @@ impl From<Redemption> for RedemptionResponse {
             updated_at: r.updated_at,
         }
     }
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct PaginatedRedemptionsResponse {
+    /// List of redemptions
+    pub items: Vec<RedemptionResponse>,
+    /// Total number of redemptions matching the filters
+    pub total: i64,
+    /// Number of records skipped
+    pub offset: i64,
+    /// Maximum number of records returned
+    pub limit: i64,
 }
 
 #[derive(Deserialize, ToSchema, utoipa::IntoParams)]
@@ -77,22 +99,28 @@ pub struct ListRedemptionsQuery {
         ListRedemptionsQuery,
     ),
     responses(
-        (status = 200, description = "List of redemptions", body = Vec<RedemptionResponse>,
-            example = json!([
-                {
-                    "twitch_redemption_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-                    "twitch_reward_id": "550e8400-e29b-41d4-a716-446655440000",
-                    "user_id": "987654321",
-                    "user_login": "some_viewer",
-                    "twitch_points_cost": 5000,
-                    "market_paid_price": 3500,
-                    "status": "COMPLETED",
-                    "fail_cause": null,
-                    "fail_description": null,
-                    "created_at": "2026-01-15T12:00:00Z",
-                    "updated_at": "2026-01-15T12:05:00Z"
-                }
-            ])
+        (status = 200, description = "List of redemptions", body = PaginatedRedemptionsResponse,
+            example = json!({
+                "items": [
+                    {
+                        "twitch_redemption_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                        "twitch_reward_id": "550e8400-e29b-41d4-a716-446655440000",
+                        "user_id": "987654321",
+                        "user_login": "some_viewer",
+                        "twitch_points_cost": 5000,
+                        "market_paid_price": 3500,
+                        "currency": "RUB",
+                        "status": "COMPLETED",
+                        "fail_cause": null,
+                        "fail_description": null,
+                        "created_at": "2026-01-15T12:00:00Z",
+                        "updated_at": "2026-01-15T12:05:00Z"
+                    }
+                ],
+                "total": 1,
+                "offset": 0,
+                "limit": 50
+            })
         ),
         (status = 401, description = "Unauthorized — missing or invalid session cookie"),
         (status = 403, description = "Forbidden — no access to this channel"),
@@ -106,8 +134,8 @@ pub struct ListRedemptionsQuery {
 pub async fn list_redemptions(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
-    axum::extract::Query(query): axum::extract::Query<ListRedemptionsQuery>,
-) -> Result<Json<Vec<RedemptionResponse>>, ApiError> {
+    QueryArg(query): QueryArg<ListRedemptionsQuery>,
+) -> Result<Json<PaginatedRedemptionsResponse>, ApiError> {
     let offset = query.offset.unwrap_or(0);
     let limit = query.limit.unwrap_or(50).min(100);
 
@@ -119,7 +147,18 @@ pub async fn list_redemptions(
         limit,
     ).await?;
 
-    Ok(Json(redemptions.into_iter().map(RedemptionResponse::from).collect()))
+    let total = state.db.count_redemptions_by_broadcaster(
+        &auth.channel_id,
+        query.status.as_deref(),
+        query.reward_id,
+    ).await?;
+
+    Ok(Json(PaginatedRedemptionsResponse {
+        items: redemptions.into_iter().map(RedemptionResponse::from).collect(),
+        total,
+        offset,
+        limit,
+    }))
 }
 
 #[utoipa::path(
@@ -152,8 +191,9 @@ pub async fn list_redemptions(
 pub async fn retry_redemption(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
-    Path(redemption_id): Path<Uuid>,
+    PathArg(path): PathArg<RedemptionPath>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let redemption_id = path.redemption_id;
     let redemption = state.db.get_redemption(redemption_id).await?
         .ok_or_else(|| ApiError::NotFound {
             message: "Redemption not found".to_string(),
@@ -202,13 +242,27 @@ pub async fn retry_redemption(
 
     match market_result {
         Ok(res) if res.success => {
-            state.db.update_redemption_status(
+            let paid_price = res.price.unwrap_or(max_price as i64);
+            state.db.set_redemption_order_created(
                 redemption_id,
-                RedemptionStatus::OrderCreated,
-                None,
-                None,
+                paid_price,
             ).await?;
+            
+            let order_watcher = OrderWatcher::new(
+                state.clone(),
+                setting.market_api_key,
+                auth.channel_id.clone(),
+                WatcherRedemptionData {
+                    redemption_id,
+                    reward_id: reward.twitch_id,
+                    user_login: redemption.user_login.clone(),
+                }
+            );
 
+            tokio::spawn(async move {
+                order_watcher.track_redemption().await;
+            });
+            
             Ok(Json(serde_json::json!({ "status": "order_created" })))
         }
         Ok(res) => {
@@ -258,8 +312,9 @@ pub async fn retry_redemption(
 pub async fn refund_redemption(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
-    Path(redemption_id): Path<Uuid>,
+    PathArg(path): PathArg<RedemptionPath>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let redemption_id = path.redemption_id;
     let redemption = state.db.get_redemption(redemption_id).await?
         .ok_or_else(|| ApiError::NotFound {
             message: "Redemption not found".to_string(),
@@ -331,8 +386,9 @@ pub async fn refund_redemption(
 pub async fn penalty_redemption(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
-    Path(redemption_id): Path<Uuid>,
+    PathArg(path): PathArg<RedemptionPath>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let redemption_id = path.redemption_id;
     let redemption = state.db.get_redemption(redemption_id).await?
         .ok_or_else(|| ApiError::NotFound {
             message: "Redemption not found".to_string(),

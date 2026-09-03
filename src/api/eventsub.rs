@@ -7,7 +7,7 @@ use axum::response::{IntoResponse, Response};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
 use sha2::Sha256;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use crate::processor::model::EventSubNotification;
 use crate::processor::process_redemption;
 use crate::state::AppState;
@@ -78,7 +78,29 @@ pub async fn handle_eventsub(
             StatusCode::NO_CONTENT.into_response()
         }
         MESSAGE_TYPE_REVOCATION => {
-            info!("Twitch revoked event subs.");
+            warn!("Twitch revoked event subs.");
+            if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&body) {
+                let status = val.pointer("/subscription/status").and_then(|v| v.as_str()).unwrap_or("");
+                let broadcaster_id = val.pointer("/subscription/condition/broadcaster_user_id").and_then(|v| v.as_str());
+                let sub_type = val.pointer("/subscription/type").and_then(|v| v.as_str()).unwrap_or("");
+
+                warn!(status = status, broadcaster_id = ?broadcaster_id, sub_type = sub_type, "EventSub subscription revoked");
+
+                if let Some(bc_id) = broadcaster_id {
+                    if status != "authorization_revoked" && status != "user_removed" {
+                        let state_clone = state.clone();
+                        let bc_id = bc_id.to_string();
+                        tokio::spawn(async move {
+                            info!("Attempting to re-subscribe revoked EventSub for broadcaster {}", bc_id);
+                            if let Err(e) = state_clone.create_eventsub_subscription(&bc_id).await {
+                                error!("Failed to re-subscribe after revocation for broadcaster {}: {}", bc_id, e);
+                            } else {
+                                info!("Successfully re-subscribed EventSub for broadcaster {}", bc_id);
+                            }
+                        });
+                    }
+                }
+            }
             StatusCode::NO_CONTENT.into_response()
         }
         _ => {

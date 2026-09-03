@@ -4,8 +4,8 @@ use crate::steam::market::MarketClient;
 #[derive(Debug, Deserialize)]
 pub struct MarketSearchItemList {
     pub success: bool,
-    pub currency: String,
-    pub data: Vec<MarketItemShort>,
+    pub currency: Option<String>,
+    pub data: Option<Vec<MarketItemShort>>,
 
     pub error: Option<String>,
 }

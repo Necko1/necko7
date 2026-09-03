@@ -3,10 +3,113 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 use crate::db::redemptions::{NewRedemption, RedemptionStatus};
 use crate::processor::model::EventSubNotification;
+use crate::processor::order_watcher::{OrderWatcher, WatcherRedemptionData};
 use crate::state::AppState;
 use crate::steam::trade_link::TradeLink;
 
 pub mod model;
+pub mod price_updater;
+pub mod order_watcher;
+pub mod balance_updater;
+
+pub fn start_broadcaster_tasks(state: Arc<AppState>, channel_id: String) {
+    {
+        let mut tasks = state.active_broadcaster_tasks.lock();
+        if !tasks.insert(channel_id.clone()) {
+            return;
+        }
+    }
+
+    let price_updater = price_updater::PriceUpdater::new(state.clone(), channel_id.clone());
+    tokio::spawn(async move {
+        price_updater.run().await;
+    });
+
+    let balance_updater = balance_updater::BalanceUpdater::new(state, channel_id);
+    tokio::spawn(async move {
+        balance_updater.run().await;
+    });
+}
+
+pub async fn start_background_tasks(state: Arc<AppState>) {
+    let state_eventsub = state.clone();
+    tokio::spawn(async move {
+        state_eventsub.recover_eventsub_subscriptions().await;
+    });
+
+    let state_orders = state.clone();
+    tokio::spawn(async move {
+        recover_active_orders(state_orders).await;
+    });
+
+    let state_sessions = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            if let Err(e) = state_sessions.db.delete_expired_sessions().await {
+                warn!(error = %e, "Failed to clean up expired sessions");
+            } else {
+                debug!("Expired sessions cleanup completed");
+            }
+        }
+    });
+
+    match state.db.get_all_broadcasters().await {
+        Ok(broadcasters) => {
+            for b in broadcasters {
+                start_broadcaster_tasks(state.clone(), b.channel_id);
+            }
+        }
+        Err(e) => {
+            error!(error = %e, "Failed to load broadcasters from DB at startup for background tasks");
+        }
+    }
+}
+
+async fn recover_active_orders(state: Arc<AppState>) {
+    let active_orders = match state.db.get_active_orders().await {
+        Ok(orders) => orders,
+        Err(e) => {
+            error!(error = %e, "Failed to fetch active orders for recovery");
+            return;
+        }
+    };
+
+    if active_orders.is_empty() {
+        return;
+    }
+
+    info!(count = active_orders.len(), "Resuming tracking for active orders");
+
+    for order in active_orders {
+        let reward = match state.db.get_reward_by_twitch_id(order.twitch_reward_id).await {
+            Ok(Some(r)) => r,
+            _ => continue,
+        };
+
+        let setting = match state.db.get_broadcaster_setting(&reward.streamer_id).await {
+            Ok(Some(s)) if !s.market_api_key.trim().is_empty() => s,
+            _ => continue,
+        };
+
+        let order_watcher = OrderWatcher::new(
+            state.clone(),
+            setting.market_api_key,
+            reward.streamer_id,
+            WatcherRedemptionData {
+                redemption_id: order.twitch_redemption_id,
+                reward_id: order.twitch_reward_id,
+                user_login: order.user_login,
+            },
+        );
+
+        tokio::spawn(async move {
+            order_watcher.track_redemption().await;
+        });
+    }
+}
 
 pub async fn process_redemption(
     state: Arc<AppState>,
@@ -32,6 +135,8 @@ pub async fn process_redemption(
         }
     };
 
+    if !reward_data.market_autobuy { return; }
+
     match state.db.insert_redemption_if_new(&NewRedemption {
         twitch_redemption_id: redemption_id,
         twitch_reward_id: reward_id,
@@ -39,6 +144,7 @@ pub async fn process_redemption(
         user_login: event.user_login.clone(),
         user_trade_link: event.user_input.clone(),
         twitch_points_cost: event.reward.cost,
+        currency: reward_data.currency.clone(),
         status: RedemptionStatus::Pending,
     }).await {
         Ok(Some(_)) => {},
@@ -131,15 +237,36 @@ pub async fn process_redemption(
     ).await {
         Ok(res) if res.success => {
             info!("Market buy-for success for redemption {}", redemption_id);
-            if let Err(e) = state.db.update_redemption_status(
+
+            let state_for_balance = state.clone();
+            let bc_id_for_balance = broadcaster_user_id.clone();
+            tokio::spawn(async move {
+                let _ = state_for_balance.refresh_broadcaster_balance(&bc_id_for_balance).await;
+            });
+
+            let paid_price = res.price.unwrap_or(max_price as i64);
+
+            if let Err(e) = state.db.set_redemption_order_created(
                 redemption_id,
-                RedemptionStatus::OrderCreated,
-                None,
-                None
+                paid_price,
             ).await {
                 error!("DB error: {:?}", e);
                 return;
             }
+
+            let order_watcher = OrderWatcher::new(
+                state.clone(),
+                broadcaster_setting.market_api_key,
+                broadcaster_user_id.clone(),
+                WatcherRedemptionData {
+                    redemption_id,
+                    reward_id,
+                    user_login: event.user_login.clone(),
+            });
+
+            tokio::spawn(async move {
+                order_watcher.track_redemption().await;
+            });
 
             if let Err(e) = state.with_bot_user_token(async |token| {
                 state.helix_client.send_chat_message(
@@ -158,12 +285,35 @@ pub async fn process_redemption(
             let code = res.code.unwrap_or(0);
             warn!("Market rejected buy-for (code {}): {}", code, error_msg);
 
+            let mut return_channel_points = true;
+
+            if error_msg.eq_ignore_ascii_case("not enough funds on account") {
+                return_channel_points = broadcaster_setting.refund_if_no_money;
+
+                let state_for_balance = state.clone();
+                let bc_id_for_balance = broadcaster_user_id.clone();
+                tokio::spawn(async move {
+                    let _ = state_for_balance.refresh_broadcaster_balance(&bc_id_for_balance).await;
+                });
+            }
+
+            if error_msg.eq_ignore_ascii_case("no item found at the specified chance to transfer at the specified price or below") {
+                let state_clone = state.clone();
+                let bc_id = broadcaster_user_id.clone();
+                tokio::spawn(async move {
+                    info!(reward_id = %reward_id, "Triggering immediate price update due to market price deviation");
+                    if let Err(e) = price_updater::update_single_reward_price(&state_clone, &bc_id, reward_id).await {
+                        warn!(error = %e, reward_id = %reward_id, "Failed immediate price update for reward");
+                    }
+                });
+            }
+
             update_redemption_status_failed(
                 state.clone(),
                 &broadcaster_user_id,
                 reward_id,
                 redemption_id,
-                true,
+                return_channel_points,
                 Some(&error_msg)
             ).await;
 
