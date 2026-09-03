@@ -1,0 +1,11 @@
+target
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+.idea
+.kilo
+.github
+*.md
+docker-compose*.yml

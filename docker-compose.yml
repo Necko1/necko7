@@ -18,5 +18,18 @@ services:
       timeout: 5s
       retries: 10
 
+  app:
+    image: ghcr.io/necko1/necko7:latest
+    container_name: necko7-app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgres://${DATABASE_USER}:${DATABASE_PASSWORD}@db:5432/${DATABASE_DB}
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   pg_data:
