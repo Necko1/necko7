@@ -26,7 +26,7 @@ pub struct PermissionResponse {
 
 #[utoipa::path(
     get,
-    path = "/broadcasters/{channel_id}/permissions",
+    path = "/api/v1/broadcasters/{channel_id}/permissions",
     tag = "Permissions",
     summary = "List channel permissions",
     description = "Returns all permissions for a specific channel. Only the channel owner can access this endpoint.",
@@ -88,7 +88,7 @@ pub struct GrantPermissionBody {
 
 #[utoipa::path(
     post,
-    path = "/broadcasters/{channel_id}/permissions",
+    path = "/api/v1/broadcasters/{channel_id}/permissions",
     tag = "Permissions",
     summary = "Grant permission to a user",
     description = "Grants EDITOR permission to a user for the specified channel. The user must already exist in the system. Only the channel owner can grant permissions.",
@@ -161,7 +161,7 @@ pub struct RevokePermissionPath {
 
 #[utoipa::path(
     delete,
-    path = "/broadcasters/{channel_id}/permissions/{user_id}",
+    path = "/api/v1/broadcasters/{channel_id}/permissions/{user_id}",
     tag = "Permissions",
     summary = "Revoke permission from a user",
     description = "Revokes a user's permission for the specified channel. The user cannot revoke their own owner permission.",

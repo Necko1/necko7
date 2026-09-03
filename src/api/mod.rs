@@ -70,7 +70,7 @@ async fn app_init_guard(
     if !state.app_initialized.load(Ordering::Relaxed) {
         tracing::warn!(
             path = %req.uri().path(),
-            "Request rejected by app_init_guard: bot account not initialized yet. Visit /auth/init/bot first."
+            "Request rejected by app_init_guard: bot account not initialized yet. Visit /api/v1/auth/init/bot first."
         );
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -89,6 +89,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(v1::router())
         .layer(middleware::from_fn_with_state(state.clone(), app_init_guard));
 
+    let api_v1 = Router::new()
+        .route("/auth/callback", get(auth::auth_callback))
+        .merge(init)
+        .merge(guarded);
+
     let cors = CorsLayer::new()
         .allow_origin(state.frontend_url.parse::<axum::http::HeaderValue>().unwrap())
         .allow_credentials(true)
@@ -99,9 +104,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .url("/api-docs/openapi.json", ApiDoc::openapi());
 
     Router::new()
-        .route("/auth/callback", get(auth::auth_callback))
-        .merge(init)
-        .merge(guarded)
+        .nest("/api/v1", api_v1)
         .merge(swagger)
         .layer(middleware::from_fn(request_logger_middleware))
         .layer(cors)

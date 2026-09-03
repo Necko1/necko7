@@ -19,7 +19,7 @@ pub struct UserResponse {
 
 #[utoipa::path(
     get,
-    path = "/users/me",
+    path = "/api/v1/users/me",
     tag = "Users",
     summary = "Get current authenticated user",
     description = "Returns the profile information of the currently authenticated user based on session cookie.",

@@ -23,7 +23,7 @@ pub struct BroadcasterListItem {
 
 #[utoipa::path(
     get,
-    path = "/broadcasters",
+    path = "/api/v1/broadcasters",
     tag = "Broadcasters",
     summary = "List user's accessible broadcasters",
     description = "Returns a list of broadcasters that the authenticated user has access to (either as Owner or Editor).",
@@ -97,7 +97,7 @@ pub struct BroadcasterSettingsResponse {
 
 #[utoipa::path(
     get,
-    path = "/broadcasters/{channel_id}",
+    path = "/api/v1/broadcasters/{channel_id}",
     tag = "Broadcasters",
     summary = "Get broadcaster settings",
     description = "Retrieves the market and bot settings for a specific broadcaster channel.",
@@ -187,7 +187,7 @@ pub struct UpdateBroadcasterSettingsBody {
 
 #[utoipa::path(
     put,
-    path = "/broadcasters/{channel_id}/settings",
+    path = "/api/v1/broadcasters/{channel_id}/settings",
     tag = "Broadcasters",
     summary = "Update broadcaster settings",
     description = "Updates the market and bot settings for a specific broadcaster channel. Only provided fields are updated.",
@@ -299,7 +299,7 @@ pub struct UpdateChatMessagesBody {
 
 #[utoipa::path(
     get,
-    path = "/broadcasters/{channel_id}/messages",
+    path = "/api/v1/broadcasters/{channel_id}/messages",
     tag = "Broadcasters",
     summary = "Get broadcaster chat message templates",
     description = "Returns the broadcaster's Twitch chat message templates, including effective templates, custom overrides, defaults, and supported placeholders.",
@@ -336,7 +336,7 @@ pub async fn get_broadcaster_chat_messages(
 
 #[utoipa::path(
     put,
-    path = "/broadcasters/{channel_id}/messages",
+    path = "/api/v1/broadcasters/{channel_id}/messages",
     tag = "Broadcasters",
     summary = "Update broadcaster chat message templates",
     description = "Updates the broadcaster's custom Twitch chat message templates in DB and in-memory cache.",
@@ -397,7 +397,7 @@ pub struct MarketBalanceResponse {
 
 #[utoipa::path(
     get,
-    path = "/broadcasters/{channel_id}/market/balance",
+    path = "/api/v1/broadcasters/{channel_id}/market/balance",
     tag = "Broadcasters",
     summary = "Get broadcaster market balance",
     description = "Returns the broadcaster's CS:GO market balance (cached, refreshed automatically or when stale).",

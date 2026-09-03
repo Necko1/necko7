@@ -35,7 +35,7 @@ pub struct StatsQuery {
 
 #[utoipa::path(
     get,
-    path = "/broadcasters/{channel_id}/stats",
+    path = "/api/v1/broadcasters/{channel_id}/stats",
     tag = "Stats",
     summary = "Get redemption statistics",
     description = "Returns redemption statistics for a specific channel and time period. Supports predefined periods (year, month, week) and custom date ranges.",

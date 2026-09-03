@@ -23,7 +23,7 @@ pub fn build_cookie_string(name: &str, value: &str, max_age: i64, app_url: &str)
 
 pub(super) fn build_csrf_cookie(state: &Arc<AppState>, value: &str) -> String {
     let mut cookie = format!(
-        "oauth_state={}; HttpOnly; Path=/auth; Max-Age=300",
+        "oauth_state={}; HttpOnly; Path=/api/v1/auth; Max-Age=300",
         value
     );
 

@@ -15,6 +15,10 @@ use crate::api::error::{ErrorBody, ErrorDetail};
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        crate::api::auth::bot_login_redirect,
+        crate::api::auth::streamer_login_redirect,
+        crate::api::auth::user_login_redirect,
+        crate::api::auth::logout,
         users::get_current_user,
         broadcasters::list_broadcasters,
         broadcasters::get_broadcaster_settings,
@@ -38,6 +42,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         stats::get_stats,
     ),
     components(schemas(
+        crate::api::auth::LogoutResponse,
         users::UserResponse,
         broadcasters::BroadcasterListItem,
         broadcasters::BroadcasterSettingsResponse,
@@ -63,6 +68,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         crate::db::redemptions::RedemptionStatus,
     )),
     tags(
+        (name = "Auth", description = "Twitch OAuth 2.0 authentication flows and session management"),
         (name = "Users", description = "User profile and session information"),
         (name = "Broadcasters", description = "Broadcaster settings and channel management"),
         (name = "Permissions", description = "Channel access control (owner/editor roles)"),

@@ -236,7 +236,7 @@ impl AppState {
         &self,
         broadcaster_user_id: &str,
     ) -> AppResult<()> {
-        let callback_url = format!("{}/eventsub", self.app_url);
+        let callback_url = format!("{}/api/v1/eventsub", self.app_url);
 
         let body = api::eventsub::format_subscription(
             &callback_url,

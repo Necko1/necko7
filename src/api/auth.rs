@@ -5,9 +5,10 @@ use axum::http::header::{COOKIE, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use chrono::{Duration, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 use urlencoding::encode;
+use utoipa::ToSchema;
 use uuid::Uuid;
 use crate::api::cookie::{build_cookie_string, build_csrf_cookie};
 use crate::state::{AppState, BotInfo};
@@ -21,6 +22,12 @@ use crate::db::users::NewUser;
 pub const STREAMER_AUTH_SCOPES: &str = "channel:read:redemptions channel:manage:redemptions channel:bot";
 pub const BOT_AUTH_SCOPES: &str = "user:write:chat user:bot";
 
+#[derive(Serialize, ToSchema)]
+pub struct LogoutResponse {
+    /// True if user was logged out successfully
+    pub success: bool,
+}
+
 #[derive(Deserialize)]
 pub struct AuthQuery {
     pub code: Option<String>,
@@ -30,6 +37,17 @@ pub struct AuthQuery {
     pub state: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/auth/init/bot",
+    tag = "Auth",
+    summary = "First-time setup: Authorize Bot account",
+    description = "One-time setup endpoint to authorize the dedicated Twitch Bot account (`user:write:chat user:bot`). Navigates the browser to Twitch OAuth. Accessible only before the bot account is initialized in the database. Once authorized, all other protected API routes unlock.",
+    responses(
+        (status = 307, description = "Redirect to Twitch OAuth authorize URL"),
+        (status = 404, description = "Bot account is already initialized"),
+    )
+)]
 pub async fn bot_login_redirect(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     if state.app_initialized.load(Ordering::Relaxed) {
         return StatusCode::NOT_FOUND.into_response();
@@ -43,6 +61,16 @@ pub async fn bot_login_redirect(State(state): State<Arc<AppState>>) -> impl Into
     ([(SET_COOKIE, cookie)], Redirect::to(&auth_url)).into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/auth/connect",
+    tag = "Auth",
+    summary = "Connect streamer channel via Twitch OAuth",
+    description = "Initiates Twitch OAuth 2.0 flow for streamers (`channel:read:redemptions channel:manage:redemptions channel:bot`). Navigates the browser to the Twitch authorization page. After authorization, Twitch redirects back to the backend callback. The channel is registered with OWNER permissions, and automated tasks (EventSub webhooks, price updates) are started. **A secure HTTP-only session cookie (`session_id`) valid for 1 week (7 days) is attached in the response**, automatically logging the streamer into `{FRONTEND_URL}/dashboard`.",
+    responses(
+        (status = 307, description = "Redirect to Twitch OAuth authorize URL"),
+    )
+)]
 pub async fn streamer_login_redirect(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let csrf_state = format!("streamer:{}", Uuid::new_v4());
 
@@ -52,6 +80,16 @@ pub async fn streamer_login_redirect(State(state): State<Arc<AppState>>) -> impl
     ([(SET_COOKIE, cookie)], Redirect::to(&auth_url)).into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/auth/login",
+    tag = "Auth",
+    summary = "Login user / moderator via Twitch OAuth",
+    description = "Initiates Twitch OAuth 2.0 flow for regular users and channel moderators (basic Twitch identity scope). Navigates the browser to the Twitch authorization page. After authorization, Twitch redirects back to the backend callback. The user profile is created/updated in the database, an active session is created, and **a secure HTTP-only session cookie (`session_id`) valid for 1 week (7 days) is attached in the response**, automatically logging the user into `{FRONTEND_URL}/dashboard`.",
+    responses(
+        (status = 307, description = "Redirect to Twitch OAuth authorize URL"),
+    )
+)]
 pub async fn user_login_redirect(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let csrf_state = format!("user:{}", Uuid::new_v4());
 
@@ -62,7 +100,7 @@ pub async fn user_login_redirect(State(state): State<Arc<AppState>>) -> impl Int
 }
 
 fn get_auth_url(state: Arc<AppState>, scopes: &str, csrf_state: &str) -> String {
-    let redirect_uri = format!("{}/auth/callback", state.app_url);
+    let redirect_uri = format!("{}/api/v1/auth/callback", state.app_url);
 
     format!(
         "https://id.twitch.tv/oauth2/authorize?client_id={}&redirect_uri={}&response_type=code&scope={}&state={}&force_verify=true",
@@ -130,7 +168,7 @@ pub async fn auth_callback(
         }
     }
 
-    let redirect_uri = format!("{}/auth/callback", state.app_url);
+    let redirect_uri = format!("{}/api/v1/auth/callback", state.app_url);
 
     let token_resp = match state.helix_client.exchange_code_for_user_token(&code, &redirect_uri).await
     {
@@ -198,6 +236,21 @@ pub async fn auth_callback(
             error!(bot_login = %channel_login, bot_id = %channel_id, "Failed to serialize bot account info to JSON");
         }
     } else if query_state.starts_with("streamer:") {
+        let new_user = NewUser {
+            twitch_id: channel_id.clone(),
+            login: channel_login.clone(),
+            avatar_url: Some(info.profile_image_url),
+        };
+
+        if let Err(e) = state.db.upsert_user(&new_user).await {
+            error!(error = %e, user_id = %channel_id, "DB Error saving user in streamer auth callback");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                response_headers,
+                "DB Error saving user",
+            ).into_response();
+        }
+
         let new_broadcaster = NewBroadcaster {
             channel_id: channel_id.clone(),
             channel_login: channel_login.clone(),
@@ -249,7 +302,35 @@ pub async fn auth_callback(
 
         crate::processor::start_broadcaster_tasks(state.clone(), channel_id.clone());
 
-        info!(channel_login = %channel_login, channel_id = %channel_id, "Streamer successfully connected the bot");
+        let session_id = Uuid::new_v4();
+        let new_session = NewSession {
+            session_id,
+            user_id: channel_id.clone(),
+            expires_at: Utc::now() + Duration::weeks(1),
+        };
+
+        if let Err(e) = state.db.create_session(&new_session).await {
+            error!(error = %e, user_id = %channel_id, "DB Error saving session in streamer auth callback");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                response_headers,
+                "DB Error saving session",
+            ).into_response();
+        }
+
+        let session_cookie = build_cookie_string(
+            "session_id",
+            &session_id.to_string(),
+            7 * 24 * 60 * 60,
+            &state.app_url,
+        );
+
+        response_headers.append(
+            SET_COOKIE,
+            HeaderValue::from_str(&session_cookie).unwrap(),
+        );
+
+        info!(channel_login = %channel_login, channel_id = %channel_id, session_id = %session_id, "Streamer successfully connected the bot and logged in to dashboard");
     } else if query_state.starts_with("user:") {
         let new_user = NewUser {
             twitch_id: channel_id.clone(),
@@ -306,6 +387,19 @@ pub async fn auth_callback(
     ).into_response()
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/logout",
+    tag = "Auth",
+    summary = "Log out current user",
+    description = "Terminates the user's session: deletes the session from the database and clears the `session_id` cookie in the browser response.",
+    responses(
+        (status = 200, description = "Logged out successfully", body = LogoutResponse),
+    ),
+    security(
+        ("session_id" = [])
+    )
+)]
 pub async fn logout(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -343,6 +437,6 @@ pub async fn logout(
 
     (
         response_headers,
-        axum::Json(serde_json::json!({ "success": true }))
+        axum::Json(LogoutResponse { success: true })
     ).into_response()
 }

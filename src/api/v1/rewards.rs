@@ -93,7 +93,7 @@ pub struct ListRewardsQuery {
 
 #[utoipa::path(
     get,
-    path = "/broadcasters/{channel_id}/rewards",
+    path = "/api/v1/broadcasters/{channel_id}/rewards",
     tag = "Rewards",
     summary = "List rewards",
     description = "Returns all rewards for a specific channel, with optional filtering by paused and deleted status.",
@@ -173,7 +173,7 @@ pub struct CreateRewardBody {
 
 #[utoipa::path(
     post,
-    path = "/broadcasters/{channel_id}/rewards",
+    path = "/api/v1/broadcasters/{channel_id}/rewards",
     tag = "Rewards",
     summary = "Create a reward",
     description = "Creates a new reward for the specified channel.",
@@ -352,7 +352,7 @@ pub struct UpdateRewardBody {
 
 #[utoipa::path(
     put,
-    path = "/broadcasters/{channel_id}/rewards/{reward_id}",
+    path = "/api/v1/broadcasters/{channel_id}/rewards/{reward_id}",
     tag = "Rewards",
     summary = "Update a reward",
     description = "Updates an existing reward. Only provided fields are updated (PATCH semantics). If a market API key is configured, the reward will also be updated on Twitch.",
@@ -479,7 +479,7 @@ pub async fn update_reward(
 
 #[utoipa::path(
     delete,
-    path = "/broadcasters/{channel_id}/rewards/{reward_id}",
+    path = "/api/v1/broadcasters/{channel_id}/rewards/{reward_id}",
     tag = "Rewards",
     summary = "Delete a reward",
     description = "Soft-deletes a reward and removes it from Twitch. The reward will be marked as deleted in the database and removed from the Twitch channel point rewards.",
@@ -547,7 +547,7 @@ pub async fn delete_reward(
 
 #[utoipa::path(
     post,
-    path = "/broadcasters/{channel_id}/rewards/{reward_id}/update-price",
+    path = "/api/v1/broadcasters/{channel_id}/rewards/{reward_id}/update-price",
     tag = "Rewards",
     summary = "Update reward price",
     description = "Triggers a price update for a specific reward. The market price is recalculated and the Twitch reward cost is updated accordingly.",
@@ -668,7 +668,7 @@ pub struct BatchRewardBody {
 
 #[utoipa::path(
     post,
-    path = "/broadcasters/{channel_id}/rewards/batch",
+    path = "/api/v1/broadcasters/{channel_id}/rewards/batch",
     tag = "Rewards",
     summary = "Batch operations on rewards",
     description = "Performs a batch operation (pause, unpause, or delete) on multiple rewards at once. Only rewards belonging to the specified channel are affected.",

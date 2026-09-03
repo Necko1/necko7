@@ -90,7 +90,7 @@ pub struct ListRedemptionsQuery {
 
 #[utoipa::path(
     get,
-    path = "/broadcasters/{channel_id}/redemptions",
+    path = "/api/v1/broadcasters/{channel_id}/redemptions",
     tag = "Redemptions",
     summary = "List redemptions",
     description = "Returns redemptions for a specific channel with optional filtering by status and reward. Results are paginated.",
@@ -163,7 +163,7 @@ pub async fn list_redemptions(
 
 #[utoipa::path(
     post,
-    path = "/broadcasters/{channel_id}/redemptions/{redemption_id}/retry",
+    path = "/api/v1/broadcasters/{channel_id}/redemptions/{redemption_id}/retry",
     tag = "Redemptions",
     summary = "Retry a failed redemption",
     description = "Retries a failed redemption by attempting to buy the item from the market again. Only works for redemptions with status FAILED_PENALTY.",
@@ -312,7 +312,7 @@ pub async fn retry_redemption(
 
 #[utoipa::path(
     post,
-    path = "/broadcasters/{channel_id}/redemptions/{redemption_id}/refund",
+    path = "/api/v1/broadcasters/{channel_id}/redemptions/{redemption_id}/refund",
     tag = "Redemptions",
     summary = "Refund a redemption",
     description = "Manually refunds a redemption. The user's Twitch channel points are restored and the redemption status is set to FAILED_REFUND.",
@@ -393,7 +393,7 @@ pub async fn refund_redemption(
 
 #[utoipa::path(
     post,
-    path = "/broadcasters/{channel_id}/redemptions/{redemption_id}/penalty",
+    path = "/api/v1/broadcasters/{channel_id}/redemptions/{redemption_id}/penalty",
     tag = "Redemptions",
     summary = "Penalize a redemption",
     description = "Manually penalizes a redemption. The user's Twitch channel points are not restored and the redemption status is set to FAILED_PENALTY.",
