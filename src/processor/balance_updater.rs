@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use crate::state::AppState;
 
@@ -16,14 +17,24 @@ impl BalanceUpdater {
         }
     }
 
-    pub async fn run(self) {
+    pub async fn run(self, token: CancellationToken) {
         info!(broadcaster_id = %self.broadcaster_id, "Starting periodic balance updater task for broadcaster");
 
         let mut interval = tokio::time::interval(Duration::from_secs(300));
         interval.tick().await;
 
         loop {
-            interval.tick().await;
+            tokio::select! {
+                _ = token.cancelled() => {
+                    tracing::debug!(broadcaster_id = %self.broadcaster_id, "Balance updater received cancellation; stopping");
+                    break;
+                }
+                _ = interval.tick() => {}
+            }
+
+            if token.is_cancelled() {
+                break;
+            }
 
             let setting = match self.state.db.get_broadcaster_setting(&self.broadcaster_id).await {
                 Ok(Some(s)) => s,

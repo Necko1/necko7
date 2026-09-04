@@ -259,8 +259,9 @@ pub async fn retry_redemption(
                 }
             );
 
-            tokio::spawn(async move {
-                order_watcher.track_redemption().await;
+            let token = state.shutdown_token.clone();
+            state.spawn_task(async move {
+                order_watcher.track_redemption(token).await;
             });
 
             tracing::info!(

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 use crate::db::broadcaster_settings::BroadcasterSetting;
@@ -21,39 +22,55 @@ impl PriceUpdater {
         }
     }
 
-    pub async fn run(self) {
+    pub async fn run(self, token: CancellationToken) {
         info!(broadcaster_id = %self.broadcaster_id, "Starting price updater task for broadcaster");
 
         loop {
+            if token.is_cancelled() {
+                debug!(broadcaster_id = %self.broadcaster_id, "Price updater received cancellation; stopping");
+                break;
+            }
+
             let setting = match self.state.db.get_broadcaster_setting(&self.broadcaster_id).await {
                 Ok(Some(s)) => s,
                 Ok(None) => {
                     debug!(broadcaster_id = %self.broadcaster_id, "Broadcaster setting not found, waiting before retry");
-                    tokio::time::sleep(Duration::from_secs(60)).await;
-                    continue;
+                    tokio::select! {
+                        _ = token.cancelled() => break,
+                        _ = tokio::time::sleep(Duration::from_secs(60)) => continue,
+                    }
                 }
                 Err(e) => {
                     error!(error = %e, broadcaster_id = %self.broadcaster_id, "DB error fetching broadcaster setting");
-                    tokio::time::sleep(Duration::from_secs(60)).await;
-                    continue;
+                    tokio::select! {
+                        _ = token.cancelled() => break,
+                        _ = tokio::time::sleep(Duration::from_secs(60)) => continue,
+                    }
                 }
             };
 
             let period_secs = (setting.update_prices_period as u64).max(60);
 
             if setting.is_active && !setting.market_api_key.trim().is_empty() {
-                if let Err(e) = self.update_prices(&setting).await {
+                if let Err(e) = self.update_prices(&setting, &token).await {
                     warn!(error = %e, broadcaster_id = %self.broadcaster_id, "Error during price update run");
                 }
             }
 
-            tokio::time::sleep(Duration::from_secs(period_secs)).await;
+            tokio::select! {
+                _ = token.cancelled() => {
+                    debug!(broadcaster_id = %self.broadcaster_id, "Price updater received cancellation; stopping");
+                    break;
+                }
+                _ = tokio::time::sleep(Duration::from_secs(period_secs)) => {}
+            }
         }
     }
 
     async fn update_prices(
         &self,
         setting: &BroadcasterSetting,
+        token: &CancellationToken,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let rewards = self.state.db.get_rewards_by_streamer_filtered(&self.broadcaster_id, None, Some(false)).await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
@@ -64,6 +81,11 @@ impl PriceUpdater {
         debug!(broadcaster_id = %self.broadcaster_id, count = rewards.len(), "Checking prices for active rewards");
 
         for reward in rewards {
+            if token.is_cancelled() {
+                debug!(broadcaster_id = %self.broadcaster_id, "Price updater cancelled during reward batch; aborting batch");
+                break;
+            }
+
             if let Err(e) = update_reward_price_inner(&self.state, setting, &reward).await {
                 warn!(
                     error = %e,

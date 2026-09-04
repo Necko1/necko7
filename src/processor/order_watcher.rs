@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use chrono::DateTime;
 use tokio::time::Interval;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 use crate::datetime::DateTimeExt;
@@ -56,11 +57,25 @@ impl OrderWatcher {
         }
     }
 
-    pub async fn track_redemption(mut self) {
+    pub async fn track_redemption(mut self, token: CancellationToken) {
         self.interval.tick().await;
 
         loop {
-            self.interval.tick().await;
+            tokio::select! {
+                _ = token.cancelled() => {
+                    info!(
+                        redemption_id = %self.redemption.redemption_id,
+                        user_login = %self.redemption.user_login,
+                        "OrderWatcher stopped gracefully; tracking will resume upon restart"
+                    );
+                    break;
+                }
+                _ = self.interval.tick() => {}
+            }
+
+            if token.is_cancelled() {
+                break;
+            }
 
             if self.started_at.elapsed() > Duration::from_mins(30) {
                 warn!(
@@ -223,7 +238,7 @@ impl OrderWatcher {
 
         let state_for_balance = self.state.clone();
         let bc_id_for_balance = self.broadcaster_id.clone();
-        tokio::spawn(async move {
+        self.state.spawn_task(async move {
             let _ = state_for_balance.refresh_broadcaster_balance(&bc_id_for_balance).await;
         });
     }
@@ -316,7 +331,7 @@ impl OrderWatcher {
 
         let state_for_balance = self.state.clone();
         let bc_id_for_balance = self.broadcaster_id.clone();
-        tokio::spawn(async move {
+        self.state.spawn_task(async move {
             let _ = state_for_balance.refresh_broadcaster_balance(&bc_id_for_balance).await;
         });
     }
@@ -368,7 +383,7 @@ impl OrderWatcher {
 
         let state_for_balance = self.state.clone();
         let bc_id_for_balance = self.broadcaster_id.clone();
-        tokio::spawn(async move {
+        self.state.spawn_task(async move {
             let _ = state_for_balance.refresh_broadcaster_balance(&bc_id_for_balance).await;
         });
     }

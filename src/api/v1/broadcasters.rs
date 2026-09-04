@@ -249,6 +249,14 @@ pub async fn update_broadcaster_settings(
 
     state.db.update_broadcaster_setting(&auth.channel_id, &patch).await?;
 
+    if let Some(is_active) = patch.is_active {
+        if is_active {
+            crate::processor::start_broadcaster_tasks(state.clone(), auth.channel_id.clone());
+        } else {
+            crate::processor::stop_broadcaster_tasks(&state, &auth.channel_id);
+        }
+    }
+
     tracing::info!(
         channel_id = %auth.channel_id,
         user_id = %auth.user_id,

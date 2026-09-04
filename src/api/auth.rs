@@ -294,7 +294,7 @@ pub async fn auth_callback(
 
         let state_clone = state.clone();
         let cid_clone = channel_id.clone();
-        tokio::spawn(async move {
+        state.spawn_task(async move {
             if let Err(err) = state_clone.create_eventsub_subscription(&cid_clone).await {
                 error!(error = %err, channel_id = %cid_clone, "Failed to create EventSub subscription for new streamer");
             }

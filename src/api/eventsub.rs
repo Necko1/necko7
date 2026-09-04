@@ -93,7 +93,7 @@ pub async fn handle_eventsub(
             match serde_json::from_slice::<EventSubNotification>(&body) {
                 Ok(notification) => {
                     let state_clone = state.clone();
-                    tokio::spawn(async move {
+                    state.spawn_task(async move {
                         process_redemption(state_clone, notification).await;
                     });
                 }
@@ -121,7 +121,7 @@ pub async fn handle_eventsub(
                     if status != "authorization_revoked" && status != "user_removed" {
                         let state_clone = state.clone();
                         let bc_id = bc_id.to_string();
-                        tokio::spawn(async move {
+                        state.spawn_task(async move {
                             info!("Attempting to re-subscribe revoked EventSub for broadcaster {}", bc_id);
                             if let Err(e) = state_clone.create_eventsub_subscription(&bc_id).await {
                                 error!("Failed to re-subscribe after revocation for broadcaster {}: {}", bc_id, e);

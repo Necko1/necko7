@@ -16,44 +16,69 @@ pub mod order_watcher;
 pub mod balance_updater;
 
 pub fn start_broadcaster_tasks(state: Arc<AppState>, channel_id: String) {
-    {
+    let broadcaster_token = {
         let mut tasks = state.active_broadcaster_tasks.lock();
-        if !tasks.insert(channel_id.clone()) {
+        if tasks.contains_key(&channel_id) {
             debug!(channel_id = %channel_id, "Broadcaster tasks already running, skipping duplicate startup");
             return;
         }
-    }
+        let token = state.shutdown_token.child_token();
+        tasks.insert(channel_id.clone(), token.clone());
+        token
+    };
 
     info!(channel_id = %channel_id, "Starting broadcaster background tasks (price updater, balance updater)");
 
     let price_updater = price_updater::PriceUpdater::new(state.clone(), channel_id.clone());
-    tokio::spawn(async move {
-        price_updater.run().await;
+    let token_price = broadcaster_token.clone();
+    state.spawn_task(async move {
+        price_updater.run(token_price).await;
     });
 
-    let balance_updater = balance_updater::BalanceUpdater::new(state, channel_id);
-    tokio::spawn(async move {
-        balance_updater.run().await;
+    let balance_updater = balance_updater::BalanceUpdater::new(state.clone(), channel_id);
+    let token_balance = broadcaster_token;
+    state.spawn_task(async move {
+        balance_updater.run(token_balance).await;
     });
+}
+
+pub fn stop_broadcaster_tasks(state: &AppState, channel_id: &str) {
+    let mut tasks = state.active_broadcaster_tasks.lock();
+    if let Some(token) = tasks.remove(channel_id) {
+        info!(channel_id = %channel_id, "Stopping broadcaster background tasks");
+        token.cancel();
+    }
 }
 
 pub async fn start_background_tasks(state: Arc<AppState>) {
     let state_eventsub = state.clone();
-    tokio::spawn(async move {
+    state.spawn_task(async move {
         state_eventsub.recover_eventsub_subscriptions().await;
     });
 
     let state_orders = state.clone();
-    tokio::spawn(async move {
+    state.spawn_task(async move {
         recover_active_orders(state_orders).await;
     });
 
     let state_sessions = state.clone();
-    tokio::spawn(async move {
+    let session_token = state.shutdown_token.clone();
+    state.spawn_task(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
         interval.tick().await;
         loop {
-            interval.tick().await;
+            tokio::select! {
+                _ = session_token.cancelled() => {
+                    debug!("Session cleanup task received stop signal");
+                    break;
+                }
+                _ = interval.tick() => {}
+            }
+
+            if session_token.is_cancelled() {
+                break;
+            }
+
             if let Err(e) = state_sessions.db.delete_expired_sessions().await {
                 warn!(error = %e, "Failed to clean up expired sessions");
             } else {
@@ -90,6 +115,11 @@ async fn recover_active_orders(state: Arc<AppState>) {
     info!(count = active_orders.len(), "Resuming tracking for active orders");
 
     for order in active_orders {
+        if state.shutdown_token.is_cancelled() {
+            info!("Shutdown in progress, stopping order recovery");
+            break;
+        }
+
         let reward = match state.db.get_reward_by_twitch_id(order.twitch_reward_id).await {
             Ok(Some(r)) => r,
             Ok(None) => {
@@ -131,8 +161,9 @@ async fn recover_active_orders(state: Arc<AppState>) {
             },
         );
 
-        tokio::spawn(async move {
-            order_watcher.track_redemption().await;
+        let token = state.shutdown_token.clone();
+        state.spawn_task(async move {
+            order_watcher.track_redemption(token).await;
         });
     }
 }
@@ -301,7 +332,7 @@ pub async fn process_redemption(
 
             let state_for_balance = state.clone();
             let bc_id_for_balance = broadcaster_user_id.clone();
-            tokio::spawn(async move {
+            state.spawn_task(async move {
                 let _ = state_for_balance.refresh_broadcaster_balance(&bc_id_for_balance).await;
             });
 
@@ -325,8 +356,9 @@ pub async fn process_redemption(
                     user_login: event.user_login.clone(),
             });
 
-            tokio::spawn(async move {
-                order_watcher.track_redemption().await;
+            let token = state.shutdown_token.clone();
+            state.spawn_task(async move {
+                order_watcher.track_redemption(token).await;
             });
 
             let msg = state.render_chat_message(
@@ -363,7 +395,7 @@ pub async fn process_redemption(
 
                 let state_for_balance = state.clone();
                 let bc_id_for_balance = broadcaster_user_id.clone();
-                tokio::spawn(async move {
+                state.spawn_task(async move {
                     let _ = state_for_balance.refresh_broadcaster_balance(&bc_id_for_balance).await;
                 });
             }
@@ -371,7 +403,7 @@ pub async fn process_redemption(
             if error_msg.eq_ignore_ascii_case("no item found at the specified chance to transfer at the specified price or below") {
                 let state_clone = state.clone();
                 let bc_id = broadcaster_user_id.clone();
-                tokio::spawn(async move {
+                state.spawn_task(async move {
                     info!(reward_id = %reward_id, "Triggering immediate price update due to market price deviation");
                     if let Err(e) = price_updater::update_single_reward_price(&state_clone, &bc_id, reward_id).await {
                         warn!(error = %e, reward_id = %reward_id, "Failed immediate price update for reward");

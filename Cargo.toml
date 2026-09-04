@@ -1,6 +1,6 @@
 [package]
 name = "necko7"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 
 [dependencies]
@@ -8,6 +8,7 @@ dotenvy = "0.15"
 
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
 thiserror = "2"
 
 serde = { version = "1", features = ["derive"] }

@@ -1,10 +1,12 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use chrono::{DateTime, Duration, Utc};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::warn;
 use crate::AppResult;
 use crate::db::app_settings::{KEY_APP_TOKEN, KEY_BOT_AUTH};
@@ -45,11 +47,14 @@ pub struct AppState {
     pub bot_info: RwLock<Option<BotInfo>>,
     pub market_balances: RwLock<HashMap<String, CachedMarketBalance>>,
     pub chat_messages: RwLock<HashMap<String, HashMap<String, String>>>,
-    pub active_broadcaster_tasks: Mutex<HashSet<String>>,
+    pub active_broadcaster_tasks: Mutex<HashMap<String, CancellationToken>>,
 
     pub db: Db,
 
     pub app_initialized: AtomicBool,
+
+    pub shutdown_token: CancellationToken,
+    pub tasks: TaskTracker,
 }
 
 impl AppState {
@@ -86,10 +91,20 @@ impl AppState {
             bot_info: RwLock::new(bot_info),
             market_balances: RwLock::new(HashMap::new()),
             chat_messages: RwLock::new(chat_messages_map),
-            active_broadcaster_tasks: Mutex::new(HashSet::new()),
+            active_broadcaster_tasks: Mutex::new(HashMap::new()),
             db,
             app_initialized: AtomicBool::new(app_initialized),
+            shutdown_token: CancellationToken::new(),
+            tasks: TaskTracker::new(),
         }))
+    }
+
+    pub fn spawn_task<F>(&self, future: F) -> tokio::task::JoinHandle<F::Output>
+    where
+        F: std::future::Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.tasks.spawn(future)
     }
 }
 
