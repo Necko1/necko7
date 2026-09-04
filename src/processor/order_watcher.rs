@@ -25,6 +25,7 @@ enum OrderStage {
 
 pub struct WatcherRedemptionData {
     pub redemption_id: Uuid,
+    pub custom_id: String,
     pub reward_id: Uuid,
     pub user_login: String,
 }
@@ -88,7 +89,7 @@ impl OrderWatcher {
             }
 
             let current_trade_info = match self.state.market_client.get_buy_info(
-                &self.api_key, &self.redemption.redemption_id).await
+                &self.api_key, &self.redemption.custom_id).await
             {
                 Ok(info) => info,
                 Err(err) => {
@@ -232,8 +233,13 @@ impl OrderWatcher {
                 false,
                 &token).await
         }).await {
-            error!(error = %e, redemption_id = %self.redemption.redemption_id, reward_id = %self.redemption.reward_id, broadcaster_id = %self.broadcaster_id, "Failed to fulfill redemption on Twitch Helix");
-            return;
+            warn!(
+                error = %e,
+                redemption_id = %self.redemption.redemption_id,
+                reward_id = %self.redemption.reward_id,
+                broadcaster_id = %self.broadcaster_id,
+                "Failed to update redemption status on Twitch Helix (it may have already been fulfilled/canceled)"
+            );
         };
 
         let state_for_balance = self.state.clone();
@@ -325,8 +331,13 @@ impl OrderWatcher {
                 should_refund,
                 &token).await
         }).await {
-            error!(error = %e, redemption_id = %self.redemption.redemption_id, reward_id = %self.redemption.reward_id, broadcaster_id = %self.broadcaster_id, "Failed to update redemption status on Twitch Helix");
-            return;
+            warn!(
+                error = %e,
+                redemption_id = %self.redemption.redemption_id,
+                reward_id = %self.redemption.reward_id,
+                broadcaster_id = %self.broadcaster_id,
+                "Failed to update redemption status on Twitch Helix (it may have already been fulfilled/canceled)"
+            );
         };
 
         let state_for_balance = self.state.clone();

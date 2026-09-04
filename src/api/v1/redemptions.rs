@@ -35,6 +35,8 @@ pub struct RedemptionResponse {
     pub currency: String,
     /// Current redemption status
     pub status: RedemptionStatus,
+    /// Number of retry attempts
+    pub retry_count: i32,
     /// Failure cause code (if failed)
     pub fail_cause: Option<String>,
     /// Human-readable failure description (if failed)
@@ -56,6 +58,7 @@ impl From<Redemption> for RedemptionResponse {
             market_paid_price: r.market_paid_price,
             currency: r.currency,
             status: r.status,
+            retry_count: r.retry_count,
             fail_cause: r.fail_cause,
             fail_description: r.fail_description,
             created_at: r.created_at,
@@ -228,8 +231,13 @@ pub async fn retry_redemption(
             message: "Invalid trade link stored for this redemption".to_string(),
         })?;
 
-    let max_price = reward.current_market_price
-        + (reward.current_market_price * reward.permissible_market_price_deviation / 100);
+    let price_i64 = reward.current_market_price as i64;
+    let deviation_i64 = reward.permissible_market_price_deviation as i64;
+    let max_price_i64 = price_i64 + (price_i64 * deviation_i64 / 100);
+    let max_price = max_price_i64.clamp(0, i32::MAX as i64) as i32;
+
+    let new_retry_count = state.db.increment_retry_count(redemption_id).await?;
+    let custom_id = format!("{}-{}", redemption.twitch_redemption_id, new_retry_count);
 
     let market_result = state.market_client.buy_for(
         &setting.market_api_key,
@@ -237,7 +245,7 @@ pub async fn retry_redemption(
         max_price,
         setting.market_chance_to_transfer,
         trade_link,
-        &redemption.twitch_redemption_id,
+        &custom_id,
     ).await;
 
     match market_result {
@@ -256,6 +264,7 @@ pub async fn retry_redemption(
                     redemption_id,
                     reward_id: reward.twitch_id,
                     user_login: redemption.user_login.clone(),
+                    custom_id,
                 }
             );
 
@@ -356,6 +365,22 @@ pub async fn refund_redemption(
         });
     }
 
+    match redemption.status {
+        RedemptionStatus::Completed => {
+            return Err(ApiError::UnprocessableEntity {
+                message: "Cannot refund an already completed redemption".to_string(),
+                param: "redemption_id".to_string(),
+            });
+        }
+        RedemptionStatus::FailedRefund => {
+            return Err(ApiError::UnprocessableEntity {
+                message: "Redemption has already been refunded".to_string(),
+                param: "redemption_id".to_string(),
+            });
+        }
+        _ => {}
+    }
+
     let broadcaster_id = auth.channel_id.clone();
     let bc_ref = broadcaster_id.clone();
     let state_clone = Arc::clone(&state);
@@ -435,6 +460,28 @@ pub async fn penalty_redemption(
         return Err(ApiError::Forbidden {
             message: "Redemption does not belong to this channel".to_string(),
         });
+    }
+
+    match redemption.status {
+        RedemptionStatus::Completed => {
+            return Err(ApiError::UnprocessableEntity {
+                message: "Cannot penalize an already completed redemption".to_string(),
+                param: "redemption_id".to_string(),
+            });
+        }
+        RedemptionStatus::FailedRefund => {
+            return Err(ApiError::UnprocessableEntity {
+                message: "Cannot penalize a redemption that was already refunded".to_string(),
+                param: "redemption_id".to_string(),
+            });
+        }
+        RedemptionStatus::FailedPenalty => {
+            return Err(ApiError::UnprocessableEntity {
+                message: "Redemption is already penalized".to_string(),
+                param: "redemption_id".to_string(),
+            });
+        }
+        _ => {}
     }
 
     let broadcaster_id = auth.channel_id.clone();

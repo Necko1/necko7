@@ -27,6 +27,7 @@ pub struct Redemption {
     pub status: RedemptionStatus,
     pub fail_cause: Option<String>,
     pub fail_description: Option<String>,
+    pub retry_count: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -46,7 +47,7 @@ pub struct NewRedemption {
 impl Db {
     pub async fn get_redemption(&self, twitch_redemption_id: Uuid) -> DbResult<Option<Redemption>> {
         let redemption = sqlx::query_as::<_, Redemption>(
-            "SELECT twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, created_at, updated_at FROM redemptions WHERE twitch_redemption_id = $1"
+            "SELECT twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, retry_count, created_at, updated_at FROM redemptions WHERE twitch_redemption_id = $1"
         )
         .bind(twitch_redemption_id)
         .fetch_optional(&self.pool)
@@ -56,7 +57,7 @@ impl Db {
 
     pub async fn get_redemptions_by_reward(&self, twitch_reward_id: Uuid) -> DbResult<Vec<Redemption>> {
         let redemptions = sqlx::query_as::<_, Redemption>(
-            "SELECT twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, created_at, updated_at FROM redemptions WHERE twitch_reward_id = $1"
+            "SELECT twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, retry_count, created_at, updated_at FROM redemptions WHERE twitch_reward_id = $1"
         )
         .bind(twitch_reward_id)
         .fetch_all(&self.pool)
@@ -66,7 +67,7 @@ impl Db {
 
     pub async fn get_redemptions_by_user(&self, user_id: &str) -> DbResult<Vec<Redemption>> {
         let redemptions = sqlx::query_as::<_, Redemption>(
-            "SELECT twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, created_at, updated_at FROM redemptions WHERE user_id = $1"
+            "SELECT twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, retry_count, created_at, updated_at FROM redemptions WHERE user_id = $1"
         )
         .bind(user_id)
         .fetch_all(&self.pool)
@@ -76,7 +77,7 @@ impl Db {
 
     pub async fn get_pending_redemptions(&self) -> DbResult<Vec<Redemption>> {
         let redemptions = sqlx::query_as::<_, Redemption>(
-            "SELECT twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, created_at, updated_at FROM redemptions WHERE status = 'PENDING'"
+            "SELECT twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, retry_count, created_at, updated_at FROM redemptions WHERE status = 'PENDING'"
         )
         .fetch_all(&self.pool)
         .await?;
@@ -85,7 +86,7 @@ impl Db {
 
     pub async fn get_pending_redemptions_by_reward(&self, twitch_reward_id: Uuid) -> DbResult<Vec<Redemption>> {
         let redemptions = sqlx::query_as::<_, Redemption>(
-            "SELECT twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, created_at, updated_at FROM redemptions WHERE twitch_reward_id = $1 AND status = 'PENDING'"
+            "SELECT twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, retry_count, created_at, updated_at FROM redemptions WHERE twitch_reward_id = $1 AND status = 'PENDING'"
         )
         .bind(twitch_reward_id)
         .fetch_all(&self.pool)
@@ -95,7 +96,7 @@ impl Db {
 
     pub async fn get_active_orders(&self) -> DbResult<Vec<Redemption>> {
         let redemptions = sqlx::query_as::<_, Redemption>(
-            "SELECT twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, created_at, updated_at FROM redemptions WHERE status = 'ORDER_CREATED'"
+            "SELECT twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, retry_count, created_at, updated_at FROM redemptions WHERE status = 'ORDER_CREATED'"
         )
         .fetch_all(&self.pool)
         .await?;
@@ -104,7 +105,7 @@ impl Db {
 
     pub async fn create_redemption(&self, new: &NewRedemption) -> DbResult<Redemption> {
         let redemption = sqlx::query_as::<_, Redemption>(
-            "INSERT INTO redemptions (twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, NULL, NULL, NOW(), NOW()) RETURNING twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, created_at, updated_at"
+            "INSERT INTO redemptions (twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, retry_count, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, NULL, NULL, 0, NOW(), NOW()) RETURNING twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, retry_count, created_at, updated_at"
         )
         .bind(new.twitch_redemption_id)
         .bind(new.twitch_reward_id)
@@ -121,7 +122,7 @@ impl Db {
 
     pub async fn insert_redemption_if_new(&self, new: &NewRedemption) -> DbResult<Option<Redemption>> {
         let redemption = sqlx::query_as::<_, Redemption>(
-            "INSERT INTO redemptions (twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, NULL, NULL, NOW(), NOW()) ON CONFLICT (twitch_redemption_id) DO NOTHING RETURNING twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, created_at, updated_at"
+            "INSERT INTO redemptions (twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, retry_count, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, NULL, NULL, 0, NOW(), NOW()) ON CONFLICT (twitch_redemption_id) DO NOTHING RETURNING twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, retry_count, created_at, updated_at"
         )
         .bind(new.twitch_redemption_id)
         .bind(new.twitch_reward_id)
@@ -138,7 +139,7 @@ impl Db {
 
     pub async fn upsert_redemption(&self, new: &NewRedemption) -> DbResult<Redemption> {
         let redemption = sqlx::query_as::<_, Redemption>(
-            "INSERT INTO redemptions (twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, NULL, NULL, NOW(), NOW()) ON CONFLICT (twitch_redemption_id) DO UPDATE SET twitch_reward_id = EXCLUDED.twitch_reward_id, user_id = EXCLUDED.user_id, user_login = EXCLUDED.user_login, user_trade_link = EXCLUDED.user_trade_link, twitch_points_cost = EXCLUDED.twitch_points_cost, currency = EXCLUDED.currency, status = EXCLUDED.status, updated_at = NOW() RETURNING twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, created_at, updated_at"
+            "INSERT INTO redemptions (twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, retry_count, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, NULL, NULL, 0, NOW(), NOW()) ON CONFLICT (twitch_redemption_id) DO UPDATE SET twitch_reward_id = EXCLUDED.twitch_reward_id, user_id = EXCLUDED.user_id, user_login = EXCLUDED.user_login, user_trade_link = EXCLUDED.user_trade_link, twitch_points_cost = EXCLUDED.twitch_points_cost, currency = EXCLUDED.currency, status = EXCLUDED.status, updated_at = NOW() RETURNING twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, retry_count, created_at, updated_at"
         )
         .bind(new.twitch_redemption_id)
         .bind(new.twitch_reward_id)
@@ -227,7 +228,7 @@ impl Db {
         limit: i64,
     ) -> DbResult<Vec<Redemption>> {
         let redemptions = sqlx::query_as::<_, Redemption>(
-            "SELECT r.twitch_redemption_id, r.twitch_reward_id, r.user_id, r.user_login, r.user_trade_link, r.twitch_points_cost, r.market_paid_price, r.currency, r.status, r.fail_cause, r.fail_description, r.created_at, r.updated_at
+            "SELECT r.twitch_redemption_id, r.twitch_reward_id, r.user_id, r.user_login, r.user_trade_link, r.twitch_points_cost, r.market_paid_price, r.currency, r.status, r.fail_cause, r.fail_description, r.retry_count, r.created_at, r.updated_at
              FROM redemptions r
              INNER JOIN rewards rw ON r.twitch_reward_id = rw.twitch_id
              WHERE rw.streamer_id = $1
@@ -293,6 +294,16 @@ impl Db {
         .fetch_one(&self.pool)
         .await?;
         Ok(stats)
+    }
+
+    pub async fn increment_retry_count(&self, twitch_redemption_id: Uuid) -> DbResult<i32> {
+        let new_count = sqlx::query_scalar::<_, i32>(
+            "UPDATE redemptions SET retry_count = retry_count + 1, updated_at = NOW() WHERE twitch_redemption_id = $1 RETURNING retry_count"
+        )
+        .bind(twitch_redemption_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(new_count)
     }
 }
 

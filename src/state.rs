@@ -17,7 +17,7 @@ use crate::helix::api::custom_rewards::model::UpdateCustomReward;
 use crate::helix::{api, HelixClient};
 use crate::steam::market::{self, MarketClient};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct BotInfo {
     pub user_login: String,
     pub user_id: String,
@@ -217,6 +217,11 @@ impl AppState {
                         Err(e) => {
                             warn!(error = %e, "Failed to serialize bot info as string")
                         }
+                    }
+
+                    {
+                        let mut write_lock = self.bot_info.write();
+                        *write_lock = Some(bot_info.clone());
                     }
 
                     token = bot_info.access_token;

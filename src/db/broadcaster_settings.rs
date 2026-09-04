@@ -135,7 +135,7 @@ impl Db {
             base_price_multiplier: 200,
             update_prices_period: 3600,
             refund_on_buyer_fail: false,
-            refund_if_no_money: false,
+            refund_if_no_money: true,
             pause_reward_if_no_money: false,
             market_chance_to_transfer: 0,
             chat_messages: HashMap::new(),

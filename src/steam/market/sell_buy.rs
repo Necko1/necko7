@@ -3,7 +3,6 @@ use crate::steam::trade_link::TradeLink;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_with::{serde_as, TimestampSeconds};
-use uuid::Uuid;
 
 fn deserialize_price_opt<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
 where
@@ -90,7 +89,7 @@ impl MarketClient {
         max_price: i32,
         chance_to_transfer: i16,
         trade_link: TradeLink,
-        custom_id: &Uuid,
+        custom_id: &str,
     ) -> Result<MarketBuyForResponse, reqwest::Error> {
         let params = [
             ("key", api_key),
@@ -99,7 +98,7 @@ impl MarketClient {
             ("chance_to_transfer", &chance_to_transfer.to_string()),
             ("partner", &trade_link.partner),
             ("token", &trade_link.token),
-            ("custom_id", &custom_id.to_string()),
+            ("custom_id", custom_id),
         ];
 
         self.limiter.until_key_ready(&api_key.to_string()).await;
@@ -137,11 +136,11 @@ impl MarketClient {
     pub async fn get_buy_info(
         &self,
         api_key: &str,
-        custom_id: &Uuid,
+        custom_id: &str,
     ) -> Result<GetBuyInfoResponse, reqwest::Error> {
         let params = [
             ("key", api_key),
-            ("custom_id", &custom_id.to_string()),
+            ("custom_id", custom_id),
         ];
 
         self.limiter.until_key_ready(&api_key.to_string()).await;

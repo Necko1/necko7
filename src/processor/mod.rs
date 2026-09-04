@@ -3,7 +3,8 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 use crate::db::redemptions::{NewRedemption, RedemptionStatus};
 use crate::messages::{
-    MSG_MARKET_ERROR, MSG_ORDER_CREATED, MSG_ORDER_FAILED, MSG_TRADE_LINK_INVALID,
+    MSG_MARKET_ERROR, MSG_ORDER_CREATED, MSG_ORDER_FAILED,
+    MSG_ORDER_FAILED_NO_MONEY_PENALTY, MSG_ORDER_FAILED_NO_MONEY_REFUND, MSG_TRADE_LINK_INVALID,
 };
 use crate::processor::model::EventSubNotification;
 use crate::processor::order_watcher::{OrderWatcher, WatcherRedemptionData};
@@ -27,18 +28,20 @@ pub fn start_broadcaster_tasks(state: Arc<AppState>, channel_id: String) {
         token
     };
 
-    info!(channel_id = %channel_id, "Starting broadcaster background tasks (price updater, balance updater)");
-
-    let price_updater = price_updater::PriceUpdater::new(state.clone(), channel_id.clone());
+    let state_price = Arc::clone(&state);
+    let state_balance = Arc::clone(&state);
+    let cid_price = channel_id.clone();
+    let cid_balance = channel_id.clone();
+    let state_cleanup = Arc::clone(&state);
+    let cid_cleanup = channel_id.clone();
     let token_price = broadcaster_token.clone();
-    state.spawn_task(async move {
-        price_updater.run(token_price).await;
-    });
-
-    let balance_updater = balance_updater::BalanceUpdater::new(state.clone(), channel_id);
     let token_balance = broadcaster_token;
     state.spawn_task(async move {
-        balance_updater.run(token_balance).await;
+        let t1 = price_updater::PriceUpdater::new(state_price, cid_price).run(token_price);
+        let t2 = balance_updater::BalanceUpdater::new(state_balance, cid_balance).run(token_balance);
+        tokio::join!(t1, t2);
+        state_cleanup.active_broadcaster_tasks.lock().remove(&cid_cleanup);
+        debug!(channel_id = %cid_cleanup, "Broadcaster background tasks completed and cleaned up from active tasks map");
     });
 }
 
@@ -150,12 +153,19 @@ async fn recover_active_orders(state: Arc<AppState>) {
 
         info!(redemption_id = %order.twitch_redemption_id, user_login = %order.user_login, "Resuming OrderWatcher for recovered active order");
 
+        let custom_id = if order.retry_count == 0 {
+            order.twitch_redemption_id.to_string()
+        } else {
+            format!("{}-{}", order.twitch_redemption_id, order.retry_count)
+        };
+
         let order_watcher = OrderWatcher::new(
             state.clone(),
             setting.market_api_key,
             reward.streamer_id,
             WatcherRedemptionData {
                 redemption_id: order.twitch_redemption_id,
+                custom_id,
                 reward_id: order.twitch_reward_id,
                 user_login: order.user_login,
             },
@@ -310,8 +320,11 @@ pub async fn process_redemption(
         }
     };
 
-    let max_price = reward_data.current_market_price
-        + (reward_data.current_market_price * reward_data.permissible_market_price_deviation / 100);
+    let max_price_i64 = (reward_data.current_market_price as i64)
+        + ((reward_data.current_market_price as i64 * reward_data.permissible_market_price_deviation as i64) / 100);
+    let max_price = max_price_i64.min(i32::MAX as i64) as i32;
+
+    let redemption_custom_id = redemption_id.to_string();
 
     match state.market_client.buy_for(
         &broadcaster_setting.market_api_key,
@@ -319,7 +332,7 @@ pub async fn process_redemption(
         max_price,
         broadcaster_setting.market_chance_to_transfer,
         trade_link,
-        &redemption_id
+        &redemption_custom_id
     ).await {
         Ok(res) if res.success => {
             info!(
@@ -352,6 +365,7 @@ pub async fn process_redemption(
                 broadcaster_user_id.clone(),
                 WatcherRedemptionData {
                     redemption_id,
+                    custom_id: redemption_custom_id,
                     reward_id,
                     user_login: event.user_login.clone(),
             });
@@ -421,14 +435,20 @@ pub async fn process_redemption(
             ).await;
 
             let code_str = code.to_string();
+            let (msg_template, msg_vars): (&str, Vec<(&str, &str)>) = if error_msg.eq_ignore_ascii_case("not enough funds on account") {
+                if return_channel_points {
+                    (MSG_ORDER_FAILED_NO_MONEY_REFUND, vec![("buyer", event.user_login.as_str())])
+                } else {
+                    (MSG_ORDER_FAILED_NO_MONEY_PENALTY, vec![("buyer", event.user_login.as_str())])
+                }
+            } else {
+                (MSG_ORDER_FAILED, vec![("buyer", event.user_login.as_str()), ("code", code_str.as_str()), ("error", error_msg.as_str())])
+            };
+
             let msg = state.render_chat_message(
                 &broadcaster_user_id,
-                MSG_ORDER_FAILED,
-                &[
-                    ("buyer", &event.user_login),
-                    ("code", &code_str),
-                    ("error", &error_msg),
-                ],
+                msg_template,
+                &msg_vars,
             );
             if let Err(e) = state.with_bot_user_token(async |token| {
                 state.helix_client.send_chat_message(
@@ -449,6 +469,15 @@ pub async fn process_redemption(
                 item = %reward_data.market_item_name,
                 "Failed to send HTTP request to Market"
             );
+            update_redemption_status_failed(
+                state.clone(),
+                &broadcaster_user_id,
+                reward_id,
+                redemption_id,
+                true,
+                Some(&format!("Market network error: {}", e))
+            ).await;
+
             let msg = state.render_chat_message(
                 &broadcaster_user_id,
                 MSG_MARKET_ERROR,

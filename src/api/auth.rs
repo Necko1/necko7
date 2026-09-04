@@ -13,7 +13,6 @@ use uuid::Uuid;
 use crate::api::cookie::{build_cookie_string, build_csrf_cookie};
 use crate::state::{AppState, BotInfo};
 use crate::db::app_settings::KEY_BOT_AUTH;
-use crate::db::broadcaster_settings::NewBroadcasterSetting;
 use crate::db::broadcasters::NewBroadcaster;
 use crate::db::channel_permissions::{ChannelRole, NewChannelPermission};
 use crate::db::sessions::NewSession;
@@ -263,20 +262,7 @@ pub async fn auth_callback(
             return (StatusCode::INTERNAL_SERVER_ERROR, "DB Error").into_response();
         }
 
-        let new_setting = NewBroadcasterSetting {
-            channel_id: channel_id.clone(),
-            is_active: true,
-            market_api_key: "".to_string(),
-            base_price_multiplier: 200,
-            update_prices_period: 3600,
-            refund_on_buyer_fail: false,
-            refund_if_no_money: true,
-            pause_reward_if_no_money: false,
-            market_chance_to_transfer: 0,
-            chat_messages: std::collections::HashMap::new(),
-        };
-        
-        if let Err(e) = state.db.upsert_broadcaster_setting(&new_setting).await {
+        if let Err(e) = state.db.get_or_create_broadcaster_setting(&channel_id).await {
             error!(error = %e, channel_id = %channel_id, "DB Error saving broadcaster setting");
             return (StatusCode::INTERNAL_SERVER_ERROR, "DB Error").into_response();
         }

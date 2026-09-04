@@ -79,7 +79,7 @@ pub struct BroadcasterSettingsResponse {
     pub is_active: bool,
     /// Whether a market API key is configured
     pub market_api_key_set: bool,
-    /// Base price multiplier for reward pricing (percentage, e.g. 150 = 150%)
+    /// Base price multiplier for reward pricing (Twitch channel points per 1 major currency unit, e.g. 200 means 200 points per 1 RUB/USD)
     pub base_price_multiplier: i16,
     /// Period (in seconds) between automatic price updates
     pub update_prices_period: i32,
@@ -169,7 +169,7 @@ pub struct UpdateBroadcasterSettingsBody {
     pub is_active: Option<bool>,
     /// Market API key for item purchases
     pub market_api_key: Option<String>,
-    /// Base price multiplier for reward pricing (percentage)
+    /// Base price multiplier for reward pricing (Twitch channel points per 1 major currency unit, e.g. 200 means 200 points per 1 RUB/USD)
     pub base_price_multiplier: Option<i16>,
     /// Period (in seconds) between automatic price updates
     pub update_prices_period: Option<i32>,

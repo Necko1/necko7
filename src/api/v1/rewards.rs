@@ -294,6 +294,37 @@ pub async fn create_reward(
     let twitch_reward_id = twitch_reward_info.id.parse::<Uuid>()
         .map_err(|_| ApiError::Internal { message: "Failed to parse twitch reward id as Uuid".into() })?;
 
+    if body.is_paused {
+        let broadcaster_id = auth.channel_id.clone();
+        let bc_ref = broadcaster_id.clone();
+        let state_clone = Arc::clone(&state);
+        let reward_id_str = twitch_reward_info.id.clone();
+        let update_info = crate::helix::api::custom_rewards::model::UpdateCustomReward {
+            is_paused: Some(true),
+            ..Default::default()
+        };
+        if let Err(e) = state.with_broadcaster_token(&bc_ref, move |token| {
+            let update_info = update_info.clone();
+            let broadcaster_id = broadcaster_id.clone();
+            let reward_id_str = reward_id_str.clone();
+            let state_clone = Arc::clone(&state_clone);
+            async move {
+                state_clone.helix_client.update_custom_reward(
+                    &broadcaster_id,
+                    &reward_id_str,
+                    update_info,
+                    &token,
+                ).await
+            }
+        }).await {
+            tracing::warn!(
+                error = %e,
+                reward_id = %twitch_reward_info.id,
+                "Failed to pause newly created reward on Twitch"
+            );
+        }
+    }
+
     let new_reward = crate::db::rewards::NewReward {
         twitch_id: twitch_reward_id,
         is_paused: body.is_paused,
@@ -355,7 +386,7 @@ pub struct UpdateRewardBody {
     path = "/api/v1/broadcasters/{channel_id}/rewards/{reward_id}",
     tag = "Rewards",
     summary = "Update a reward",
-    description = "Updates an existing reward. Only provided fields are updated (PATCH semantics). If a market API key is configured, the reward will also be updated on Twitch.",
+    description = "Updates an existing reward. Only provided fields are updated (PATCH semantics).",
     params(
         ("channel_id" = String, Path, description = "Twitch channel ID"),
         ("reward_id" = Uuid, Path, description = "Twitch reward UUID"),
@@ -413,10 +444,29 @@ pub async fn update_reward(
 
     let setting = state.db.get_or_create_broadcaster_setting(&auth.channel_id).await?;
 
-    if !setting.market_api_key.is_empty() {
+    let new_cost = if body.twitch_price_markup_percentage.is_some() || body.current_market_price.is_some() {
+        let effective_markup = body.twitch_price_markup_percentage.unwrap_or(existing.twitch_price_markup_percentage);
+        let effective_price = body.current_market_price.unwrap_or(existing.current_market_price);
+        let price_decimal = market::minor_to_major(effective_price as i64, &existing.currency);
+        let markup_factor = 1.0 + (effective_markup as f64 / 100.0).max(0.0);
+        let raw_cost = price_decimal * markup_factor * setting.base_price_multiplier as f64;
+        Some((raw_cost.ceil() as u32).max(1))
+    } else {
+        None
+    };
+
+    let has_twitch_updates = body.twitch_title.is_some()
+        || new_cost.is_some()
+        || body.twitch_description.is_some()
+        || body.max_redemptions_per_stream.is_some()
+        || body.max_redemptions_per_user_per_stream.is_some()
+        || body.global_cooldown_seconds.is_some()
+        || body.is_paused.is_some();
+
+    if has_twitch_updates {
         let update_info = crate::helix::api::custom_rewards::model::UpdateCustomReward {
             title: body.twitch_title.clone(),
-            cost: None,
+            cost: new_cost,
             description: body.twitch_description.clone(),
             background_color: None,
             max_per_stream: body.max_redemptions_per_stream.map(|v| v as u32),
@@ -520,7 +570,7 @@ pub async fn delete_reward(
     let broadcaster_id = auth.channel_id.clone();
     let bc_ref = broadcaster_id.clone();
     let state_clone = Arc::clone(&state);
-    state.with_broadcaster_token(&bc_ref, move |token| {
+    let twitch_res = state.with_broadcaster_token(&bc_ref, move |token| {
         let broadcaster_id = broadcaster_id.clone();
         let reward_id_str = reward_id.to_string();
         let state_clone = Arc::clone(&state_clone);
@@ -531,7 +581,15 @@ pub async fn delete_reward(
                 &token,
             ).await
         }
-    }).await?;
+    }).await;
+
+    if let Err(e) = twitch_res {
+        tracing::warn!(
+            reward_id = %reward_id,
+            error = %e,
+            "Failed to delete reward on Twitch (might already be deleted); proceeding with DB soft-delete"
+        );
+    }
 
     state.db.set_reward_deleted(reward_id).await?;
 
