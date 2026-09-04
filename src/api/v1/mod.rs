@@ -66,6 +66,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         ErrorDetail,
         crate::db::channel_permissions::ChannelRole,
         crate::db::redemptions::RedemptionStatus,
+        crate::db::rewards::PauseReason,
     )),
     tags(
         (name = "Auth", description = "Twitch OAuth 2.0 authentication flows and session management"),
@@ -115,4 +116,18 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/broadcasters/{channel_id}/redemptions/{redemption_id}/refund", post(redemptions::refund_redemption))
         .route("/broadcasters/{channel_id}/redemptions/{redemption_id}/penalty", post(redemptions::penalty_redemption))
         .route("/broadcasters/{channel_id}/stats", get(stats::get_stats))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_openapi_schema_contains_pause_reason() {
+        let doc = ApiDoc::openapi();
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(json.contains("PauseReason"), "OpenAPI schema must contain PauseReason");
+        assert!(json.contains("MANUAL"), "OpenAPI schema must contain MANUAL");
+        assert!(json.contains("NO_MONEY"), "OpenAPI schema must contain NO_MONEY");
+    }
 }

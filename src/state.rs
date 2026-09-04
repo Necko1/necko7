@@ -334,7 +334,7 @@ impl AppState {
     }
 
     pub async fn sync_rewards_pause_by_balance(&self, channel_id: &str, current_balance: f64) {
-        let rewards = match self.db.get_rewards_by_streamer_filtered(channel_id, None, Some(false)).await {
+        let rewards = match self.db.get_rewards_by_streamer_filtered(channel_id, None, Some(false), None).await {
             Ok(r) => r,
             Err(e) => {
                 warn!(error = %e, channel_id = %channel_id, "Failed to fetch rewards for balance pause sync");
@@ -352,11 +352,29 @@ impl AppState {
             let cost = market::minor_to_major(max_price, &reward.currency);
             let has_enough_money = current_balance >= cost;
 
-            let target_paused = !has_enough_money;
-
-            if reward.is_paused == target_paused {
-                continue;
-            }
+            let (target_paused, target_pause_reason) = if !has_enough_money {
+                if reward.is_paused {
+                    // Already paused; keep existing reason (manual or no_money)
+                    continue;
+                }
+                (true, Some(crate::db::rewards::PauseReason::NoMoney))
+            } else {
+                if !reward.is_paused {
+                    continue;
+                }
+                // Reward is currently paused. Only auto-unpause if it was paused due to no money!
+                if matches!(reward.pause_reason, Some(crate::db::rewards::PauseReason::NoMoney)) {
+                    (false, None)
+                } else {
+                    tracing::debug!(
+                        reward_id = %reward.twitch_id,
+                        title = %reward.twitch_title,
+                        pause_reason = ?reward.pause_reason,
+                        "Reward is paused manually or for non-balance reason; skipping auto-unpause"
+                    );
+                    continue;
+                }
+            };
 
             let r_id_str = reward.twitch_id.to_string();
             let bc_id = channel_id.to_string();
@@ -378,13 +396,14 @@ impl AppState {
 
             match update_res {
                 Ok(_) => {
-                    if let Err(e) = self.db.set_reward_paused(reward.twitch_id, target_paused).await {
+                    if let Err(e) = self.db.set_reward_paused(reward.twitch_id, target_paused, target_pause_reason).await {
                         warn!(error = %e, reward_id = %reward.twitch_id, "Failed to update reward pause status in DB");
                     } else {
                         tracing::info!(
                             reward_id = %reward.twitch_id,
                             title = %reward.twitch_title,
                             paused = target_paused,
+                            pause_reason = ?target_pause_reason,
                             cost = cost,
                             balance = current_balance,
                             "Auto-updated reward pause status due to balance check"

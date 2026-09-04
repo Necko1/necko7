@@ -27,6 +27,8 @@ pub struct RewardResponse {
     pub twitch_id: Uuid,
     /// Whether the reward is currently paused
     pub is_paused: bool,
+    /// Reason why the reward is paused ("MANUAL", "NO_MONEY"). Null if reward is active.
+    pub pause_reason: Option<crate::db::rewards::PauseReason>,
     /// Whether the reward has been soft-deleted
     pub is_deleted: bool,
     /// Twitch channel ID of the streamer
@@ -64,6 +66,7 @@ impl From<Reward> for RewardResponse {
         Self {
             twitch_id: r.twitch_id,
             is_paused: r.is_paused,
+            pause_reason: r.pause_reason,
             is_deleted: r.is_deleted,
             streamer_id: r.streamer_id,
             market_item_name: r.market_item_name,
@@ -89,6 +92,8 @@ pub struct ListRewardsQuery {
     pub is_paused: Option<bool>,
     /// Filter by deleted status
     pub is_deleted: Option<bool>,
+    /// Filter by pause reason ("MANUAL", "NO_MONEY")
+    pub pause_reason: Option<crate::db::rewards::PauseReason>,
 }
 
 #[utoipa::path(
@@ -96,7 +101,7 @@ pub struct ListRewardsQuery {
     path = "/api/v1/broadcasters/{channel_id}/rewards",
     tag = "Rewards",
     summary = "List rewards",
-    description = "Returns all rewards for a specific channel, with optional filtering by paused and deleted status.",
+    description = "Returns all rewards for a specific channel, with optional filtering by paused, deleted status, and pause reason.",
     params(
         ("channel_id" = String, Path, description = "Twitch channel ID"),
         ListRewardsQuery,
@@ -107,6 +112,7 @@ pub struct ListRewardsQuery {
                 {
                     "twitch_id": "550e8400-e29b-41d4-a716-446655440000",
                     "is_paused": false,
+                    "pause_reason": null,
                     "is_deleted": false,
                     "streamer_id": "123456789",
                     "market_item_name": "AWP | Asiimov (Field-Tested)",
@@ -142,6 +148,7 @@ pub async fn list_rewards(
         &auth.channel_id,
         query.is_paused,
         query.is_deleted,
+        query.pause_reason,
     ).await?;
 
     Ok(Json(rewards.into_iter().map(RewardResponse::from).collect()))
@@ -287,6 +294,11 @@ pub async fn create_reward(
     let twitch_points_cost = (raw_cost.ceil() as u32).max(1);
 
     let mut is_paused = body.is_paused;
+    let mut pause_reason = if body.is_paused {
+        Some(crate::db::rewards::PauseReason::Manual)
+    } else {
+        None
+    };
 
     if !is_paused && setting.pause_reward_if_no_money {
         let max_price = (cheapest_item.price as i64)
@@ -305,6 +317,7 @@ pub async fn create_reward(
                         cost
                     );
                     is_paused = true;
+                    pause_reason = Some(crate::db::rewards::PauseReason::NoMoney);
                 }
             }
             Err(e) => {
@@ -380,6 +393,7 @@ pub async fn create_reward(
     let new_reward = crate::db::rewards::NewReward {
         twitch_id: twitch_reward_id,
         is_paused,
+        pause_reason,
         streamer_id: auth.channel_id.clone(),
         market_item_name: body.market_item_name,
         twitch_title: body.twitch_title,
@@ -431,6 +445,8 @@ pub struct UpdateRewardBody {
     pub market_autobuy: Option<bool>,
     /// New paused status
     pub is_paused: Option<bool>,
+    /// New pause reason ("MANUAL", "NO_MONEY")
+    pub pause_reason: Option<crate::db::rewards::PauseReason>,
 }
 
 #[utoipa::path(
@@ -449,6 +465,7 @@ pub struct UpdateRewardBody {
             example = json!({
                 "twitch_id": "550e8400-e29b-41d4-a716-446655440000",
                 "is_paused": false,
+                "pause_reason": null,
                 "is_deleted": false,
                 "streamer_id": "123456789",
                 "market_item_name": "AWP | Asiimov (Field-Tested)",
@@ -570,8 +587,30 @@ pub async fn update_reward(
         }).await?;
     }
 
+    let (target_paused, patch_pause_reason) = match body.is_paused {
+        Some(false) => (Some(false), None),
+        Some(true) => {
+            let reason = if let Some(r) = body.pause_reason {
+                Some(r)
+            } else if !existing.is_paused {
+                Some(crate::db::rewards::PauseReason::Manual)
+            } else {
+                existing.pause_reason
+            };
+            (Some(true), reason)
+        }
+        None => {
+            if let Some(r) = body.pause_reason {
+                (None, Some(r))
+            } else {
+                (None, None)
+            }
+        }
+    };
+
     let patch = crate::db::rewards::UpdateReward {
-        is_paused: body.is_paused,
+        is_paused: target_paused,
+        pause_reason: patch_pause_reason,
         is_deleted: None,
         market_item_name: None,
         twitch_title: body.twitch_title,
@@ -846,25 +885,36 @@ pub async fn batch_rewards(
         match action {
             "pause" | "unpause" => {
                 let target_pause = action == "pause";
-                if existing.is_paused != target_pause {
-                    state.with_broadcaster_token(&broadcaster_id, move |token| {
-                        let state_c = state_clone.clone();
-                        let b_id = bc_ref.clone();
-                        let r_id = reward_id_str.clone();
-                        async move {
-                            state_c.helix_client.update_custom_reward(
-                                &b_id,
-                                &r_id,
-                                crate::helix::api::custom_rewards::model::UpdateCustomReward {
-                                    is_paused: Some(target_pause),
-                                    ..Default::default()
-                                },
-                                &token,
-                            ).await
-                        }
-                    }).await?;
+                let needs_update = existing.is_paused != target_pause
+                    || (target_pause && existing.pause_reason != Some(crate::db::rewards::PauseReason::Manual));
 
-                    state.db.set_reward_paused(*reward_id, target_pause).await?;
+                if needs_update {
+                    if existing.is_paused != target_pause {
+                        state.with_broadcaster_token(&broadcaster_id, move |token| {
+                            let state_c = state_clone.clone();
+                            let b_id = bc_ref.clone();
+                            let r_id = reward_id_str.clone();
+                            async move {
+                                state_c.helix_client.update_custom_reward(
+                                    &b_id,
+                                    &r_id,
+                                    crate::helix::api::custom_rewards::model::UpdateCustomReward {
+                                        is_paused: Some(target_pause),
+                                        ..Default::default()
+                                    },
+                                    &token,
+                                ).await
+                            }
+                        }).await?;
+                    }
+
+                    let reason = if target_pause {
+                        Some(crate::db::rewards::PauseReason::Manual)
+                    } else {
+                        None
+                    };
+
+                    state.db.set_reward_paused(*reward_id, target_pause, reason).await?;
                     affected += 1;
                 }
             }
@@ -918,12 +968,15 @@ mod tests {
         let balance = 20.0;
         let pause_reward_if_no_money = true;
         let mut is_paused = false;
+        let mut pause_reason = None;
 
         if !is_paused && pause_reward_if_no_money && balance < cost {
             is_paused = true;
+            pause_reason = Some(crate::db::rewards::PauseReason::NoMoney);
         }
 
         assert!(is_paused);
+        assert_eq!(pause_reason, Some(crate::db::rewards::PauseReason::NoMoney));
     }
 
     #[test]
@@ -938,12 +991,15 @@ mod tests {
         let balance = 100.0;
         let pause_reward_if_no_money = true;
         let mut is_paused = false;
+        let mut pause_reason = None;
 
         if !is_paused && pause_reward_if_no_money && balance < cost {
             is_paused = true;
+            pause_reason = Some(crate::db::rewards::PauseReason::NoMoney);
         }
 
         assert!(!is_paused);
+        assert!(pause_reason.is_none());
     }
 
     #[test]
@@ -958,12 +1014,115 @@ mod tests {
         let balance = 5.0; // insufficient
         let pause_reward_if_no_money = false; // setting disabled
         let mut is_paused = false;
+        let mut pause_reason = None;
 
         if !is_paused && pause_reward_if_no_money && balance < cost {
             is_paused = true;
+            pause_reason = Some(crate::db::rewards::PauseReason::NoMoney);
         }
 
         assert!(!is_paused);
+        assert!(pause_reason.is_none());
+    }
+
+    #[test]
+    fn test_sync_skips_unpausing_manually_paused_reward() {
+        let current_market_price = 3500i64;
+        let permissible_deviation = 10i32;
+        let currency = "RUB";
+        let max_price = current_market_price + ((current_market_price * permissible_deviation as i64) / 100);
+        let cost = market::minor_to_major(max_price, currency);
+
+        let balance = 100.0; // Sufficient balance!
+        let has_enough_money = balance >= cost;
+
+        let reward_is_paused = true;
+        let reward_pause_reason = Some(crate::db::rewards::PauseReason::Manual);
+
+        let mut target_paused = reward_is_paused;
+        let mut target_pause_reason = reward_pause_reason;
+        let mut skipped = false;
+
+        if has_enough_money {
+            if reward_is_paused {
+                if matches!(reward_pause_reason, Some(crate::db::rewards::PauseReason::NoMoney)) {
+                    target_paused = false;
+                    target_pause_reason = None;
+                } else {
+                    // Manually paused: skip unpausing
+                    skipped = true;
+                }
+            }
+        }
+
+        assert!(skipped);
+        assert!(target_paused);
+        assert_eq!(target_pause_reason, Some(crate::db::rewards::PauseReason::Manual));
+    }
+
+    #[test]
+    fn test_sync_unpauses_no_money_paused_reward() {
+        let current_market_price = 3500i64;
+        let permissible_deviation = 10i32;
+        let currency = "RUB";
+        let max_price = current_market_price + ((current_market_price * permissible_deviation as i64) / 100);
+        let cost = market::minor_to_major(max_price, currency);
+
+        let balance = 100.0; // Sufficient balance!
+        let has_enough_money = balance >= cost;
+
+        let reward_is_paused = true;
+        let reward_pause_reason = Some(crate::db::rewards::PauseReason::NoMoney);
+
+        let mut target_paused = reward_is_paused;
+        let mut target_pause_reason = reward_pause_reason;
+
+        if has_enough_money {
+            if reward_is_paused {
+                if matches!(reward_pause_reason, Some(crate::db::rewards::PauseReason::NoMoney)) {
+                    target_paused = false;
+                    target_pause_reason = None;
+                }
+            }
+        }
+
+        assert!(!target_paused);
+        assert!(target_pause_reason.is_none());
+    }
+
+    #[test]
+    fn test_update_reward_manual_pause_reason_transitions() {
+        // Transition unpaused -> paused without explicit reason defaults to MANUAL
+        let existing_paused = false;
+        let existing_reason: Option<crate::db::rewards::PauseReason> = None;
+        let body_paused = Some(true);
+        let body_reason: Option<crate::db::rewards::PauseReason> = None;
+
+        let (_, patch_reason) = match body_paused {
+            Some(false) => (Some(false), None),
+            Some(true) => {
+                let r = if let Some(r) = body_reason {
+                    Some(r)
+                } else if !existing_paused {
+                    Some(crate::db::rewards::PauseReason::Manual)
+                } else {
+                    existing_reason
+                };
+                (Some(true), r)
+            }
+            None => (None, None),
+        };
+
+        assert_eq!(patch_reason, Some(crate::db::rewards::PauseReason::Manual));
+
+        // Unpausing clears pause_reason
+        let body_paused = Some(false);
+        let (_, patch_reason): (Option<bool>, Option<crate::db::rewards::PauseReason>) = match body_paused {
+            Some(false) => (Some(false), None),
+            _ => unreachable!(),
+        };
+        assert!(patch_reason.is_none());
     }
 }
+
 

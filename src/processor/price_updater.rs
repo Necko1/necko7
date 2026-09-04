@@ -72,7 +72,7 @@ impl PriceUpdater {
         setting: &BroadcasterSetting,
         token: &CancellationToken,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let rewards = self.state.db.get_rewards_by_streamer_filtered(&self.broadcaster_id, None, Some(false)).await
+        let rewards = self.state.db.get_rewards_by_streamer_filtered(&self.broadcaster_id, None, Some(false), None).await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
         if rewards.is_empty() {
             return Ok(());
