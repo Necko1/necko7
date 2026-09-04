@@ -91,12 +91,32 @@ impl ApiError {
 
     fn param(&self) -> Option<&str> {
         match self {
-            ApiError::BadRequest { param, .. } => Some(param.as_str()),
-            ApiError::UnprocessableEntity { param, .. } => Some(param.as_str()),
+            ApiError::BadRequest { param, .. } => {
+                if param.is_empty() {
+                    None
+                } else {
+                    Some(param.as_str())
+                }
+            }
+            ApiError::UnprocessableEntity { param, .. } => {
+                if param.is_empty() {
+                    None
+                } else {
+                    Some(param.as_str())
+                }
+            }
             _ => None,
         }
     }
 }
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message())
+    }
+}
+
+impl std::error::Error for ApiError {}
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
@@ -144,6 +164,23 @@ impl IntoResponse for ApiError {
     }
 }
 
+fn extract_param_from_twitch_msg(msg: &str) -> Option<String> {
+    if let Some(start) = msg.find("parameter \"") {
+        let remainder = &msg[start + 11..];
+        if let Some(end) = remainder.find('"') {
+            let param_name = &remainder[..end];
+            let mapped = match param_name {
+                "title" => "twitch_title",
+                "prompt" => "twitch_description",
+                "cost" => "cost",
+                other => other,
+            };
+            return Some(mapped.to_string());
+        }
+    }
+    None
+}
+
 impl From<DbError> for ApiError {
     fn from(err: DbError) -> Self {
         tracing::error!(error = %err, "Database error mapped to ApiError::Internal");
@@ -170,9 +207,50 @@ impl From<reqwest::Error> for ApiError {
 impl From<HelixError> for ApiError {
     fn from(err: HelixError) -> Self {
         match err {
+            HelixError::BadRequest(msg) => {
+                tracing::warn!(reason = %msg, "HelixError::BadRequest mapped to ApiError::BadRequest");
+                let param = extract_param_from_twitch_msg(&msg).unwrap_or_default();
+                ApiError::BadRequest {
+                    message: msg,
+                    param,
+                }
+            }
             HelixError::Unauthorized(msg) => {
                 tracing::warn!(reason = %msg, "HelixError::Unauthorized mapped to ApiError::Unauthorized");
                 ApiError::Unauthorized { message: msg }
+            }
+            HelixError::Forbidden(msg) => {
+                tracing::warn!(reason = %msg, "HelixError::Forbidden mapped to ApiError::Forbidden");
+                ApiError::Forbidden { message: msg }
+            }
+            HelixError::NotFound(msg) => {
+                tracing::warn!(reason = %msg, "HelixError::NotFound mapped to ApiError::NotFound");
+                ApiError::NotFound { message: msg }
+            }
+            HelixError::Conflict(msg) => {
+                tracing::warn!(reason = %msg, "HelixError::Conflict mapped to ApiError::BadRequest");
+                ApiError::BadRequest {
+                    message: msg,
+                    param: String::new(),
+                }
+            }
+            HelixError::Api { status, message } => {
+                if status == 422 {
+                    tracing::warn!(status = status, reason = %message, "HelixError::Api mapped to ApiError::UnprocessableEntity");
+                    ApiError::UnprocessableEntity {
+                        message,
+                        param: String::new(),
+                    }
+                } else if status < 500 {
+                    tracing::warn!(status = status, reason = %message, "HelixError::Api client error mapped to ApiError::BadRequest");
+                    ApiError::BadRequest {
+                        message,
+                        param: String::new(),
+                    }
+                } else {
+                    tracing::error!(status = status, reason = %message, "Helix upstream error mapped to ApiError::Internal");
+                    ApiError::Internal { message }
+                }
             }
             HelixError::Other(msg) => {
                 tracing::error!(reason = %msg, "HelixError::Other mapped to ApiError::Internal");
@@ -195,18 +273,81 @@ impl From<HelixError> for ApiError {
 
 impl From<Box<dyn std::error::Error>> for ApiError {
     fn from(err: Box<dyn std::error::Error>) -> Self {
-        tracing::error!(error = %err, "Boxed dyn Error mapped to ApiError::Internal");
-        ApiError::Internal {
-            message: err.to_string(),
+        match err.downcast::<HelixError>() {
+            Ok(helix_err) => ApiError::from(*helix_err),
+            Err(err) => match err.downcast::<ApiError>() {
+                Ok(api_err) => *api_err,
+                Err(err) => match err.downcast::<DbError>() {
+                    Ok(db_err) => ApiError::from(*db_err),
+                    Err(err) => {
+                        tracing::error!(error = %err, "Boxed dyn Error mapped to ApiError::Internal");
+                        ApiError::Internal {
+                            message: err.to_string(),
+                        }
+                    }
+                },
+            },
         }
     }
 }
 
 impl From<Box<dyn std::error::Error + Send + Sync>> for ApiError {
     fn from(err: Box<dyn std::error::Error + Send + Sync>) -> Self {
-        tracing::error!(error = %err, "Boxed dyn Error + Send + Sync mapped to ApiError::Internal");
-        ApiError::Internal {
-            message: err.to_string(),
+        match err.downcast::<HelixError>() {
+            Ok(helix_err) => ApiError::from(*helix_err),
+            Err(err) => match err.downcast::<ApiError>() {
+                Ok(api_err) => *api_err,
+                Err(err) => match err.downcast::<DbError>() {
+                    Ok(db_err) => ApiError::from(*db_err),
+                    Err(err) => {
+                        tracing::error!(error = %err, "Boxed dyn Error + Send + Sync mapped to ApiError::Internal");
+                        ApiError::Internal {
+                            message: err.to_string(),
+                        }
+                    }
+                },
+            },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn test_extract_param_from_twitch_msg() {
+        let msg = "The parameter \"title\" was malformed: the value must be less than or equal to 45";
+        assert_eq!(extract_param_from_twitch_msg(msg), Some("twitch_title".to_string()));
+
+        let msg2 = "The parameter \"prompt\" was malformed: the value must be less than or equal to 500";
+        assert_eq!(extract_param_from_twitch_msg(msg2), Some("twitch_description".to_string()));
+
+        let msg3 = "The parameter \"cost\" was malformed";
+        assert_eq!(extract_param_from_twitch_msg(msg3), Some("cost".to_string()));
+
+        let msg4 = "Something else went wrong";
+        assert_eq!(extract_param_from_twitch_msg(msg4), None);
+    }
+
+    #[test]
+    fn test_helix_bad_request_to_api_error() {
+        let helix_err = HelixError::BadRequest("The parameter \"title\" was malformed: the value must be less than or equal to 45".to_string());
+        let api_err = ApiError::from(helix_err);
+
+        assert_eq!(api_err.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(api_err.param(), Some("twitch_title"));
+        assert_eq!(api_err.message(), "The parameter \"title\" was malformed: the value must be less than or equal to 45");
+    }
+
+    #[test]
+    fn test_boxed_helix_error_downcast() {
+        let helix_err = HelixError::BadRequest("The parameter \"title\" was malformed: the value must be less than or equal to 45".to_string());
+        let boxed: Box<dyn std::error::Error + Send + Sync> = Box::new(helix_err);
+
+        let api_err = ApiError::from(boxed);
+        assert_eq!(api_err.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(api_err.param(), Some("twitch_title"));
     }
 }

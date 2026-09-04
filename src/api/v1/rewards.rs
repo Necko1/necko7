@@ -218,6 +218,27 @@ pub async fn create_reward(
     State(state): State<Arc<AppState>>,
     JsonArg(body): JsonArg<CreateRewardBody>,
 ) -> Result<Json<RewardResponse>, ApiError> {
+    if body.twitch_title.trim().is_empty() {
+        return Err(ApiError::BadRequest {
+            message: "Twitch reward title cannot be empty".into(),
+            param: "twitch_title".into(),
+        });
+    }
+
+    if body.twitch_title.chars().count() > 45 {
+        return Err(ApiError::BadRequest {
+            message: "The parameter \"title\" was malformed: the value must be less than or equal to 45".into(),
+            param: "twitch_title".into(),
+        });
+    }
+
+    if body.twitch_description.chars().count() > 500 {
+        return Err(ApiError::BadRequest {
+            message: "Twitch reward description must be 500 characters or less".into(),
+            param: "twitch_description".into(),
+        });
+    }
+
     let setting = state.db.get_or_create_broadcaster_setting(&auth.channel_id).await?;
 
     if setting.market_api_key.trim().is_empty() {
@@ -440,6 +461,30 @@ pub async fn update_reward(
         return Err(ApiError::Forbidden {
             message: "Reward does not belong to this channel".to_string(),
         });
+    }
+
+    if let Some(ref title) = body.twitch_title {
+        if title.trim().is_empty() {
+            return Err(ApiError::BadRequest {
+                message: "Twitch reward title cannot be empty".into(),
+                param: "twitch_title".into(),
+            });
+        }
+        if title.chars().count() > 45 {
+            return Err(ApiError::BadRequest {
+                message: "The parameter \"title\" was malformed: the value must be less than or equal to 45".into(),
+                param: "twitch_title".into(),
+            });
+        }
+    }
+
+    if let Some(ref desc) = body.twitch_description {
+        if desc.chars().count() > 500 {
+            return Err(ApiError::BadRequest {
+                message: "Twitch reward description must be 500 characters or less".into(),
+                param: "twitch_description".into(),
+            });
+        }
     }
 
     let setting = state.db.get_or_create_broadcaster_setting(&auth.channel_id).await?;
