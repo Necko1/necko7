@@ -1,5 +1,6 @@
 pub mod broadcasters;
 pub mod permissions;
+pub mod proxy;
 pub mod rewards;
 pub mod redemptions;
 pub mod stats;
@@ -40,6 +41,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         redemptions::refund_redemption,
         redemptions::penalty_redemption,
         stats::get_stats,
+        proxy::image_proxy,
     ),
     components(schemas(
         crate::api::auth::LogoutResponse,
@@ -62,6 +64,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         redemptions::ListRedemptionsQuery,
         stats::StatsResponse,
         stats::StatsQuery,
+        proxy::ImageProxyParams,
         ErrorBody,
         ErrorDetail,
         crate::db::channel_permissions::ChannelRole,
@@ -76,6 +79,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         (name = "Rewards", description = "Channel point rewards CRUD and batch operations"),
         (name = "Redemptions", description = "Redemption tracking and actions (retry, refund, penalty)"),
         (name = "Stats", description = "Redemption statistics and analytics"),
+        (name = "Proxy", description = "Image proxy and caching to bypass CORS restrictions"),
     ),
     modifiers(&SecurityAddon),
     security(
@@ -116,6 +120,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/broadcasters/{channel_id}/redemptions/{redemption_id}/refund", post(redemptions::refund_redemption))
         .route("/broadcasters/{channel_id}/redemptions/{redemption_id}/penalty", post(redemptions::penalty_redemption))
         .route("/broadcasters/{channel_id}/stats", get(stats::get_stats))
+        .route("/proxy/image", get(proxy::image_proxy))
 }
 
 #[cfg(test)]
@@ -129,5 +134,13 @@ mod tests {
         assert!(json.contains("PauseReason"), "OpenAPI schema must contain PauseReason");
         assert!(json.contains("MANUAL"), "OpenAPI schema must contain MANUAL");
         assert!(json.contains("NO_MONEY"), "OpenAPI schema must contain NO_MONEY");
+    }
+
+    #[test]
+    fn test_openapi_schema_contains_proxy_endpoint() {
+        let doc = ApiDoc::openapi();
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(json.contains("/api/v1/proxy/image"), "OpenAPI schema must contain /api/v1/proxy/image");
+        assert!(json.contains("ImageProxyParams"), "OpenAPI schema must contain ImageProxyParams");
     }
 }
