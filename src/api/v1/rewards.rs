@@ -286,6 +286,37 @@ pub async fn create_reward(
 
     let twitch_points_cost = (raw_cost.ceil() as u32).max(1);
 
+    let mut is_paused = body.is_paused;
+
+    if !is_paused && setting.pause_reward_if_no_money {
+        let max_price = (cheapest_item.price as i64)
+            + ((cheapest_item.price as i64 * body.permissible_market_price_deviation as i64) / 100);
+        let cost = market::minor_to_major(max_price, &currency);
+
+        match state.get_cached_or_fetch_balance(&auth.channel_id).await {
+            Ok(balance) => {
+                if balance.money < cost {
+                    tracing::info!(
+                        channel_id = %auth.channel_id,
+                        balance = balance.money,
+                        cost = cost,
+                        "Pausing newly created reward because broadcaster balance ({:.2}) is less than reward market cost ({:.2}) and pause_reward_if_no_money is enabled",
+                        balance.money,
+                        cost
+                    );
+                    is_paused = true;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    channel_id = %auth.channel_id,
+                    "Failed to retrieve market balance during reward creation"
+                );
+            }
+        }
+    }
+
     let reward_info = CreateCustomReward {
         title: body.twitch_title.clone(),
         cost: twitch_points_cost,
@@ -315,7 +346,7 @@ pub async fn create_reward(
     let twitch_reward_id = twitch_reward_info.id.parse::<Uuid>()
         .map_err(|_| ApiError::Internal { message: "Failed to parse twitch reward id as Uuid".into() })?;
 
-    if body.is_paused {
+    if is_paused {
         let broadcaster_id = auth.channel_id.clone();
         let bc_ref = broadcaster_id.clone();
         let state_clone = Arc::clone(&state);
@@ -348,7 +379,7 @@ pub async fn create_reward(
 
     let new_reward = crate::db::rewards::NewReward {
         twitch_id: twitch_reward_id,
-        is_paused: body.is_paused,
+        is_paused,
         streamer_id: auth.channel_id.clone(),
         market_item_name: body.market_item_name,
         twitch_title: body.twitch_title,
@@ -868,3 +899,71 @@ pub async fn batch_rewards(
 
     Ok(Json(serde_json::json!({ "affected": affected })))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_reward_balance_check_insufficient() {
+        let current_market_price = 3500i64; // in cents
+        let permissible_deviation = 10i32;
+        let currency = "RUB";
+
+        let max_price = current_market_price + ((current_market_price * permissible_deviation as i64) / 100);
+        let cost = market::minor_to_major(max_price, currency);
+
+        assert_eq!(cost, 38.5);
+
+        let balance = 20.0;
+        let pause_reward_if_no_money = true;
+        let mut is_paused = false;
+
+        if !is_paused && pause_reward_if_no_money && balance < cost {
+            is_paused = true;
+        }
+
+        assert!(is_paused);
+    }
+
+    #[test]
+    fn test_reward_balance_check_sufficient() {
+        let current_market_price = 3500i64;
+        let permissible_deviation = 10i32;
+        let currency = "RUB";
+
+        let max_price = current_market_price + ((current_market_price * permissible_deviation as i64) / 100);
+        let cost = market::minor_to_major(max_price, currency);
+
+        let balance = 100.0;
+        let pause_reward_if_no_money = true;
+        let mut is_paused = false;
+
+        if !is_paused && pause_reward_if_no_money && balance < cost {
+            is_paused = true;
+        }
+
+        assert!(!is_paused);
+    }
+
+    #[test]
+    fn test_reward_balance_check_disabled_setting() {
+        let current_market_price = 3500i64;
+        let permissible_deviation = 10i32;
+        let currency = "RUB";
+
+        let max_price = current_market_price + ((current_market_price * permissible_deviation as i64) / 100);
+        let cost = market::minor_to_major(max_price, currency);
+
+        let balance = 5.0; // insufficient
+        let pause_reward_if_no_money = false; // setting disabled
+        let mut is_paused = false;
+
+        if !is_paused && pause_reward_if_no_money && balance < cost {
+            is_paused = true;
+        }
+
+        assert!(!is_paused);
+    }
+}
+
