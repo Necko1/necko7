@@ -176,6 +176,20 @@ pub struct GetBuyInfoData {
     pub cancellation_reason: Option<String>,
 }
 
+impl GetBuyInfoData {
+    pub fn is_claimed(&self) -> bool {
+        self.settlement.is_some_and(|s| s > DateTime::UNIX_EPOCH) || self.stage == "2"
+    }
+
+    pub fn is_failed(&self) -> bool {
+        self.stage == "5" || self.causer.is_some()
+    }
+
+    pub fn has_active_trade(&self) -> bool {
+        self.receive_until.is_some_and(|r| r > DateTime::UNIX_EPOCH) && self.trade_id.is_some()
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct GetBuyInfoResponse {
     pub success: bool,
@@ -344,5 +358,26 @@ mod tests {
         assert!(!res.success);
         assert!(res.data.is_none());
         assert_eq!(res.error.as_deref(), Some("Order not found"));
+    }
+
+    #[test]
+    fn test_deserialize_get_buy_info_user_claimed_edge_case() {
+        let json = r#"{"success":true,"data":{"item_id":"11451620303","market_hash_name":"R8 Revolver | Mauve Aside (Field-Tested)","classid":"7993065983","instance":"8800025210","time":"1788535172","settlement":"1789142400","send_until":"1788535472","receive_until":"1788535256","stage":"1","causer":null,"cancellation_reason":null,"paid":0.54,"currency":"RUB","for":"1299088345","trade_id":0,"bot_id":null,"assetid":"53523211386"}}"#;
+        let res: GetBuyInfoResponse = serde_json::from_str(json).expect("should deserialize");
+        assert!(res.success);
+        let data = res.data.expect("data should be Some");
+        assert_eq!(data.trade_id, None);
+        assert!(data.is_claimed(), "Trade with settlement timestamp should be recognized as claimed");
+        assert!(!data.is_failed());
+    }
+
+    #[test]
+    fn test_get_buy_info_helpers_initial_order() {
+        let json = r#"{"success":true,"data":{"item_id":"1","market_hash_name":"item","classid":"1","instance":"1","time":"100","settlement":"0","send_until":"200","receive_until":"0","stage":"1","causer":null,"cancellation_reason":null,"paid":0.5,"currency":"RUB","for":null,"trade_id":0,"bot_id":null,"assetid":"1"}}"#;
+        let res: GetBuyInfoResponse = serde_json::from_str(json).unwrap();
+        let data = res.data.unwrap();
+        assert!(!data.is_claimed(), "settlement 0 must not be considered claimed");
+        assert!(!data.is_failed());
+        assert!(!data.has_active_trade());
     }
 }

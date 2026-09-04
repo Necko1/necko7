@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use std::time::Duration;
-use chrono::DateTime;
 use tokio::time::Interval;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -121,13 +120,30 @@ impl OrderWatcher {
     }
 
     async fn process_pending_stage(&mut self, current_trade: GetBuyInfoData) {
-        if current_trade.receive_until.is_none() {
+        // 1. If settlement is set or stage is 2, the trade was already accepted
+        // (fast accept by viewer or watcher resumed after restart). Jump straight to process_sent_stage.
+        if current_trade.is_claimed() {
+            self.stage = OrderStage::Sent;
+            info!(
+                redemption_id = %self.redemption.redemption_id,
+                user_login = %self.redemption.user_login,
+                "Trade was already claimed/settled while in Pending stage, transitioning to Claimed immediately"
+            );
+            self.process_sent_stage(current_trade).await;
+            return;
+        }
+
+        // 2. If trade was cancelled or failed on market:
+        if current_trade.is_failed() {
             self.process_not_claimed(current_trade).await;
             return;
         }
 
-        if current_trade.receive_until == Some(DateTime::UNIX_EPOCH)
-            || current_trade.trade_id.is_none() { return; }
+        // 3. Check if seller sent the Steam trade offer:
+        if !current_trade.has_active_trade() {
+            // Trade offer not yet sent by seller or trade_id not available, wait for next tick
+            return;
+        }
 
         self.stage = OrderStage::Sent;
         info!(
@@ -144,7 +160,7 @@ impl OrderWatcher {
 
         let remaining = current_trade.receive_until.unwrap().remaining_pretty();
         let tradeoffer = format!("https://steamcommunity.com/tradeoffer/{}/",
-                                 current_trade.trade_id.unwrap());
+                                 current_trade.trade_id.as_deref().unwrap_or(""));
 
         let msg = self.state.render_chat_message(
             &self.broadcaster_id,
@@ -175,12 +191,16 @@ impl OrderWatcher {
     }
 
     async fn process_sent_stage(&mut self, current_trade: GetBuyInfoData) {
-        if current_trade.settlement.is_none() {
+        // 1. If trade was cancelled or failed on market:
+        if current_trade.is_failed() {
             self.process_not_claimed(current_trade).await;
             return;
         }
 
-        if current_trade.settlement == Some(DateTime::UNIX_EPOCH) { return; }
+        // 2. Waiting for user to accept the trade offer
+        if !current_trade.is_claimed() {
+            return;
+        }
 
         self.stage = OrderStage::Claimed;
         info!(
@@ -250,7 +270,7 @@ impl OrderWatcher {
     }
 
     async fn process_not_claimed(&mut self, current_trade: GetBuyInfoData) {
-        if !current_trade.stage.eq("5") { // TRADE_STAGE_TIMED_OUT
+        if !current_trade.is_failed() {
             return;
         }
 
