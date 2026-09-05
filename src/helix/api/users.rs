@@ -1,9 +1,9 @@
 use crate::helix::error::{HelixError, HelixResult};
 use crate::helix::response::{parse_helix_error, ObjectResponse};
 use crate::helix::HelixClient;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserInfo {
     pub id: String,
     pub login: String,
@@ -38,6 +38,29 @@ impl HelixClient {
                 .ok_or_else(|| HelixError::Other(
                     "Could not find the user based on the provided token".to_string()
                 ));
+        }
+
+        Err(parse_helix_error(res).await)
+    }
+
+    /// Retrieve user information from Twitch Helix API by user ID.
+    pub async fn get_user_by_id(
+        &self,
+        user_id: &str,
+        token: &str,
+    ) -> HelixResult<Option<UserInfo>> {
+        let res = self
+            .http_client
+            .get("https://api.twitch.tv/helix/users")
+            .query(&[("id", user_id)])
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Client-Id", &self.client_id)
+            .send()
+            .await?;
+
+        if res.status().is_success() {
+            let res_list = res.json::<ObjectResponse<UserInfo>>().await?;
+            return Ok(res_list.data.into_iter().next());
         }
 
         Err(parse_helix_error(res).await)

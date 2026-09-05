@@ -107,6 +107,12 @@ pub struct UserStatsQuery {
 pub struct UserChatStatsResponse {
     /// Twitch user ID
     pub user_id: String,
+    /// Twitch user login (username)
+    pub user_login: Option<String>,
+    /// Twitch user display name
+    pub display_name: Option<String>,
+    /// Twitch user avatar image URL
+    pub profile_image_url: Option<String>,
     /// Total messages sent by user in this channel within the window
     pub message_count: i64,
     /// Total characters sent by user in this channel within the window
@@ -120,7 +126,7 @@ pub struct UserChatStatsResponse {
     path = "/api/v1/broadcasters/{channel_id}/chat/users/{user_id}/stats",
     tag = "Chat Analytics",
     summary = "Get user chat activity statistics",
-    description = "Returns the count of messages and characters sent by a specific user in this channel within an optional time window.",
+    description = "Returns the count of messages and characters sent by a specific user in this channel within an optional time window, along with their Twitch username and avatar URL.",
     params(
         ("channel_id" = String, Path, description = "Twitch channel ID"),
         ("user_id" = String, Path, description = "Twitch user ID"),
@@ -152,8 +158,23 @@ pub async fn get_user_chat_stats(
         since,
     ).await?;
 
+    let twitch_user = state.get_twitch_user_cached(&path.user_id).await;
+
+    let (user_login, display_name, profile_image_url) = if let Some(u) = twitch_user {
+        (Some(u.login.clone()), Some(u.display_name.clone()), Some(u.profile_image_url.clone()))
+    } else {
+        let fallback_login = match state.db.get_user_summary(&auth.channel_id, &path.user_id, None).await {
+            Ok(Some(s)) => Some(s.chatter_user_login),
+            _ => None,
+        };
+        (fallback_login, None, None)
+    };
+
     Ok(Json(UserChatStatsResponse {
         user_id: path.user_id,
+        user_login,
+        display_name,
+        profile_image_url,
         message_count,
         char_count,
         time_window_hours: query.time_window_hours,
@@ -326,4 +347,28 @@ pub async fn get_user_redemptions(
         offset,
         limit,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_user_chat_stats_response_serialization() {
+        let stats = UserChatStatsResponse {
+            user_id: "12345678".to_string(),
+            user_login: Some("cool_viewer".to_string()),
+            display_name: Some("Cool_Viewer".to_string()),
+            profile_image_url: Some("https://static-cdn.jtvnw.net/jtv_user_pictures/avatar.png".to_string()),
+            message_count: 42,
+            char_count: 512,
+            time_window_hours: Some(24),
+        };
+
+        let json = serde_json::to_string(&stats).unwrap();
+        assert!(json.contains("\"user_login\":\"cool_viewer\""));
+        assert!(json.contains("\"display_name\":\"Cool_Viewer\""));
+        assert!(json.contains("\"profile_image_url\":\"https://static-cdn.jtvnw.net/jtv_user_pictures/avatar.png\""));
+        assert!(json.contains("\"message_count\":42"));
+    }
 }

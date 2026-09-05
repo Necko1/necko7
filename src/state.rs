@@ -50,6 +50,7 @@ pub struct AppState {
     pub chat_messages: RwLock<HashMap<String, HashMap<String, String>>>,
     pub active_broadcaster_tasks: Mutex<HashMap<String, CancellationToken>>,
     pub chat_session_id: Arc<RwLock<Option<String>>>,
+    pub twitch_user_cache: RwLock<HashMap<String, (std::time::Instant, Arc<crate::helix::api::users::UserInfo>)>>,
 
     pub db: Db,
 
@@ -96,6 +97,7 @@ impl AppState {
             chat_messages: RwLock::new(chat_messages_map),
             active_broadcaster_tasks: Mutex::new(HashMap::new()),
             chat_session_id: Arc::new(RwLock::new(None)),
+            twitch_user_cache: RwLock::new(HashMap::new()),
             db,
             app_initialized: AtomicBool::new(app_initialized),
             shutdown_token: CancellationToken::new(),
@@ -590,6 +592,35 @@ impl AppState {
         }
 
         Ok(items)
+    }
+
+    /// Retrieve Twitch user info (login, display name, avatar) by user ID with a 10-minute cache.
+    pub async fn get_twitch_user_cached(&self, user_id: &str) -> Option<Arc<crate::helix::api::users::UserInfo>> {
+        {
+            let cache = self.twitch_user_cache.read();
+            if let Some((instant, info)) = cache.get(user_id) {
+                if instant.elapsed() < std::time::Duration::from_secs(600) {
+                    return Some(Arc::clone(info));
+                }
+            }
+        }
+
+        let user_id_owned = user_id.to_string();
+        let fetched = self.with_app_token(|token| {
+            let user_id = user_id_owned.clone();
+            async move {
+                self.helix_client.get_user_by_id(&user_id, &token).await
+            }
+        }).await.ok().flatten();
+
+        if let Some(user) = fetched {
+            let arc_user = Arc::new(user);
+            let mut cache = self.twitch_user_cache.write();
+            cache.insert(user_id.to_string(), (std::time::Instant::now(), Arc::clone(&arc_user)));
+            Some(arc_user)
+        } else {
+            None
+        }
     }
 }
 
