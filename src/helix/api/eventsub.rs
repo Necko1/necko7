@@ -24,6 +24,42 @@ impl HelixClient {
 
         Err(parse_helix_error(res).await)
     }
+
+    pub async fn create_chat_message_websocket_subscription(
+        &self,
+        broadcaster_user_id: &str,
+        bot_user_id: &str,
+        session_id: &str,
+        bot_user_token: &str,
+    ) -> HelixResult<()> {
+        let body = serde_json::json!({
+            "type": "channel.chat.message",
+            "version": "1",
+            "condition": {
+                "broadcaster_user_id": broadcaster_user_id,
+                "user_id": bot_user_id
+            },
+            "transport": {
+                "method": "websocket",
+                "session_id": session_id
+            }
+        });
+
+        let res = self
+            .http_client
+            .post("https://api.twitch.tv/helix/eventsub/subscriptions")
+            .header("Authorization", format!("Bearer {}", bot_user_token))
+            .header("Client-Id", &self.client_id)
+            .json(&body)
+            .send()
+            .await?;
+
+        if res.status().is_success() || res.status() == reqwest::StatusCode::CONFLICT {
+            return Ok(());
+        }
+
+        Err(parse_helix_error(res).await)
+    }
 }
 
 pub fn format_subscription(

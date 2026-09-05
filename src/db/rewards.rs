@@ -81,6 +81,20 @@ pub enum PriceStrategy {
     Max,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema, sqlx::Type)]
+#[sqlx(type_name = "VARCHAR", rename_all = "SCREAMING_SNAKE_CASE")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ChatLogicalOperator {
+    And,
+    Or,
+}
+
+impl Default for ChatLogicalOperator {
+    fn default() -> Self {
+        Self::And
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct FilterConfig {
     pub min_price: f64,
@@ -129,6 +143,11 @@ pub struct Reward {
     pub currency: String,
     pub min_market_price: Option<i32>,
     pub max_market_price: Option<i32>,
+    pub chat_min_messages: Option<i32>,
+    pub chat_min_characters: Option<i32>,
+    pub chat_time_window_hours: Option<i32>,
+    pub chat_logical_operator: Option<ChatLogicalOperator>,
+    pub refund_if_chat_req_failed: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -157,6 +176,11 @@ pub struct NewReward {
     pub currency: String,
     pub min_market_price: Option<i32>,
     pub max_market_price: Option<i32>,
+    pub chat_min_messages: Option<i32>,
+    pub chat_min_characters: Option<i32>,
+    pub chat_time_window_hours: Option<i32>,
+    pub chat_logical_operator: Option<ChatLogicalOperator>,
+    pub refund_if_chat_req_failed: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -182,12 +206,17 @@ pub struct UpdateReward {
     pub currency: Option<String>,
     pub min_market_price: Option<i32>,
     pub max_market_price: Option<i32>,
+    pub chat_min_messages: Option<i32>,
+    pub chat_min_characters: Option<i32>,
+    pub chat_time_window_hours: Option<i32>,
+    pub chat_logical_operator: Option<ChatLogicalOperator>,
+    pub refund_if_chat_req_failed: Option<bool>,
 }
 
 macro_rules! reward_select {
     ($tail:expr) => {
         concat!(
-            "SELECT twitch_id, is_paused, pause_reason, is_deleted, streamer_id, reward_type, pricing_mode, price_strategy, market_item_name, filter_config, pool_items, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, currency, min_market_price, max_market_price, created_at, updated_at FROM rewards ",
+            "SELECT twitch_id, is_paused, pause_reason, is_deleted, streamer_id, reward_type, pricing_mode, price_strategy, market_item_name, filter_config, pool_items, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, currency, min_market_price, max_market_price, chat_min_messages, chat_min_characters, chat_time_window_hours, chat_logical_operator, refund_if_chat_req_failed, created_at, updated_at FROM rewards ",
             $tail
         )
     };
@@ -197,7 +226,7 @@ macro_rules! reward_insert_returning {
     ($insert_stmt:expr) => {
         concat!(
             $insert_stmt,
-            " RETURNING twitch_id, is_paused, pause_reason, is_deleted, streamer_id, reward_type, pricing_mode, price_strategy, market_item_name, filter_config, pool_items, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, currency, min_market_price, max_market_price, created_at, updated_at"
+            " RETURNING twitch_id, is_paused, pause_reason, is_deleted, streamer_id, reward_type, pricing_mode, price_strategy, market_item_name, filter_config, pool_items, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, currency, min_market_price, max_market_price, chat_min_messages, chat_min_characters, chat_time_window_hours, chat_logical_operator, refund_if_chat_req_failed, created_at, updated_at"
         )
     };
 }
@@ -248,7 +277,7 @@ impl Db {
 
     pub async fn create_reward(&self, new: &NewReward) -> DbResult<Reward> {
         let reward = sqlx::query_as::<_, Reward>(reward_insert_returning!(
-            "INSERT INTO rewards (twitch_id, is_paused, pause_reason, is_deleted, streamer_id, reward_type, pricing_mode, price_strategy, market_item_name, filter_config, pool_items, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, currency, min_market_price, max_market_price, created_at, updated_at) VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, NOW(), NOW())"
+            "INSERT INTO rewards (twitch_id, is_paused, pause_reason, is_deleted, streamer_id, reward_type, pricing_mode, price_strategy, market_item_name, filter_config, pool_items, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, currency, min_market_price, max_market_price, chat_min_messages, chat_min_characters, chat_time_window_hours, chat_logical_operator, refund_if_chat_req_failed, created_at, updated_at) VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, NOW(), NOW())"
         ))
         .bind(new.twitch_id)
         .bind(new.is_paused)
@@ -272,6 +301,11 @@ impl Db {
         .bind(&new.currency)
         .bind(new.min_market_price)
         .bind(new.max_market_price)
+        .bind(new.chat_min_messages)
+        .bind(new.chat_min_characters)
+        .bind(new.chat_time_window_hours)
+        .bind(new.chat_logical_operator)
+        .bind(new.refund_if_chat_req_failed)
         .fetch_one(&self.pool)
         .await?;
         Ok(reward)
@@ -279,7 +313,7 @@ impl Db {
 
     pub async fn upsert_reward(&self, new: &NewReward) -> DbResult<Reward> {
         let reward = sqlx::query_as::<_, Reward>(reward_insert_returning!(
-            "INSERT INTO rewards (twitch_id, is_paused, pause_reason, is_deleted, streamer_id, reward_type, pricing_mode, price_strategy, market_item_name, filter_config, pool_items, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, currency, min_market_price, max_market_price, created_at, updated_at) VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, NOW(), NOW()) ON CONFLICT (twitch_id) DO UPDATE SET is_paused = EXCLUDED.is_paused, pause_reason = EXCLUDED.pause_reason, is_deleted = FALSE, streamer_id = EXCLUDED.streamer_id, reward_type = EXCLUDED.reward_type, pricing_mode = EXCLUDED.pricing_mode, price_strategy = EXCLUDED.price_strategy, market_item_name = EXCLUDED.market_item_name, filter_config = EXCLUDED.filter_config, pool_items = EXCLUDED.pool_items, twitch_title = EXCLUDED.twitch_title, twitch_description = EXCLUDED.twitch_description, current_market_price = EXCLUDED.current_market_price, permissible_market_price_deviation = EXCLUDED.permissible_market_price_deviation, twitch_price_markup_percentage = EXCLUDED.twitch_price_markup_percentage, global_cooldown_seconds = EXCLUDED.global_cooldown_seconds, max_redemptions_per_stream = EXCLUDED.max_redemptions_per_stream, max_redemptions_per_user_per_stream = EXCLUDED.max_redemptions_per_user_per_stream, market_autobuy = EXCLUDED.market_autobuy, currency = EXCLUDED.currency, min_market_price = EXCLUDED.min_market_price, max_market_price = EXCLUDED.max_market_price, updated_at = NOW()"
+            "INSERT INTO rewards (twitch_id, is_paused, pause_reason, is_deleted, streamer_id, reward_type, pricing_mode, price_strategy, market_item_name, filter_config, pool_items, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, currency, min_market_price, max_market_price, chat_min_messages, chat_min_characters, chat_time_window_hours, chat_logical_operator, refund_if_chat_req_failed, created_at, updated_at) VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, NOW(), NOW()) ON CONFLICT (twitch_id) DO UPDATE SET is_paused = EXCLUDED.is_paused, pause_reason = EXCLUDED.pause_reason, is_deleted = FALSE, streamer_id = EXCLUDED.streamer_id, reward_type = EXCLUDED.reward_type, pricing_mode = EXCLUDED.pricing_mode, price_strategy = EXCLUDED.price_strategy, market_item_name = EXCLUDED.market_item_name, filter_config = EXCLUDED.filter_config, pool_items = EXCLUDED.pool_items, twitch_title = EXCLUDED.twitch_title, twitch_description = EXCLUDED.twitch_description, current_market_price = EXCLUDED.current_market_price, permissible_market_price_deviation = EXCLUDED.permissible_market_price_deviation, twitch_price_markup_percentage = EXCLUDED.twitch_price_markup_percentage, global_cooldown_seconds = EXCLUDED.global_cooldown_seconds, max_redemptions_per_stream = EXCLUDED.max_redemptions_per_stream, max_redemptions_per_user_per_stream = EXCLUDED.max_redemptions_per_user_per_stream, market_autobuy = EXCLUDED.market_autobuy, currency = EXCLUDED.currency, min_market_price = EXCLUDED.min_market_price, max_market_price = EXCLUDED.max_market_price, chat_min_messages = EXCLUDED.chat_min_messages, chat_min_characters = EXCLUDED.chat_min_characters, chat_time_window_hours = EXCLUDED.chat_time_window_hours, chat_logical_operator = EXCLUDED.chat_logical_operator, refund_if_chat_req_failed = EXCLUDED.refund_if_chat_req_failed, updated_at = NOW()"
         ))
             .bind(new.twitch_id)
             .bind(new.is_paused)
@@ -303,6 +337,11 @@ impl Db {
             .bind(&new.currency)
             .bind(new.min_market_price)
             .bind(new.max_market_price)
+            .bind(new.chat_min_messages)
+            .bind(new.chat_min_characters)
+            .bind(new.chat_time_window_hours)
+            .bind(new.chat_logical_operator)
+            .bind(new.refund_if_chat_req_failed)
             .fetch_one(&self.pool)
             .await?;
         Ok(reward)
@@ -310,7 +349,7 @@ impl Db {
 
     pub async fn update_reward(&self, twitch_id: Uuid, patch: &UpdateReward) -> DbResult<()> {
         sqlx::query(
-            "UPDATE rewards SET is_paused = COALESCE($2, is_paused), pause_reason = CASE WHEN $2 = FALSE THEN NULL WHEN $15::varchar IS NOT NULL THEN $15 ELSE pause_reason END, is_deleted = COALESCE($3, is_deleted), market_item_name = COALESCE($4, market_item_name), twitch_title = COALESCE($5, twitch_title), twitch_description = COALESCE($6, twitch_description), current_market_price = COALESCE($7, current_market_price), permissible_market_price_deviation = COALESCE($8, permissible_market_price_deviation), twitch_price_markup_percentage = COALESCE($9, twitch_price_markup_percentage), global_cooldown_seconds = COALESCE($10, global_cooldown_seconds), max_redemptions_per_stream = COALESCE($11, max_redemptions_per_stream), max_redemptions_per_user_per_stream = COALESCE($12, max_redemptions_per_user_per_stream), market_autobuy = COALESCE($13, market_autobuy), currency = COALESCE($14, currency), reward_type = COALESCE($16, reward_type), pricing_mode = COALESCE($17, pricing_mode), price_strategy = COALESCE($18, price_strategy), filter_config = COALESCE($19, filter_config), pool_items = COALESCE($20, pool_items), min_market_price = COALESCE($21, min_market_price), max_market_price = COALESCE($22, max_market_price), updated_at = NOW() WHERE twitch_id = $1"
+            "UPDATE rewards SET is_paused = COALESCE($2, is_paused), pause_reason = CASE WHEN $2 = FALSE THEN NULL WHEN $15::varchar IS NOT NULL THEN $15 ELSE pause_reason END, is_deleted = COALESCE($3, is_deleted), market_item_name = COALESCE($4, market_item_name), twitch_title = COALESCE($5, twitch_title), twitch_description = COALESCE($6, twitch_description), current_market_price = COALESCE($7, current_market_price), permissible_market_price_deviation = COALESCE($8, permissible_market_price_deviation), twitch_price_markup_percentage = COALESCE($9, twitch_price_markup_percentage), global_cooldown_seconds = COALESCE($10, global_cooldown_seconds), max_redemptions_per_stream = COALESCE($11, max_redemptions_per_stream), max_redemptions_per_user_per_stream = COALESCE($12, max_redemptions_per_user_per_stream), market_autobuy = COALESCE($13, market_autobuy), currency = COALESCE($14, currency), reward_type = COALESCE($16, reward_type), pricing_mode = COALESCE($17, pricing_mode), price_strategy = COALESCE($18, price_strategy), filter_config = COALESCE($19, filter_config), pool_items = COALESCE($20, pool_items), min_market_price = COALESCE($21, min_market_price), max_market_price = COALESCE($22, max_market_price), chat_min_messages = COALESCE($23, chat_min_messages), chat_min_characters = COALESCE($24, chat_min_characters), chat_time_window_hours = COALESCE($25, chat_time_window_hours), chat_logical_operator = COALESCE($26, chat_logical_operator), refund_if_chat_req_failed = COALESCE($27, refund_if_chat_req_failed), updated_at = NOW() WHERE twitch_id = $1"
         )
         .bind(twitch_id)
         .bind(patch.is_paused)
@@ -334,6 +373,11 @@ impl Db {
         .bind(&patch.pool_items)
         .bind(patch.min_market_price)
         .bind(patch.max_market_price)
+        .bind(patch.chat_min_messages)
+        .bind(patch.chat_min_characters)
+        .bind(patch.chat_time_window_hours)
+        .bind(patch.chat_logical_operator)
+        .bind(patch.refund_if_chat_req_failed)
         .execute(&self.pool)
         .await?;
         Ok(())

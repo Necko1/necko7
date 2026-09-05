@@ -27,6 +27,8 @@ pub struct RedemptionResponse {
     pub user_id: String,
     /// Twitch login name of the user
     pub user_login: String,
+    /// Steam trade link provided by the user
+    pub user_trade_link: String,
     /// Twitch channel points spent
     pub twitch_points_cost: i64,
     /// Market price paid in cents (if any)
@@ -56,6 +58,7 @@ impl From<Redemption> for RedemptionResponse {
             twitch_reward_id: r.twitch_reward_id,
             user_id: r.user_id,
             user_login: r.user_login,
+            user_trade_link: r.user_trade_link,
             twitch_points_cost: r.twitch_points_cost,
             market_paid_price: r.market_paid_price,
             currency: r.currency,
@@ -88,6 +91,8 @@ pub struct ListRedemptionsQuery {
     pub status: Option<String>,
     /// Filter by reward UUID
     pub reward_id: Option<Uuid>,
+    /// Filter by Twitch user ID
+    pub user_id: Option<String>,
     /// Number of records to skip (default: 0)
     pub offset: Option<i64>,
     /// Maximum number of records to return (default: 50, max: 100)
@@ -99,7 +104,7 @@ pub struct ListRedemptionsQuery {
     path = "/api/v1/broadcasters/{channel_id}/redemptions",
     tag = "Redemptions",
     summary = "List redemptions",
-    description = "Returns redemptions for a specific channel with optional filtering by status and reward. Results are paginated.",
+    description = "Returns redemptions for a specific channel with optional filtering by status, reward, and user ID. Results are paginated.",
     params(
         ("channel_id" = String, Path, description = "Twitch channel ID"),
         ListRedemptionsQuery,
@@ -113,6 +118,7 @@ pub struct ListRedemptionsQuery {
                         "twitch_reward_id": "550e8400-e29b-41d4-a716-446655440000",
                         "user_id": "987654321",
                         "user_login": "some_viewer",
+                        "user_trade_link": "https://steamcommunity.com/tradeoffer/new/?partner=123456&token=abcdef",
                         "twitch_points_cost": 5000,
                         "market_paid_price": 3500,
                         "currency": "RUB",
@@ -149,6 +155,7 @@ pub async fn list_redemptions(
         &auth.channel_id,
         query.status.as_deref(),
         query.reward_id,
+        query.user_id.as_deref(),
         offset,
         limit,
     ).await?;
@@ -157,6 +164,7 @@ pub async fn list_redemptions(
         &auth.channel_id,
         query.status.as_deref(),
         query.reward_id,
+        query.user_id.as_deref(),
     ).await?;
 
     Ok(Json(PaginatedRedemptionsResponse {
@@ -530,4 +538,37 @@ pub async fn penalty_redemption(
     );
 
     Ok(Json(serde_json::json!({ "status": "penalty" })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    #[test]
+    fn test_redemption_response_contains_user_trade_link() {
+        let redemption = Redemption {
+            twitch_redemption_id: Uuid::new_v4(),
+            twitch_reward_id: Uuid::new_v4(),
+            user_id: "12345".to_string(),
+            user_login: "streamer_fan".to_string(),
+            user_trade_link: "https://steamcommunity.com/tradeoffer/new/?partner=123&token=abc".to_string(),
+            twitch_points_cost: 5000,
+            market_paid_price: Some(150),
+            currency: "USD".to_string(),
+            status: RedemptionStatus::Completed,
+            fail_cause: None,
+            fail_description: None,
+            retry_count: 0,
+            market_item_name: Some("AK-47 | Safari Mesh (Field-Tested)".to_string()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let response: RedemptionResponse = redemption.into();
+        assert_eq!(response.user_trade_link, "https://steamcommunity.com/tradeoffer/new/?partner=123&token=abc");
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"user_trade_link\":\"https://steamcommunity.com/tradeoffer/new/?partner=123&token=abc\""));
+    }
 }

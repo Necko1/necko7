@@ -7,6 +7,7 @@ pub mod error;
 pub mod users;
 pub mod sessions;
 pub mod channel_permissions;
+pub mod chat_messages;
 
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use tracing::info;

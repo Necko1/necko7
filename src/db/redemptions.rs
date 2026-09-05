@@ -244,6 +244,7 @@ impl Db {
         broadcaster_id: &str,
         status_filter: Option<&str>,
         reward_id_filter: Option<Uuid>,
+        user_id_filter: Option<&str>,
         offset: i64,
         limit: i64,
     ) -> DbResult<Vec<Redemption>> {
@@ -254,12 +255,14 @@ impl Db {
              WHERE rw.streamer_id = $1
              AND ($2::VARCHAR IS NULL OR UPPER(r.status) = UPPER($2))
              AND ($3::UUID IS NULL OR r.twitch_reward_id = $3)
+             AND ($4::VARCHAR IS NULL OR r.user_id = $4)
              ORDER BY r.created_at DESC
-             OFFSET $4 LIMIT $5"
+             OFFSET $5 LIMIT $6"
         )
         .bind(broadcaster_id)
         .bind(status_filter)
         .bind(reward_id_filter)
+        .bind(user_id_filter)
         .bind(offset)
         .bind(limit)
         .fetch_all(&self.pool)
@@ -272,6 +275,7 @@ impl Db {
         broadcaster_id: &str,
         status_filter: Option<&str>,
         reward_id_filter: Option<Uuid>,
+        user_id_filter: Option<&str>,
     ) -> DbResult<i64> {
         let count = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*)::BIGINT
@@ -279,11 +283,13 @@ impl Db {
              INNER JOIN rewards rw ON r.twitch_reward_id = rw.twitch_id
              WHERE rw.streamer_id = $1
              AND ($2::VARCHAR IS NULL OR UPPER(r.status) = UPPER($2))
-             AND ($3::UUID IS NULL OR r.twitch_reward_id = $3)"
+             AND ($3::UUID IS NULL OR r.twitch_reward_id = $3)
+             AND ($4::VARCHAR IS NULL OR r.user_id = $4)"
         )
         .bind(broadcaster_id)
         .bind(status_filter)
         .bind(reward_id_filter)
+        .bind(user_id_filter)
         .fetch_one(&self.pool)
         .await?;
         Ok(count)

@@ -49,6 +49,7 @@ pub struct AppState {
     pub market_prices: RwLock<HashMap<String, (std::time::Instant, Arc<Vec<crate::steam::market::prices::MarketPriceItem>>)>>,
     pub chat_messages: RwLock<HashMap<String, HashMap<String, String>>>,
     pub active_broadcaster_tasks: Mutex<HashMap<String, CancellationToken>>,
+    pub chat_session_id: Arc<RwLock<Option<String>>>,
 
     pub db: Db,
 
@@ -94,6 +95,7 @@ impl AppState {
             market_prices: RwLock::new(HashMap::new()),
             chat_messages: RwLock::new(chat_messages_map),
             active_broadcaster_tasks: Mutex::new(HashMap::new()),
+            chat_session_id: Arc::new(RwLock::new(None)),
             db,
             app_initialized: AtomicBool::new(app_initialized),
             shutdown_token: CancellationToken::new(),
@@ -276,6 +278,36 @@ impl AppState {
             let body = body.clone();
             async move {
                 self.helix_client.create_subscription(body, &token).await
+            }
+        }).await
+    }
+
+    pub async fn subscribe_broadcaster_chat_ws(&self, broadcaster_id: &str) -> AppResult<()> {
+        let session_id = match self.chat_session_id.read().clone() {
+            Some(s) => s,
+            None => return Ok(()), // WebSocket is not currently connected; will subscribe on welcome
+        };
+
+        let bot_id = {
+            let guard = self.bot_info.read();
+            guard.as_ref().map(|b| b.user_id.clone()).ok_or("The bot is not initialized")?
+        };
+
+        let bc_id = broadcaster_id.to_string();
+        let s_id = session_id.clone();
+        let b_id = bot_id.clone();
+
+        self.with_bot_user_token(|token| {
+            let bc_id = bc_id.clone();
+            let b_id = b_id.clone();
+            let s_id = s_id.clone();
+            async move {
+                self.helix_client.create_chat_message_websocket_subscription(
+                    &bc_id,
+                    &b_id,
+                    &s_id,
+                    &token,
+                ).await
             }
         }).await
     }

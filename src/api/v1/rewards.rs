@@ -69,6 +69,16 @@ pub struct RewardResponse {
     pub min_market_price: Option<i32>,
     /// Optional maximum allowed market price in cents
     pub max_market_price: Option<i32>,
+    /// Optional minimum chat messages required in the time window
+    pub chat_min_messages: Option<i32>,
+    /// Optional minimum chat characters required in the time window
+    pub chat_min_characters: Option<i32>,
+    /// Time window in hours to evaluate chat requirements
+    pub chat_time_window_hours: Option<i32>,
+    /// Logical operator between messages and characters criteria ("AND", "OR")
+    pub chat_logical_operator: Option<crate::db::rewards::ChatLogicalOperator>,
+    /// Whether channel points are refunded if chat requirements are not met
+    pub refund_if_chat_req_failed: bool,
     /// Reward creation timestamp
     pub created_at: chrono::DateTime<Utc>,
     /// Reward last update timestamp
@@ -101,6 +111,11 @@ impl From<Reward> for RewardResponse {
             currency: r.currency,
             min_market_price: r.min_market_price,
             max_market_price: r.max_market_price,
+            chat_min_messages: r.chat_min_messages,
+            chat_min_characters: r.chat_min_characters,
+            chat_time_window_hours: r.chat_time_window_hours,
+            chat_logical_operator: r.chat_logical_operator,
+            refund_if_chat_req_failed: r.refund_if_chat_req_failed,
             created_at: r.created_at,
             updated_at: r.updated_at,
         }
@@ -215,6 +230,21 @@ pub struct CreateRewardBody {
     pub min_market_price: Option<i32>,
     /// Optional maximum allowed market price in cents (auto-pauses reward if above)
     pub max_market_price: Option<i32>,
+    /// Optional minimum chat messages required in the time window
+    pub chat_min_messages: Option<i32>,
+    /// Optional minimum chat characters required in the time window
+    pub chat_min_characters: Option<i32>,
+    /// Time window in hours for chat requirement (default: 24)
+    pub chat_time_window_hours: Option<i32>,
+    /// Logical operator for chat conditions (AND / OR)
+    pub chat_logical_operator: Option<crate::db::rewards::ChatLogicalOperator>,
+    /// Whether channel points are refunded if viewer does not meet chat requirements (default: true)
+    #[serde(default = "default_true")]
+    pub refund_if_chat_req_failed: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[utoipa::path(
@@ -650,6 +680,11 @@ pub async fn create_reward(
         currency,
         min_market_price: body.min_market_price,
         max_market_price: body.max_market_price,
+        chat_min_messages: body.chat_min_messages,
+        chat_min_characters: body.chat_min_characters,
+        chat_time_window_hours: body.chat_time_window_hours,
+        chat_logical_operator: body.chat_logical_operator,
+        refund_if_chat_req_failed: body.refund_if_chat_req_failed,
     };
 
     let reward = state.db.create_reward(&new_reward).await?;
@@ -710,6 +745,16 @@ pub struct UpdateRewardBody {
     pub min_market_price: Option<i32>,
     /// Optional maximum allowed market price in cents (auto-pauses reward if above)
     pub max_market_price: Option<i32>,
+    /// Optional minimum chat messages required in the time window
+    pub chat_min_messages: Option<i32>,
+    /// Optional minimum chat characters required in the time window
+    pub chat_min_characters: Option<i32>,
+    /// Time window in hours for chat requirement
+    pub chat_time_window_hours: Option<i32>,
+    /// Logical operator for chat conditions (AND / OR)
+    pub chat_logical_operator: Option<crate::db::rewards::ChatLogicalOperator>,
+    /// Whether channel points are refunded if viewer does not meet chat requirements
+    pub refund_if_chat_req_failed: Option<bool>,
 }
 
 #[utoipa::path(
@@ -954,6 +999,11 @@ pub async fn update_reward(
         currency: None,
         min_market_price: body.min_market_price,
         max_market_price: body.max_market_price,
+        chat_min_messages: body.chat_min_messages,
+        chat_min_characters: body.chat_min_characters,
+        chat_time_window_hours: body.chat_time_window_hours,
+        chat_logical_operator: body.chat_logical_operator,
+        refund_if_chat_req_failed: body.refund_if_chat_req_failed,
     };
 
     state.db.update_reward(reward_id, &patch).await?;
@@ -1664,6 +1714,47 @@ mod tests {
         assert_eq!(parsed_update.min_market_price, Some(1500));
         assert_eq!(parsed_update.max_market_price, Some(6000));
         assert_eq!(parsed_update.pause_reason, Some(crate::db::rewards::PauseReason::PriceLimit));
+    }
+
+    #[test]
+    fn test_create_and_update_reward_body_with_chat_requirements() {
+        let json_create = r#"{
+            "twitch_title": "VIP Skin",
+            "twitch_description": "Requires active chatters",
+            "market_item_name": "AK-47 | Redline (Field-Tested)",
+            "reward_type": "FIXED",
+            "pricing_mode": "MANUAL",
+            "manual_twitch_points": 50000,
+            "chat_min_messages": 50,
+            "chat_min_characters": 500,
+            "chat_time_window_hours": 72,
+            "chat_logical_operator": "OR",
+            "refund_if_chat_req_failed": false,
+            "permissible_market_price_deviation": 10,
+            "twitch_price_markup_percentage": 0,
+            "global_cooldown_seconds": 0,
+            "max_redemptions_per_stream": 0,
+            "max_redemptions_per_user_per_stream": 0,
+            "market_autobuy": true,
+            "is_paused": false
+        }"#;
+
+        let parsed_create: CreateRewardBody = serde_json::from_str(json_create).unwrap();
+        assert_eq!(parsed_create.chat_min_messages, Some(50));
+        assert_eq!(parsed_create.chat_min_characters, Some(500));
+        assert_eq!(parsed_create.chat_time_window_hours, Some(72));
+        assert_eq!(parsed_create.chat_logical_operator, Some(crate::db::rewards::ChatLogicalOperator::Or));
+        assert_eq!(parsed_create.refund_if_chat_req_failed, false);
+
+        let json_update = r#"{
+            "chat_min_messages": 100,
+            "chat_logical_operator": "AND",
+            "refund_if_chat_req_failed": true
+        }"#;
+        let parsed_update: UpdateRewardBody = serde_json::from_str(json_update).unwrap();
+        assert_eq!(parsed_update.chat_min_messages, Some(100));
+        assert_eq!(parsed_update.chat_logical_operator, Some(crate::db::rewards::ChatLogicalOperator::And));
+        assert_eq!(parsed_update.refund_if_chat_req_failed, Some(true));
     }
 }
 

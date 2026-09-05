@@ -19,7 +19,7 @@ use crate::db::sessions::NewSession;
 use crate::db::users::NewUser;
 
 pub const STREAMER_AUTH_SCOPES: &str = "channel:read:redemptions channel:manage:redemptions channel:bot";
-pub const BOT_AUTH_SCOPES: &str = "user:write:chat user:bot";
+pub const BOT_AUTH_SCOPES: &str = "user:write:chat user:read:chat user:bot";
 
 #[derive(Serialize, ToSchema)]
 pub struct LogoutResponse {
@@ -41,7 +41,7 @@ pub struct AuthQuery {
     path = "/api/v1/auth/init/bot",
     tag = "Auth",
     summary = "First-time setup: Authorize Bot account",
-    description = "One-time setup endpoint to authorize the dedicated Twitch Bot account (`user:write:chat user:bot`). Navigates the browser to Twitch OAuth. Accessible only before the bot account is initialized in the database. Once authorized, all other protected API routes unlock.",
+    description = "One-time setup endpoint to authorize the dedicated Twitch Bot account (`user:write:chat user:read:chat user:bot`). Navigates the browser to Twitch OAuth. Accessible only before the bot account is initialized in the database. Once authorized, all other protected API routes unlock.",
     responses(
         (status = 307, description = "Redirect to Twitch OAuth authorize URL"),
         (status = 404, description = "Bot account is already initialized"),

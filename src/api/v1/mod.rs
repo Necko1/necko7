@@ -5,6 +5,7 @@ pub mod rewards;
 pub mod redemptions;
 pub mod stats;
 pub mod users;
+pub mod chat_stats;
 
 use axum::Router;
 use axum::routing::{get, post, delete, put};
@@ -43,6 +44,11 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         redemptions::penalty_redemption,
         stats::get_stats,
         proxy::image_proxy,
+        chat_stats::get_chat_leaderboard,
+        chat_stats::get_user_chat_stats,
+        chat_stats::get_user_chat_summary,
+        chat_stats::get_user_chat_messages,
+        chat_stats::get_user_redemptions,
     ),
     components(schemas(
         crate::api::auth::LogoutResponse,
@@ -68,6 +74,17 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         stats::StatsResponse,
         stats::StatsQuery,
         proxy::ImageProxyParams,
+        chat_stats::PaginatedLeaderboardResponse,
+        chat_stats::LeaderboardQuery,
+        chat_stats::UserChatStatsResponse,
+        chat_stats::UserStatsQuery,
+        chat_stats::PaginatedUserMessagesResponse,
+        chat_stats::UserMessagesQuery,
+        chat_stats::UserRedemptionsQuery,
+        crate::db::chat_messages::LeaderboardUserItem,
+        crate::db::chat_messages::UserChatSummary,
+        crate::db::chat_messages::ChatMessage,
+        crate::db::rewards::ChatLogicalOperator,
         ErrorBody,
         ErrorDetail,
         crate::db::channel_permissions::ChannelRole,
@@ -88,6 +105,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         (name = "Rewards", description = "Channel point rewards CRUD and batch operations"),
         (name = "Redemptions", description = "Redemption tracking and actions (retry, refund, penalty)"),
         (name = "Stats", description = "Redemption statistics and analytics"),
+        (name = "Chat Analytics", description = "Channel chat message analytics, leaderboards, and user activity"),
         (name = "Proxy", description = "Image proxy and caching to bypass CORS restrictions"),
     ),
     modifiers(&SecurityAddon),
@@ -130,6 +148,11 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/broadcasters/{channel_id}/redemptions/{redemption_id}/refund", post(redemptions::refund_redemption))
         .route("/broadcasters/{channel_id}/redemptions/{redemption_id}/penalty", post(redemptions::penalty_redemption))
         .route("/broadcasters/{channel_id}/stats", get(stats::get_stats))
+        .route("/broadcasters/{channel_id}/chat/leaderboard", get(chat_stats::get_chat_leaderboard))
+        .route("/broadcasters/{channel_id}/chat/users/{user_id}/stats", get(chat_stats::get_user_chat_stats))
+        .route("/broadcasters/{channel_id}/chat/users/{user_id}/summary", get(chat_stats::get_user_chat_summary))
+        .route("/broadcasters/{channel_id}/chat/users/{user_id}/messages", get(chat_stats::get_user_chat_messages))
+        .route("/broadcasters/{channel_id}/chat/users/{user_id}/redemptions", get(chat_stats::get_user_redemptions))
         .route("/proxy/image", get(proxy::image_proxy))
 }
 
@@ -166,5 +189,15 @@ mod tests {
         assert!(json.contains("PoolItemConfig"), "OpenAPI schema must contain PoolItemConfig");
         assert!(json.contains("PreviewFilterResponse"), "OpenAPI schema must contain PreviewFilterResponse");
         assert!(json.contains("/api/v1/broadcasters/{channel_id}/rewards/preview-filter"), "OpenAPI schema must contain preview-filter endpoint");
+    }
+
+    #[test]
+    fn test_openapi_schema_contains_chat_analytics() {
+        let doc = ApiDoc::openapi();
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(json.contains("ChatLogicalOperator"), "OpenAPI schema must contain ChatLogicalOperator");
+        assert!(json.contains("LeaderboardUserItem"), "OpenAPI schema must contain LeaderboardUserItem");
+        assert!(json.contains("PaginatedLeaderboardResponse"), "OpenAPI schema must contain PaginatedLeaderboardResponse");
+        assert!(json.contains("/api/v1/broadcasters/{channel_id}/chat/leaderboard"), "OpenAPI schema must contain leaderboard route");
     }
 }
