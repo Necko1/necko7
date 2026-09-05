@@ -105,7 +105,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
     Router::new()
         .nest("/api/v1", api_v1)
-        .route("/v1/proxy/image", get(v1::proxy::image_proxy))
         .merge(swagger)
         .layer(middleware::from_fn(request_logger_middleware))
         .layer(cors)

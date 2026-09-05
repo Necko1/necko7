@@ -7,7 +7,8 @@ use crate::messages::{
     MSG_ORDER_FAILED_NO_MONEY_PENALTY, MSG_ORDER_FAILED_NO_MONEY_REFUND,
     MSG_ORDER_FAILED_FILTER_EXHAUSTED, MSG_TRADE_LINK_INVALID,
 };
-use crate::db::rewards::RewardType;
+use crate::db::rewards::{PauseReason, RewardType};
+use crate::helix::api::custom_rewards::model::UpdateCustomReward;
 use crate::processor::model::EventSubNotification;
 use crate::processor::order_watcher::{OrderWatcher, WatcherRedemptionData};
 use crate::state::AppState;
@@ -336,6 +337,88 @@ pub async fn process_redemption(
             let max_price_i64 = (reward_data.current_market_price as i64)
                 + ((reward_data.current_market_price as i64 * reward_data.permissible_market_price_deviation as i64) / 100);
             let max_price = max_price_i64.min(i32::MAX as i64) as i32;
+
+            if let Some(min_p) = reward_data.min_market_price {
+                if reward_data.current_market_price < min_p {
+                    warn!(
+                        redemption_id = %redemption_id,
+                        price = reward_data.current_market_price,
+                        min = min_p,
+                        "Redemption cancelled: current market price is below configured min_market_price"
+                    );
+
+                    let state_c = state.clone();
+                    let bc_id = broadcaster_user_id.clone();
+                    let r_id = reward_id;
+                    state.spawn_task(async move {
+                        let r_str = r_id.to_string();
+                        let s_for_token = state_c.clone();
+                        let b_for_closure = bc_id.clone();
+                        let _ = state_c.with_broadcaster_token(&bc_id, move |token| {
+                            let b = b_for_closure.clone();
+                            let r = r_str.clone();
+                            let s = s_for_token.clone();
+                            async move {
+                                s.helix_client.update_custom_reward(&b, &r, UpdateCustomReward { is_paused: Some(true), ..Default::default() }, &token).await
+                            }
+                        }).await;
+                        let _ = state_c.db.set_reward_paused(r_id, true, Some(PauseReason::PriceLimit)).await;
+                    });
+
+                    update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("Market price below minimum limit")).await;
+                    let msg = state.render_chat_message(
+                        &broadcaster_user_id,
+                        MSG_ORDER_FAILED,
+                        &[("buyer", &event.user_login), ("code", "LIMIT"), ("error", "цена скина на маркете ниже установленного стримером минимума"), ("item", &item_name)],
+                    );
+                    let _ = state.with_bot_user_token(async |token| {
+                        state.helix_client.send_chat_message(&broadcaster_user_id, &bot_channel_id, &msg, None, None, &token).await
+                    }).await;
+                    return;
+                }
+            }
+
+            if let Some(max_p) = reward_data.max_market_price {
+                if reward_data.current_market_price > max_p || max_price > max_p {
+                    warn!(
+                        redemption_id = %redemption_id,
+                        price = reward_data.current_market_price,
+                        max_order_price = max_price,
+                        max = max_p,
+                        "Redemption cancelled: market price exceeds configured max_market_price"
+                    );
+
+                    let state_c = state.clone();
+                    let bc_id = broadcaster_user_id.clone();
+                    let r_id = reward_id;
+                    state.spawn_task(async move {
+                        let r_str = r_id.to_string();
+                        let s_for_token = state_c.clone();
+                        let b_for_closure = bc_id.clone();
+                        let _ = state_c.with_broadcaster_token(&bc_id, move |token| {
+                            let b = b_for_closure.clone();
+                            let r = r_str.clone();
+                            let s = s_for_token.clone();
+                            async move {
+                                s.helix_client.update_custom_reward(&b, &r, UpdateCustomReward { is_paused: Some(true), ..Default::default() }, &token).await
+                            }
+                        }).await;
+                        let _ = state_c.db.set_reward_paused(r_id, true, Some(PauseReason::PriceLimit)).await;
+                    });
+
+                    update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("Market price exceeds maximum limit")).await;
+                    let msg = state.render_chat_message(
+                        &broadcaster_user_id,
+                        MSG_ORDER_FAILED,
+                        &[("buyer", &event.user_login), ("code", "LIMIT"), ("error", "цена скина на маркете превысила установленный стримером лимит"), ("item", &item_name)],
+                    );
+                    let _ = state.with_bot_user_token(async |token| {
+                        state.helix_client.send_chat_message(&broadcaster_user_id, &bot_channel_id, &msg, None, None, &token).await
+                    }).await;
+                    return;
+                }
+            }
+
             let redemption_custom_id = redemption_id.to_string();
 
             buy_item_once(

@@ -124,11 +124,6 @@ pub async fn update_reward_price_inner(
     setting: &BroadcasterSetting,
     reward: &Reward,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if reward.pricing_mode == crate::db::rewards::PricingMode::Manual {
-        debug!(reward_id = %reward.twitch_id, "Reward pricing mode is Manual; skipping auto price update");
-        return Ok(());
-    }
-
     match reward.reward_type {
         crate::db::rewards::RewardType::Fixed => {
             update_fixed_reward_price(state, setting, reward).await
@@ -326,28 +321,35 @@ async fn apply_twitch_and_db_cost_update(
     currency: Option<String>,
     pool_items: Option<sqlx::types::Json<Vec<crate::db::rewards::PoolItemConfig>>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let bc_id = reward.streamer_id.clone();
-    let bc_ref = bc_id.clone();
-    let r_id = reward.twitch_id.to_string();
-    let state_clone = state.clone();
+    if reward.pricing_mode == crate::db::rewards::PricingMode::Auto {
+        let bc_id = reward.streamer_id.clone();
+        let bc_ref = bc_id.clone();
+        let r_id = reward.twitch_id.to_string();
+        let state_clone = state.clone();
 
-    state.with_broadcaster_token(&bc_ref, move |token| {
-        let b = bc_id.clone();
-        let r = r_id.clone();
-        let s = state_clone.clone();
-        async move {
-            s.helix_client.update_custom_reward(
-                &b,
-                &r,
-                UpdateCustomReward {
-                    cost: Some(new_twitch_points_cost),
-                    ..Default::default()
-                },
-                &token,
-            ).await
-        }
-    }).await
-    .map_err(|e| e.to_string())?;
+        state.with_broadcaster_token(&bc_ref, move |token| {
+            let b = bc_id.clone();
+            let r = r_id.clone();
+            let s = state_clone.clone();
+            async move {
+                s.helix_client.update_custom_reward(
+                    &b,
+                    &r,
+                    UpdateCustomReward {
+                        cost: Some(new_twitch_points_cost),
+                        ..Default::default()
+                    },
+                    &token,
+                ).await
+            }
+        }).await
+        .map_err(|e| e.to_string())?;
+    } else {
+        debug!(
+            reward_id = %reward.twitch_id,
+            "Reward pricing_mode is Manual; skipped updating Channel Points cost on Twitch Helix"
+        );
+    }
 
     let update_patch = crate::db::rewards::UpdateReward {
         current_market_price: Some(new_market_price),
@@ -356,6 +358,138 @@ async fn apply_twitch_and_db_cost_update(
         ..Default::default()
     };
     state.db.update_reward(reward.twitch_id, &update_patch).await?;
+
+    check_and_sync_price_limits(state, reward, new_market_price).await?;
+
+    Ok(())
+}
+
+pub async fn check_and_sync_price_limits(
+    state: &Arc<AppState>,
+    reward: &Reward,
+    current_price: i32,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let has_min = reward.min_market_price.is_some();
+    let has_max = reward.max_market_price.is_some();
+    if !has_min && !has_max {
+        return Ok(());
+    }
+
+    let is_below_min = reward.min_market_price.is_some_and(|min_p| current_price < min_p);
+    let is_above_max = reward.max_market_price.is_some_and(|max_p| current_price > max_p);
+    let is_out_of_bounds = is_below_min || is_above_max;
+
+    if is_out_of_bounds {
+        if !reward.is_paused {
+            warn!(
+                reward_id = %reward.twitch_id,
+                title = %reward.twitch_title,
+                price = current_price,
+                min = ?reward.min_market_price,
+                max = ?reward.max_market_price,
+                "Reward market price is outside configured limits; pausing on Twitch and DB with PRICE_LIMIT"
+            );
+
+            let bc_id = reward.streamer_id.clone();
+            let bc_ref = bc_id.clone();
+            let r_id = reward.twitch_id.to_string();
+            let state_clone = state.clone();
+
+            state.with_broadcaster_token(&bc_ref, move |token| {
+                let b = bc_id.clone();
+                let r = r_id.clone();
+                let s = state_clone.clone();
+                async move {
+                    s.helix_client.update_custom_reward(
+                        &b,
+                        &r,
+                        UpdateCustomReward {
+                            is_paused: Some(true),
+                            ..Default::default()
+                        },
+                        &token,
+                    ).await
+                }
+            }).await
+            .map_err(|e| e.to_string())?;
+
+            state.db.set_reward_paused(
+                reward.twitch_id,
+                true,
+                Some(crate::db::rewards::PauseReason::PriceLimit),
+            ).await?;
+        }
+    } else {
+        // Price is within bounds! If it was paused due to PriceLimit, auto-unpause it!
+        if reward.is_paused && matches!(reward.pause_reason, Some(crate::db::rewards::PauseReason::PriceLimit)) {
+            let setting = state.db.get_broadcaster_setting(&reward.streamer_id).await?;
+            let has_enough_money = if let Some(ref s) = setting {
+                if s.pause_reward_if_no_money {
+                    if let Ok(balance) = state.get_cached_or_fetch_balance(&reward.streamer_id).await {
+                        let dev = reward.permissible_market_price_deviation as i64;
+                        let max_price_minor = current_price as i64 + (current_price as i64 * dev) / 100;
+                        let cost = market::minor_to_major(max_price_minor, &reward.currency);
+                        balance.money >= cost
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                }
+            } else {
+                true
+            };
+
+            if has_enough_money {
+                info!(
+                    reward_id = %reward.twitch_id,
+                    title = %reward.twitch_title,
+                    price = current_price,
+                    "Reward market price returned within configured limits; auto-unpausing reward"
+                );
+
+                let bc_id = reward.streamer_id.clone();
+                let bc_ref = bc_id.clone();
+                let r_id = reward.twitch_id.to_string();
+                let state_clone = state.clone();
+
+                state.with_broadcaster_token(&bc_ref, move |token| {
+                    let b = bc_id.clone();
+                    let r = r_id.clone();
+                    let s = state_clone.clone();
+                    async move {
+                        s.helix_client.update_custom_reward(
+                            &b,
+                            &r,
+                            UpdateCustomReward {
+                                is_paused: Some(false),
+                                ..Default::default()
+                            },
+                            &token,
+                        ).await
+                    }
+                }).await
+                .map_err(|e| e.to_string())?;
+
+                state.db.set_reward_paused(
+                    reward.twitch_id,
+                    false,
+                    None,
+                ).await?;
+            } else {
+                warn!(
+                    reward_id = %reward.twitch_id,
+                    title = %reward.twitch_title,
+                    "Reward market price is within limits, but broadcaster has insufficient balance; switching reason to NO_MONEY"
+                );
+                state.db.set_reward_paused(
+                    reward.twitch_id,
+                    true,
+                    Some(crate::db::rewards::PauseReason::NoMoney),
+                ).await?;
+            }
+        }
+    }
 
     Ok(())
 }

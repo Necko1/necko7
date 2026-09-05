@@ -144,6 +144,7 @@ mod tests {
         assert!(json.contains("PauseReason"), "OpenAPI schema must contain PauseReason");
         assert!(json.contains("MANUAL"), "OpenAPI schema must contain MANUAL");
         assert!(json.contains("NO_MONEY"), "OpenAPI schema must contain NO_MONEY");
+        assert!(json.contains("PRICE_LIMIT"), "OpenAPI schema must contain PRICE_LIMIT");
     }
 
     #[test]

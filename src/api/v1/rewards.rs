@@ -65,6 +65,10 @@ pub struct RewardResponse {
     pub market_autobuy: bool,
     /// Currency code (e.g. "RUB", "USD")
     pub currency: String,
+    /// Optional minimum allowed market price in cents
+    pub min_market_price: Option<i32>,
+    /// Optional maximum allowed market price in cents
+    pub max_market_price: Option<i32>,
     /// Reward creation timestamp
     pub created_at: chrono::DateTime<Utc>,
     /// Reward last update timestamp
@@ -95,6 +99,8 @@ impl From<Reward> for RewardResponse {
             max_redemptions_per_user_per_stream: r.max_redemptions_per_user_per_stream,
             market_autobuy: r.market_autobuy,
             currency: r.currency,
+            min_market_price: r.min_market_price,
+            max_market_price: r.max_market_price,
             created_at: r.created_at,
             updated_at: r.updated_at,
         }
@@ -205,6 +211,10 @@ pub struct CreateRewardBody {
     pub market_autobuy: bool,
     /// Whether to create the reward as paused
     pub is_paused: bool,
+    /// Optional minimum allowed market price in cents (auto-pauses reward if below)
+    pub min_market_price: Option<i32>,
+    /// Optional maximum allowed market price in cents (auto-pauses reward if above)
+    pub max_market_price: Option<i32>,
 }
 
 #[utoipa::path(
@@ -280,6 +290,29 @@ pub async fn create_reward(
             message: "Twitch reward description must be 500 characters or less".into(),
             param: "twitch_description".into(),
         });
+    }
+
+    if let (Some(min_p), Some(max_p)) = (body.min_market_price, body.max_market_price) {
+        if min_p < 0 || max_p < min_p {
+            return Err(ApiError::BadRequest {
+                message: "min_market_price must be >= 0 and <= max_market_price".into(),
+                param: "min_market_price".into(),
+            });
+        }
+    } else if let Some(min_p) = body.min_market_price {
+        if min_p < 0 {
+            return Err(ApiError::BadRequest {
+                message: "min_market_price must be >= 0".into(),
+                param: "min_market_price".into(),
+            });
+        }
+    } else if let Some(max_p) = body.max_market_price {
+        if max_p < 0 {
+            return Err(ApiError::BadRequest {
+                message: "max_market_price must be >= 0".into(),
+                param: "max_market_price".into(),
+            });
+        }
     }
 
     let setting = state.db.get_or_create_broadcaster_setting(&auth.channel_id).await?;
@@ -360,9 +393,9 @@ pub async fn create_reward(
                         param: "pool_items".into(),
                     });
                 }
-                if item.weight <= 0.0 {
+                if item.weight <= 0.0 || !item.weight.is_finite() {
                     return Err(ApiError::BadRequest {
-                        message: "pool item weight must be greater than 0".into(),
+                        message: "pool item weight must be a positive finite number".into(),
                         param: "pool_items".into(),
                     });
                 }
@@ -507,6 +540,33 @@ pub async fn create_reward(
         }
     }
 
+    if !is_paused {
+        if let Some(min_p) = body.min_market_price {
+            if initial_market_price < min_p {
+                tracing::info!(
+                    channel_id = %auth.channel_id,
+                    price = initial_market_price,
+                    min = min_p,
+                    "Pausing newly created reward because initial market price is below min_market_price"
+                );
+                is_paused = true;
+                pause_reason = Some(crate::db::rewards::PauseReason::PriceLimit);
+            }
+        }
+        if let Some(max_p) = body.max_market_price {
+            if initial_market_price > max_p {
+                tracing::info!(
+                    channel_id = %auth.channel_id,
+                    price = initial_market_price,
+                    max = max_p,
+                    "Pausing newly created reward because initial market price exceeds max_market_price"
+                );
+                is_paused = true;
+                pause_reason = Some(crate::db::rewards::PauseReason::PriceLimit);
+            }
+        }
+    }
+
     let reward_info = CreateCustomReward {
         title: body.twitch_title.clone(),
         cost: twitch_points_cost,
@@ -588,6 +648,8 @@ pub async fn create_reward(
         max_redemptions_per_user_per_stream: body.max_redemptions_per_user_per_stream,
         market_autobuy: body.market_autobuy,
         currency,
+        min_market_price: body.min_market_price,
+        max_market_price: body.max_market_price,
     };
 
     let reward = state.db.create_reward(&new_reward).await?;
@@ -644,6 +706,10 @@ pub struct UpdateRewardBody {
     pub pool_items: Option<Vec<crate::db::rewards::PoolItemConfig>>,
     /// Manual Twitch channel points cost (used when pricing_mode is MANUAL)
     pub manual_twitch_points: Option<u32>,
+    /// Optional minimum allowed market price in cents (auto-pauses reward if below)
+    pub min_market_price: Option<i32>,
+    /// Optional maximum allowed market price in cents (auto-pauses reward if above)
+    pub max_market_price: Option<i32>,
 }
 
 #[utoipa::path(
@@ -734,6 +800,54 @@ pub async fn update_reward(
             return Err(ApiError::BadRequest {
                 message: "Twitch reward description must be 500 characters or less".into(),
                 param: "twitch_description".into(),
+            });
+        }
+    }
+
+    if let Some(ref pool) = body.pool_items {
+        if pool.is_empty() {
+            return Err(ApiError::BadRequest {
+                message: "pool_items cannot be empty".into(),
+                param: "pool_items".into(),
+            });
+        }
+        for item in pool {
+            if item.market_hash_name.trim().is_empty() {
+                return Err(ApiError::BadRequest {
+                    message: "pool item market_hash_name cannot be empty".into(),
+                    param: "pool_items".into(),
+                });
+            }
+            if item.weight <= 0.0 || !item.weight.is_finite() {
+                return Err(ApiError::BadRequest {
+                    message: "pool item weight must be a positive finite number".into(),
+                    param: "pool_items".into(),
+                });
+            }
+        }
+    }
+
+    let effective_min = body.min_market_price.or(existing.min_market_price);
+    let effective_max = body.max_market_price.or(existing.max_market_price);
+    if let (Some(min_p), Some(max_p)) = (effective_min, effective_max) {
+        if min_p < 0 || max_p < min_p {
+            return Err(ApiError::BadRequest {
+                message: "min_market_price must be >= 0 and <= max_market_price".into(),
+                param: "min_market_price".into(),
+            });
+        }
+    } else if let Some(min_p) = effective_min {
+        if min_p < 0 {
+            return Err(ApiError::BadRequest {
+                message: "min_market_price must be >= 0".into(),
+                param: "min_market_price".into(),
+            });
+        }
+    } else if let Some(max_p) = effective_max {
+        if max_p < 0 {
+            return Err(ApiError::BadRequest {
+                message: "max_market_price must be >= 0".into(),
+                param: "max_market_price".into(),
             });
         }
     }
@@ -838,6 +952,8 @@ pub async fn update_reward(
         max_redemptions_per_user_per_stream: body.max_redemptions_per_user_per_stream,
         market_autobuy: body.market_autobuy,
         currency: None,
+        min_market_price: body.min_market_price,
+        max_market_price: body.max_market_price,
     };
 
     state.db.update_reward(reward_id, &patch).await?;
@@ -853,6 +969,18 @@ pub async fn update_reward(
         .ok_or_else(|| ApiError::Internal {
             message: "Failed to fetch updated reward".to_string(),
         })?;
+
+    if body.min_market_price.is_some() || body.max_market_price.is_some() || body.current_market_price.is_some() {
+        let state_clone = state.clone();
+        let updated_clone = updated.clone();
+        state.spawn_task(async move {
+            let _ = crate::processor::price_updater::check_and_sync_price_limits(
+                &state_clone,
+                &updated_clone,
+                updated_clone.current_market_price,
+            ).await;
+        });
+    }
 
     Ok(Json(RewardResponse::from(updated)))
 }
@@ -1501,6 +1629,41 @@ mod tests {
         assert_eq!(parsed.manual_twitch_points, Some(12000));
         assert_eq!(parsed.price_strategy, Some(crate::db::rewards::PriceStrategy::Max));
         assert!(parsed.filter_config.is_some());
+    }
+
+    #[test]
+    fn test_create_and_update_reward_body_with_price_limits() {
+        let json_create = r#"{
+            "twitch_title": "Fixed Skin",
+            "twitch_description": "Desc",
+            "market_item_name": "AK-47 | Redline (Field-Tested)",
+            "reward_type": "FIXED",
+            "pricing_mode": "MANUAL",
+            "manual_twitch_points": 50000,
+            "min_market_price": 1000,
+            "max_market_price": 5000,
+            "permissible_market_price_deviation": 10,
+            "twitch_price_markup_percentage": 0,
+            "global_cooldown_seconds": 0,
+            "max_redemptions_per_stream": 0,
+            "max_redemptions_per_user_per_stream": 0,
+            "market_autobuy": true,
+            "is_paused": false
+        }"#;
+
+        let parsed_create: CreateRewardBody = serde_json::from_str(json_create).unwrap();
+        assert_eq!(parsed_create.min_market_price, Some(1000));
+        assert_eq!(parsed_create.max_market_price, Some(5000));
+
+        let json_update = r#"{
+            "min_market_price": 1500,
+            "max_market_price": 6000,
+            "pause_reason": "PRICE_LIMIT"
+        }"#;
+        let parsed_update: UpdateRewardBody = serde_json::from_str(json_update).unwrap();
+        assert_eq!(parsed_update.min_market_price, Some(1500));
+        assert_eq!(parsed_update.max_market_price, Some(6000));
+        assert_eq!(parsed_update.pause_reason, Some(crate::db::rewards::PauseReason::PriceLimit));
     }
 }
 
