@@ -45,6 +45,8 @@ pub struct RewardResponse {
     pub filter_config: Option<crate::db::rewards::FilterConfig>,
     /// Pool items configuration (for POOL rewards)
     pub pool_items: Option<Vec<crate::db::rewards::PoolItemConfig>>,
+    /// Fixed Twitch channel points cost when pricing_mode is MANUAL
+    pub manual_twitch_points: Option<i32>,
     /// Twitch reward title
     pub twitch_title: String,
     /// Twitch reward description
@@ -99,6 +101,7 @@ impl From<Reward> for RewardResponse {
             market_item_name: r.market_item_name,
             filter_config: r.filter_config.map(|j| j.0),
             pool_items: r.pool_items.map(|j| j.0),
+            manual_twitch_points: r.manual_twitch_points,
             twitch_title: r.twitch_title,
             twitch_description: r.twitch_description,
             current_market_price: r.current_market_price,
@@ -668,6 +671,7 @@ pub async fn create_reward(
         market_item_name,
         filter_config,
         pool_items,
+        manual_twitch_points: body.manual_twitch_points.map(|v| v as i32),
         twitch_title: body.twitch_title,
         twitch_description: body.twitch_description,
         current_market_price: initial_market_price,
@@ -987,6 +991,7 @@ pub async fn update_reward(
         market_item_name: body.market_item_name,
         filter_config: body.filter_config.map(sqlx::types::Json),
         pool_items: body.pool_items.map(sqlx::types::Json),
+        manual_twitch_points: body.manual_twitch_points.map(|v| v as i32),
         twitch_title: body.twitch_title,
         twitch_description: body.twitch_description,
         current_market_price: body.current_market_price,
@@ -1755,6 +1760,48 @@ mod tests {
         assert_eq!(parsed_update.chat_min_messages, Some(100));
         assert_eq!(parsed_update.chat_logical_operator, Some(crate::db::rewards::ChatLogicalOperator::And));
         assert_eq!(parsed_update.refund_if_chat_req_failed, Some(true));
+    }
+
+    #[test]
+    fn test_reward_response_includes_manual_twitch_points() {
+        let reward = crate::db::rewards::Reward {
+            twitch_id: uuid::Uuid::new_v4(),
+            is_paused: false,
+            pause_reason: None,
+            is_deleted: false,
+            streamer_id: "12345".to_string(),
+            reward_type: crate::db::rewards::RewardType::Fixed,
+            pricing_mode: crate::db::rewards::PricingMode::Manual,
+            price_strategy: None,
+            market_item_name: Some("AK-47 | Redline (Field-Tested)".to_string()),
+            filter_config: None,
+            pool_items: None,
+            manual_twitch_points: Some(50000),
+            twitch_title: "Manual Reward".to_string(),
+            twitch_description: "Description".to_string(),
+            current_market_price: 1500,
+            permissible_market_price_deviation: 10,
+            twitch_price_markup_percentage: 0,
+            global_cooldown_seconds: 0,
+            max_redemptions_per_stream: 0,
+            max_redemptions_per_user_per_stream: 0,
+            market_autobuy: true,
+            currency: "USD".to_string(),
+            min_market_price: None,
+            max_market_price: None,
+            chat_min_messages: None,
+            chat_min_characters: None,
+            chat_time_window_hours: None,
+            chat_logical_operator: None,
+            refund_if_chat_req_failed: true,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        let res = RewardResponse::from(reward);
+        assert_eq!(res.manual_twitch_points, Some(50000));
+        let json = serde_json::to_string(&res).unwrap();
+        assert!(json.contains("\"manual_twitch_points\":50000"));
     }
 }
 
