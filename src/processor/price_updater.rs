@@ -124,10 +124,38 @@ pub async fn update_reward_price_inner(
     setting: &BroadcasterSetting,
     reward: &Reward,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let items_res = match state.market_client.search_item(&setting.market_api_key, &reward.market_item_name).await {
+    if reward.pricing_mode == crate::db::rewards::PricingMode::Manual {
+        debug!(reward_id = %reward.twitch_id, "Reward pricing mode is Manual; skipping auto price update");
+        return Ok(());
+    }
+
+    match reward.reward_type {
+        crate::db::rewards::RewardType::Fixed => {
+            update_fixed_reward_price(state, setting, reward).await
+        }
+        crate::db::rewards::RewardType::Pool => {
+            update_pool_reward_price(state, setting, reward).await
+        }
+        crate::db::rewards::RewardType::Filter => {
+            update_filter_reward_price(state, setting, reward).await
+        }
+    }
+}
+
+async fn update_fixed_reward_price(
+    state: &Arc<AppState>,
+    setting: &BroadcasterSetting,
+    reward: &Reward,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let item_name = match reward.market_item_name.as_deref() {
+        Some(name) if !name.trim().is_empty() => name,
+        _ => return Err("Fixed reward has no market_item_name".into()),
+    };
+
+    let items_res = match state.market_client.search_item(&setting.market_api_key, item_name).await {
         Ok(res) => res,
         Err(e) => {
-            return Err(format!("Failed to search item {}: {}", reward.market_item_name, e).into());
+            return Err(format!("Failed to search item {}: {}", item_name, e).into());
         }
     };
 
@@ -149,6 +177,155 @@ pub async fn update_reward_price_inner(
     let raw_cost = price_decimal * markup_factor * setting.base_price_multiplier as f64;
     let new_twitch_points_cost = (raw_cost.ceil() as u32).max(1);
 
+    apply_twitch_and_db_cost_update(state, reward, new_twitch_points_cost, cheapest.price as i32, items_res.currency.clone(), None).await?;
+
+    info!(
+        reward_id = %reward.twitch_id,
+        reward = %reward.twitch_title,
+        old_market_price = reward.current_market_price,
+        new_market_price = cheapest.price,
+        new_cost = new_twitch_points_cost,
+        "Fixed reward price updated successfully"
+    );
+
+    Ok(())
+}
+
+async fn update_pool_reward_price(
+    state: &Arc<AppState>,
+    setting: &BroadcasterSetting,
+    reward: &Reward,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut pool_items = match reward.pool_items.as_ref().map(|j| j.0.clone()) {
+        Some(items) if !items.is_empty() => items,
+        _ => return Err("Pool reward has empty pool_items".into()),
+    };
+
+    let all_prices = state.get_cached_or_fetch_prices(&reward.currency).await
+        .map_err(|e| format!("Failed to fetch market prices for pool reward: {}", e))?;
+
+    let price_map: std::collections::HashMap<&str, f64> = all_prices
+        .iter()
+        .map(|i| (i.market_hash_name.as_str(), i.price))
+        .collect();
+
+    let mut price_weight_pairs: Vec<(f64, f64)> = Vec::with_capacity(pool_items.len());
+    let mut prices_vec: Vec<f64> = Vec::with_capacity(pool_items.len());
+
+    for item in &mut pool_items {
+        if let Some(&price_major) = price_map.get(item.market_hash_name.as_str()) {
+            item.current_market_price = market::major_to_minor(price_major, &reward.currency) as i32;
+        }
+        let p_major = market::minor_to_major(item.current_market_price as i64, &reward.currency);
+        prices_vec.push(p_major);
+        price_weight_pairs.push((p_major, item.weight));
+    }
+
+    let strategy = reward.price_strategy.unwrap_or(crate::db::rewards::PriceStrategy::Average);
+    let effective_price_major = match strategy {
+        crate::db::rewards::PriceStrategy::Average => {
+            crate::steam::market::prices::calculate_weighted_average(&price_weight_pairs)
+                .unwrap_or(0.0)
+        }
+        crate::db::rewards::PriceStrategy::Median => {
+            crate::steam::market::prices::calculate_median(&mut prices_vec)
+                .unwrap_or(0.0)
+        }
+        crate::db::rewards::PriceStrategy::Max => {
+            crate::steam::market::prices::calculate_max(&prices_vec)
+                .unwrap_or(0.0)
+        }
+    };
+
+    if effective_price_major <= 0.0 {
+        return Err("Effective price for pool items is zero or negative".into());
+    }
+
+    let markup_factor = 1.0 + (reward.twitch_price_markup_percentage as f64 / 100.0).max(0.0);
+    let raw_cost = effective_price_major * markup_factor * setting.base_price_multiplier as f64;
+    let new_twitch_points_cost = (raw_cost.ceil() as u32).max(1);
+    let new_market_price = market::major_to_minor(effective_price_major, &reward.currency) as i32;
+
+    apply_twitch_and_db_cost_update(
+        state,
+        reward,
+        new_twitch_points_cost,
+        new_market_price,
+        None,
+        Some(sqlx::types::Json(pool_items)),
+    ).await?;
+
+    info!(
+        reward_id = %reward.twitch_id,
+        reward = %reward.twitch_title,
+        strategy = ?strategy,
+        new_cost = new_twitch_points_cost,
+        "Pool reward price updated successfully"
+    );
+
+    Ok(())
+}
+
+async fn update_filter_reward_price(
+    state: &Arc<AppState>,
+    setting: &BroadcasterSetting,
+    reward: &Reward,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let filter = match reward.filter_config.as_ref().map(|j| &j.0) {
+        Some(f) => f,
+        None => return Err("Filter reward has no filter_config".into()),
+    };
+
+    let all_prices = state.get_cached_or_fetch_prices(&reward.currency).await
+        .map_err(|e| format!("Failed to fetch market prices for filter reward: {}", e))?;
+
+    let matching = crate::steam::market::prices::filter_prices(&all_prices, filter);
+    if matching.is_empty() {
+        warn!(reward_id = %reward.twitch_id, "No items in prices.json match filter criteria");
+        return Ok(());
+    }
+
+    let mut prices: Vec<f64> = matching.iter().map(|i| i.price).collect();
+    let strategy = reward.price_strategy.unwrap_or(crate::db::rewards::PriceStrategy::Average);
+
+    let effective_price_major = match strategy {
+        crate::db::rewards::PriceStrategy::Average => {
+            crate::steam::market::prices::calculate_average(&prices).unwrap_or(filter.max_price)
+        }
+        crate::db::rewards::PriceStrategy::Median => {
+            crate::steam::market::prices::calculate_median(&mut prices).unwrap_or(filter.max_price)
+        }
+        crate::db::rewards::PriceStrategy::Max => {
+            crate::steam::market::prices::calculate_max(&prices).unwrap_or(filter.max_price)
+        }
+    };
+
+    let markup_factor = 1.0 + (reward.twitch_price_markup_percentage as f64 / 100.0).max(0.0);
+    let raw_cost = effective_price_major * markup_factor * setting.base_price_multiplier as f64;
+    let new_twitch_points_cost = (raw_cost.ceil() as u32).max(1);
+    let new_market_price = market::major_to_minor(effective_price_major, &reward.currency) as i32;
+
+    apply_twitch_and_db_cost_update(state, reward, new_twitch_points_cost, new_market_price, None, None).await?;
+
+    info!(
+        reward_id = %reward.twitch_id,
+        reward = %reward.twitch_title,
+        strategy = ?strategy,
+        new_cost = new_twitch_points_cost,
+        "Filter reward price updated successfully"
+    );
+
+    Ok(())
+}
+
+async fn apply_twitch_and_db_cost_update(
+    state: &Arc<AppState>,
+    reward: &Reward,
+    new_twitch_points_cost: u32,
+    new_market_price: i32,
+    currency: Option<String>,
+    pool_items: Option<sqlx::types::Json<Vec<crate::db::rewards::PoolItemConfig>>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let bc_id = reward.streamer_id.clone();
     let bc_ref = bc_id.clone();
     let r_id = reward.twitch_id.to_string();
@@ -173,21 +350,14 @@ pub async fn update_reward_price_inner(
     .map_err(|e| e.to_string())?;
 
     let update_patch = crate::db::rewards::UpdateReward {
-        current_market_price: Some(cheapest.price as i32),
-        currency: items_res.currency.clone(),
+        current_market_price: Some(new_market_price),
+        currency,
+        pool_items,
         ..Default::default()
     };
     state.db.update_reward(reward.twitch_id, &update_patch).await?;
 
-    info!(
-        reward_id = %reward.twitch_id,
-        reward = %reward.twitch_title,
-        old_market_price = reward.current_market_price,
-        new_market_price = cheapest.price,
-        new_cost = new_twitch_points_cost,
-        "Reward price updated successfully"
-    );
-
     Ok(())
 }
+
 

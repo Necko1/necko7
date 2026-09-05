@@ -169,6 +169,7 @@ impl OrderWatcher {
                 ("buyer", &self.redemption.user_login),
                 ("remaining", &remaining),
                 ("tradeoffer", &tradeoffer),
+                ("item", &current_trade.market_hash_name),
             ],
         );
 
@@ -217,7 +218,10 @@ impl OrderWatcher {
         let msg = self.state.render_chat_message(
             &self.broadcaster_id,
             MSG_TRADE_ACCEPTED,
-            &[("buyer", &self.redemption.user_login)],
+            &[
+                ("buyer", &self.redemption.user_login),
+                ("item", &current_trade.market_hash_name),
+            ],
         );
 
         if let Err(e) = self.state.with_bot_user_token(async |token| {
@@ -317,7 +321,10 @@ impl OrderWatcher {
         let message = self.state.render_chat_message(
             &self.broadcaster_id,
             msg_id,
-            &[("buyer", &self.redemption.user_login)],
+            &[
+                ("buyer", &self.redemption.user_login),
+                ("item", &current_trade.market_hash_name),
+            ],
         );
 
         if let Err(e) = self.state.with_bot_user_token(async |token| {

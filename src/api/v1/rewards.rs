@@ -33,8 +33,18 @@ pub struct RewardResponse {
     pub is_deleted: bool,
     /// Twitch channel ID of the streamer
     pub streamer_id: String,
-    /// Market item name for automated purchases
-    pub market_item_name: String,
+    /// Reward type: FIXED, POOL, or FILTER
+    pub reward_type: crate::db::rewards::RewardType,
+    /// Pricing mode: AUTO or MANUAL
+    pub pricing_mode: crate::db::rewards::PricingMode,
+    /// Strategy for pricing calculations (AVERAGE, MEDIAN, MAX)
+    pub price_strategy: Option<crate::db::rewards::PriceStrategy>,
+    /// Market item name for automated purchases (for FIXED rewards)
+    pub market_item_name: Option<String>,
+    /// Filter configuration (for FILTER rewards)
+    pub filter_config: Option<crate::db::rewards::FilterConfig>,
+    /// Pool items configuration (for POOL rewards)
+    pub pool_items: Option<Vec<crate::db::rewards::PoolItemConfig>>,
     /// Twitch reward title
     pub twitch_title: String,
     /// Twitch reward description
@@ -69,7 +79,12 @@ impl From<Reward> for RewardResponse {
             pause_reason: r.pause_reason,
             is_deleted: r.is_deleted,
             streamer_id: r.streamer_id,
+            reward_type: r.reward_type,
+            pricing_mode: r.pricing_mode,
+            price_strategy: r.price_strategy,
             market_item_name: r.market_item_name,
+            filter_config: r.filter_config.map(|j| j.0),
+            pool_items: r.pool_items.map(|j| j.0),
             twitch_title: r.twitch_title,
             twitch_description: r.twitch_description,
             current_market_price: r.current_market_price,
@@ -156,13 +171,27 @@ pub async fn list_rewards(
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateRewardBody {
-    /// Market item name for automated purchases
-    pub market_item_name: String,
+    /// Reward type: FIXED (default), POOL, or FILTER
+    #[serde(default)]
+    pub reward_type: crate::db::rewards::RewardType,
+    /// Pricing mode: AUTO (default) or MANUAL
+    #[serde(default)]
+    pub pricing_mode: crate::db::rewards::PricingMode,
+    /// Price calculation strategy for AUTO pricing with POOL or FILTER (AVERAGE, MEDIAN, MAX)
+    pub price_strategy: Option<crate::db::rewards::PriceStrategy>,
+    /// Market item name for FIXED rewards
+    pub market_item_name: Option<String>,
+    /// Filter configuration for FILTER rewards
+    pub filter_config: Option<crate::db::rewards::FilterConfig>,
+    /// Pool items configuration for POOL rewards
+    pub pool_items: Option<Vec<crate::db::rewards::PoolItemConfig>>,
+    /// Fixed Twitch channel points cost when pricing_mode is MANUAL
+    pub manual_twitch_points: Option<u32>,
     /// Twitch reward title
     pub twitch_title: String,
     /// Twitch reward description
     pub twitch_description: String,
-    /// Permissible market price deviation percentage
+    /// Permissible market price deviation percentage (used for FIXED / FILTER)
     pub permissible_market_price_deviation: i32,
     /// Twitch price markup percentage
     pub twitch_price_markup_percentage: i16,
@@ -183,7 +212,7 @@ pub struct CreateRewardBody {
     path = "/api/v1/broadcasters/{channel_id}/rewards",
     tag = "Rewards",
     summary = "Create a reward",
-    description = "Creates a new reward for the specified channel.",
+    description = "Creates a new reward for the specified channel. Supports FIXED, POOL, and FILTER reward types, as well as AUTO or MANUAL pricing modes.",
     params(
         ("channel_id" = String, Path, description = "Twitch channel ID"),
     ),
@@ -193,9 +222,15 @@ pub struct CreateRewardBody {
             example = json!({
                 "twitch_id": "550e8400-e29b-41d4-a716-446655440000",
                 "is_paused": false,
+                "pause_reason": null,
                 "is_deleted": false,
                 "streamer_id": "123456789",
+                "reward_type": "FIXED",
+                "pricing_mode": "AUTO",
+                "price_strategy": null,
                 "market_item_name": "AWP | Asiimov (Field-Tested)",
+                "filter_config": null,
+                "pool_items": null,
                 "twitch_title": "Get AWP Asiimov",
                 "twitch_description": "Redeem for an AWP Asiimov!",
                 "current_market_price": 3500,
@@ -205,6 +240,7 @@ pub struct CreateRewardBody {
                 "max_redemptions_per_stream": 5,
                 "max_redemptions_per_user_per_stream": 1,
                 "market_autobuy": true,
+                "currency": "RUB",
                 "created_at": "2026-01-15T10:30:00Z",
                 "updated_at": "2026-01-15T10:30:00Z"
             })
@@ -267,31 +303,185 @@ pub async fn create_reward(
         Some(body.global_cooldown_seconds as u32)
     } else { None };
 
-    let items = state.market_client.search_item(&setting.market_api_key, &body.market_item_name).await?;
-    if let Some(error) = items.error {
-        let msg = format!("Failed to search item through market client: {}", error);
-        error!(msg);
-        return Err(ApiError::Internal { message: msg })
-    } else if !items.success {
-        let msg = "Failed to search item through market client";
-        error!(msg);
-        return Err(ApiError::Internal { message: msg.into() })
-    }
+    let cached_balance = state.get_cached_or_fetch_balance(&auth.channel_id).await.ok();
+    let mut currency = cached_balance.as_ref().map(|b| b.currency.clone()).unwrap_or_else(|| "RUB".to_string());
 
-    let items_data = items.data.unwrap();
+    let reward_type = body.reward_type;
+    let pricing_mode = body.pricing_mode;
+    let price_strategy = body.price_strategy.unwrap_or(crate::db::rewards::PriceStrategy::Average);
 
-    let cheapest_item = items_data.iter().min_by_key(|item| item.price)
-        .ok_or(ApiError::NotFound { message: "Can't find specified item on the market".into() })?;
-    let currency = items.currency.clone().unwrap_or_else(|| "RUB".to_string());
-    let price_decimal = market::minor_to_major(cheapest_item.price, &currency);
+    let (market_item_name, filter_config, pool_items, initial_market_price, max_cost_for_balance_check) = match reward_type {
+        crate::db::rewards::RewardType::Fixed => {
+            let item_name = match body.market_item_name.as_deref() {
+                Some(name) if !name.trim().is_empty() => name.trim().to_string(),
+                _ => return Err(ApiError::BadRequest {
+                    message: "market_item_name is required for FIXED reward type".into(),
+                    param: "market_item_name".into(),
+                }),
+            };
 
-    let markup_factor = 1.0 + (body.twitch_price_markup_percentage as f64 / 100.0).max(0.0);
+            let items = state.market_client.search_item(&setting.market_api_key, &item_name).await?;
+            if let Some(error) = items.error {
+                let msg = format!("Failed to search item through market client: {}", error);
+                error!(msg);
+                return Err(ApiError::Internal { message: msg });
+            } else if !items.success {
+                let msg = "Failed to search item through market client";
+                error!(msg);
+                return Err(ApiError::Internal { message: msg.into() });
+            }
 
-    let raw_cost = price_decimal
-        * markup_factor
-        * setting.base_price_multiplier as f64;
+            let items_data = items.data.unwrap_or_default();
+            let cheapest_item = items_data.iter().min_by_key(|item| item.price)
+                .ok_or(ApiError::NotFound { message: "Can't find specified item on the market".into() })?;
 
-    let twitch_points_cost = (raw_cost.ceil() as u32).max(1);
+            if let Some(c) = items.currency {
+                currency = c;
+            }
+
+            let price_major = market::minor_to_major(cheapest_item.price, &currency);
+            let max_cost = price_major * (1.0 + (body.permissible_market_price_deviation as f64 / 100.0).max(0.0));
+
+            (Some(item_name), None, None, cheapest_item.price as i32, max_cost)
+        }
+        crate::db::rewards::RewardType::Pool => {
+            let mut pool = match body.pool_items {
+                Some(items) if !items.is_empty() => items,
+                _ => return Err(ApiError::BadRequest {
+                    message: "pool_items cannot be empty for POOL reward type".into(),
+                    param: "pool_items".into(),
+                }),
+            };
+
+            for item in &pool {
+                if item.market_hash_name.trim().is_empty() {
+                    return Err(ApiError::BadRequest {
+                        message: "pool item market_hash_name cannot be empty".into(),
+                        param: "pool_items".into(),
+                    });
+                }
+                if item.weight <= 0.0 {
+                    return Err(ApiError::BadRequest {
+                        message: "pool item weight must be greater than 0".into(),
+                        param: "pool_items".into(),
+                    });
+                }
+            }
+
+            let all_prices = state.get_cached_or_fetch_prices(&currency).await
+                .map_err(|e| ApiError::Internal { message: format!("Failed to fetch market prices: {}", e) })?;
+
+            let price_map: std::collections::HashMap<&str, f64> = all_prices
+                .iter()
+                .map(|i| (i.market_hash_name.as_str(), i.price))
+                .collect();
+
+            let mut price_weight_pairs: Vec<(f64, f64)> = Vec::with_capacity(pool.len());
+            let mut prices_vec: Vec<f64> = Vec::with_capacity(pool.len());
+            let mut max_single_cost = 0.0f64;
+
+            for item in &mut pool {
+                if let Some(&p_major) = price_map.get(item.market_hash_name.as_str()) {
+                    item.current_market_price = market::major_to_minor(p_major, &currency) as i32;
+                }
+                let p_major = market::minor_to_major(item.current_market_price as i64, &currency);
+                prices_vec.push(p_major);
+                price_weight_pairs.push((p_major, item.weight));
+                let item_max_cost = p_major * (1.0 + (item.permissible_market_price_deviation as f64 / 100.0).max(0.0));
+                if item_max_cost > max_single_cost {
+                    max_single_cost = item_max_cost;
+                }
+            }
+
+            let effective_price_major = match price_strategy {
+                crate::db::rewards::PriceStrategy::Average => {
+                    crate::steam::market::prices::calculate_weighted_average(&price_weight_pairs).unwrap_or(0.0)
+                }
+                crate::db::rewards::PriceStrategy::Median => {
+                    crate::steam::market::prices::calculate_median(&mut prices_vec).unwrap_or(0.0)
+                }
+                crate::db::rewards::PriceStrategy::Max => {
+                    crate::steam::market::prices::calculate_max(&prices_vec).unwrap_or(0.0)
+                }
+            };
+
+            if effective_price_major <= 0.0 {
+                return Err(ApiError::BadRequest {
+                    message: "Effective price for pool items is zero or negative; check item prices".into(),
+                    param: "pool_items".into(),
+                });
+            }
+
+            let market_price = market::major_to_minor(effective_price_major, &currency) as i32;
+            (None, None, Some(sqlx::types::Json(pool)), market_price, max_single_cost)
+        }
+        crate::db::rewards::RewardType::Filter => {
+            let filter = match body.filter_config {
+                Some(f) => f,
+                None => return Err(ApiError::BadRequest {
+                    message: "filter_config is required for FILTER reward type".into(),
+                    param: "filter_config".into(),
+                }),
+            };
+
+            if filter.min_price < 0.0 || filter.max_price < filter.min_price {
+                return Err(ApiError::BadRequest {
+                    message: "Invalid filter price range: min_price must be >= 0 and max_price >= min_price".into(),
+                    param: "filter_config".into(),
+                });
+            }
+
+            let all_prices = state.get_cached_or_fetch_prices(&currency).await
+                .map_err(|e| ApiError::Internal { message: format!("Failed to fetch market prices: {}", e) })?;
+
+            let matching = crate::steam::market::prices::filter_prices(&all_prices, &filter);
+            if matching.is_empty() {
+                return Err(ApiError::BadRequest {
+                    message: "No market items match the specified filter criteria".into(),
+                    param: "filter_config".into(),
+                });
+            }
+
+            let mut prices: Vec<f64> = matching.iter().map(|i| i.price).collect();
+            let effective_price_major = match price_strategy {
+                crate::db::rewards::PriceStrategy::Average => {
+                    crate::steam::market::prices::calculate_average(&prices).unwrap_or(filter.max_price)
+                }
+                crate::db::rewards::PriceStrategy::Median => {
+                    crate::steam::market::prices::calculate_median(&mut prices).unwrap_or(filter.max_price)
+                }
+                crate::db::rewards::PriceStrategy::Max => {
+                    crate::steam::market::prices::calculate_max(&prices).unwrap_or(filter.max_price)
+                }
+            };
+
+            let market_price = market::major_to_minor(effective_price_major, &currency) as i32;
+            let max_cost = filter.max_price * (1.0 + (body.permissible_market_price_deviation as f64 / 100.0).max(0.0));
+            (None, Some(sqlx::types::Json(filter)), None, market_price, max_cost)
+        }
+    };
+
+    let twitch_points_cost: u32 = match pricing_mode {
+        crate::db::rewards::PricingMode::Manual => {
+            let pts = body.manual_twitch_points.ok_or_else(|| ApiError::BadRequest {
+                message: "manual_twitch_points is required when pricing_mode is MANUAL".into(),
+                param: "manual_twitch_points".into(),
+            })?;
+            if pts == 0 {
+                return Err(ApiError::BadRequest {
+                    message: "manual_twitch_points must be at least 1".into(),
+                    param: "manual_twitch_points".into(),
+                });
+            }
+            pts
+        }
+        crate::db::rewards::PricingMode::Auto => {
+            let price_decimal = market::minor_to_major(initial_market_price as i64, &currency);
+            let markup_factor = 1.0 + (body.twitch_price_markup_percentage as f64 / 100.0).max(0.0);
+            let raw_cost = price_decimal * markup_factor * setting.base_price_multiplier as f64;
+            (raw_cost.ceil() as u32).max(1)
+        }
+    };
 
     let mut is_paused = body.is_paused;
     let mut pause_reason = if body.is_paused {
@@ -301,31 +491,18 @@ pub async fn create_reward(
     };
 
     if !is_paused && setting.pause_reward_if_no_money {
-        let max_price = (cheapest_item.price as i64)
-            + ((cheapest_item.price as i64 * body.permissible_market_price_deviation as i64) / 100);
-        let cost = market::minor_to_major(max_price, &currency);
-
-        match state.get_cached_or_fetch_balance(&auth.channel_id).await {
-            Ok(balance) => {
-                if balance.money < cost {
-                    tracing::info!(
-                        channel_id = %auth.channel_id,
-                        balance = balance.money,
-                        cost = cost,
-                        "Pausing newly created reward because broadcaster balance ({:.2}) is less than reward market cost ({:.2}) and pause_reward_if_no_money is enabled",
-                        balance.money,
-                        cost
-                    );
-                    is_paused = true;
-                    pause_reason = Some(crate::db::rewards::PauseReason::NoMoney);
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
+        if let Some(balance) = cached_balance {
+            if balance.money < max_cost_for_balance_check {
+                tracing::info!(
                     channel_id = %auth.channel_id,
-                    "Failed to retrieve market balance during reward creation"
+                    balance = balance.money,
+                    cost = max_cost_for_balance_check,
+                    "Pausing newly created reward because broadcaster balance ({:.2}) is less than reward market cost ({:.2}) and pause_reward_if_no_money is enabled",
+                    balance.money,
+                    max_cost_for_balance_check
                 );
+                is_paused = true;
+                pause_reason = Some(crate::db::rewards::PauseReason::NoMoney);
             }
         }
     }
@@ -395,10 +572,15 @@ pub async fn create_reward(
         is_paused,
         pause_reason,
         streamer_id: auth.channel_id.clone(),
-        market_item_name: body.market_item_name,
+        reward_type,
+        pricing_mode,
+        price_strategy: Some(price_strategy),
+        market_item_name,
+        filter_config,
+        pool_items,
         twitch_title: body.twitch_title,
         twitch_description: body.twitch_description,
-        current_market_price: cheapest_item.price as i32,
+        current_market_price: initial_market_price,
         permissible_market_price_deviation: body.permissible_market_price_deviation,
         twitch_price_markup_percentage: body.twitch_price_markup_percentage,
         global_cooldown_seconds: body.global_cooldown_seconds,
@@ -415,7 +597,8 @@ pub async fn create_reward(
         reward_title = %reward.twitch_title,
         channel_id = %auth.channel_id,
         user_id = %auth.user_id,
-        market_item = %reward.market_item_name,
+        reward_type = ?reward.reward_type,
+        pricing_mode = ?reward.pricing_mode,
         market_price = reward.current_market_price,
         "Custom reward created successfully"
     );
@@ -447,6 +630,20 @@ pub struct UpdateRewardBody {
     pub is_paused: Option<bool>,
     /// New pause reason ("MANUAL", "NO_MONEY")
     pub pause_reason: Option<crate::db::rewards::PauseReason>,
+    /// New reward type (FIXED, POOL, or FILTER)
+    pub reward_type: Option<crate::db::rewards::RewardType>,
+    /// New pricing mode (AUTO or MANUAL)
+    pub pricing_mode: Option<crate::db::rewards::PricingMode>,
+    /// New price strategy (AVERAGE, MEDIAN, MAX)
+    pub price_strategy: Option<crate::db::rewards::PriceStrategy>,
+    /// New market item name (for FIXED rewards)
+    pub market_item_name: Option<String>,
+    /// New filter configuration (for FILTER rewards)
+    pub filter_config: Option<crate::db::rewards::FilterConfig>,
+    /// New pool items configuration (for POOL rewards)
+    pub pool_items: Option<Vec<crate::db::rewards::PoolItemConfig>>,
+    /// Manual Twitch channel points cost (used when pricing_mode is MANUAL)
+    pub manual_twitch_points: Option<u32>,
 }
 
 #[utoipa::path(
@@ -468,7 +665,12 @@ pub struct UpdateRewardBody {
                 "pause_reason": null,
                 "is_deleted": false,
                 "streamer_id": "123456789",
+                "reward_type": "FIXED",
+                "pricing_mode": "AUTO",
+                "price_strategy": null,
                 "market_item_name": "AWP | Asiimov (Field-Tested)",
+                "filter_config": null,
+                "pool_items": null,
                 "twitch_title": "Get AWP Asiimov (Updated)",
                 "twitch_description": "Redeem for an AWP Asiimov!",
                 "current_market_price": 4000,
@@ -478,6 +680,7 @@ pub struct UpdateRewardBody {
                 "max_redemptions_per_stream": 5,
                 "max_redemptions_per_user_per_stream": 1,
                 "market_autobuy": true,
+                "currency": "RUB",
                 "created_at": "2026-01-15T10:30:00Z",
                 "updated_at": "2026-01-20T14:00:00Z"
             })
@@ -536,8 +739,15 @@ pub async fn update_reward(
     }
 
     let setting = state.db.get_or_create_broadcaster_setting(&auth.channel_id).await?;
+    let effective_pricing_mode = body.pricing_mode.unwrap_or(existing.pricing_mode);
 
-    let new_cost = if body.twitch_price_markup_percentage.is_some() || body.current_market_price.is_some() {
+    let new_cost = if let Some(manual_pts) = body.manual_twitch_points {
+        if effective_pricing_mode == crate::db::rewards::PricingMode::Manual {
+            Some(manual_pts.max(1))
+        } else {
+            None
+        }
+    } else if effective_pricing_mode == crate::db::rewards::PricingMode::Auto && (body.twitch_price_markup_percentage.is_some() || body.current_market_price.is_some()) {
         let effective_markup = body.twitch_price_markup_percentage.unwrap_or(existing.twitch_price_markup_percentage);
         let effective_price = body.current_market_price.unwrap_or(existing.current_market_price);
         let price_decimal = market::minor_to_major(effective_price as i64, &existing.currency);
@@ -612,7 +822,12 @@ pub async fn update_reward(
         is_paused: target_paused,
         pause_reason: patch_pause_reason,
         is_deleted: None,
-        market_item_name: None,
+        reward_type: body.reward_type,
+        pricing_mode: body.pricing_mode,
+        price_strategy: body.price_strategy,
+        market_item_name: body.market_item_name,
+        filter_config: body.filter_config.map(sqlx::types::Json),
+        pool_items: body.pool_items.map(sqlx::types::Json),
         twitch_title: body.twitch_title,
         twitch_description: body.twitch_description,
         current_market_price: body.current_market_price,
@@ -723,7 +938,7 @@ pub async fn delete_reward(
     path = "/api/v1/broadcasters/{channel_id}/rewards/{reward_id}/update-price",
     tag = "Rewards",
     summary = "Update reward price",
-    description = "Triggers a price update for a specific reward. The market price is recalculated and the Twitch reward cost is updated accordingly.",
+    description = "Triggers a price update for a specific reward. The market price is recalculated and the Twitch reward cost is updated accordingly based on reward type and strategy.",
     params(
         ("channel_id" = String, Path, description = "Twitch channel ID"),
         ("reward_id" = Uuid, Path, description = "Twitch reward UUID"),
@@ -758,77 +973,129 @@ pub async fn update_reward_price(
         });
     }
 
-    let setting = state.db.get_or_create_broadcaster_setting(&auth.channel_id).await?;
-
-    if setting.market_api_key.trim().is_empty() {
-        return Err(ApiError::BadRequest {
-            message: "Market API key is not configured for this channel".into(),
-            param: "market_api_key".into(),
-        });
-    }
-
-    let items = state.market_client.search_item(&setting.market_api_key, &existing.market_item_name).await?;
-    if let Some(error) = items.error {
-        let msg = format!("Failed to search item through market client: {}", error);
-        error!(msg);
-        return Err(ApiError::Internal { message: msg })
-    } else if !items.success {
-        let msg = "Failed to search item through market client";
-        error!(msg);
-        return Err(ApiError::Internal { message: msg.into() })
-    }
-
-    let items_data = items.data.unwrap();
-
-    let cheapest_item = items_data.iter().min_by_key(|item| item.price)
-        .ok_or(ApiError::NotFound { message: "Can't find specified item on the market".into() })?;
-    let currency = items.currency.clone().unwrap_or_else(|| existing.currency.clone());
-    let price_decimal = market::minor_to_major(cheapest_item.price, &currency);
-
-    let markup_factor = 1.0 + (existing.twitch_price_markup_percentage as f64 / 100.0).max(0.0);
-
-    let raw_cost = price_decimal
-        * markup_factor
-        * setting.base_price_multiplier as f64;
-
-    let twitch_points_cost = (raw_cost.ceil() as u32).max(1);
-
-    let bc_ref = auth.channel_id.clone();
-    let state_clone = Arc::clone(&state);
-    let reward_id_str = reward_id.to_string();
-
-    state.with_broadcaster_token(&auth.channel_id, move |token| {
-        let b_id = bc_ref.clone();
-        let rids = reward_id_str.clone();
-        let state_c = Arc::clone(&state_clone);
-        async move {
-            state_c.helix_client.update_custom_reward(
-                &b_id,
-                &rids,
-                crate::helix::api::custom_rewards::model::UpdateCustomReward {
-                    cost: Some(twitch_points_cost),
-                    ..Default::default()
-                },
-                &token,
-            ).await
-        }
-    }).await?;
-
-    state.db.update_reward(reward_id, &crate::db::rewards::UpdateReward {
-        current_market_price: Some(cheapest_item.price as i32),
-        currency: items.currency,
-        ..Default::default()
-    }).await?;
+    crate::processor::price_updater::update_single_reward_price(&state, &auth.channel_id, reward_id).await
+        .map_err(|e| ApiError::Internal { message: e.to_string() })?;
 
     tracing::info!(
         reward_id = %reward_id,
         channel_id = %auth.channel_id,
-        new_market_price = cheapest_item.price,
-        new_cost = twitch_points_cost,
         "Reward price manually recalculated"
     );
 
     Ok(Json(serde_json::json!({ "updated": true })))
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct PreviewFilterBody {
+    /// Filter configuration to test
+    pub filter_config: crate::db::rewards::FilterConfig,
+    /// Strategy to calculate aggregate market price (AVERAGE, MEDIAN, MAX). Defaults to AVERAGE.
+    pub price_strategy: Option<crate::db::rewards::PriceStrategy>,
+    /// Optional Twitch markup percentage to estimate Channel Points cost
+    pub twitch_price_markup_percentage: Option<i16>,
+    /// Optional currency code (e.g. "RUB", "USD"). If not provided, channel currency is used.
+    pub currency: Option<String>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct PreviewFilterResponse {
+    /// Number of market items matching filter
+    pub total_matching_items: usize,
+    /// Minimum market price among matching items
+    pub min_price: f64,
+    /// Maximum market price among matching items
+    pub max_price: f64,
+    /// Average market price among matching items
+    pub average_price: f64,
+    /// Median market price among matching items
+    pub median_price: f64,
+    /// Calculated market price in major currency units according to strategy
+    pub calculated_market_price: f64,
+    /// Estimated Twitch channel points cost
+    pub estimated_twitch_points: u32,
+    /// Currency code (e.g. "RUB")
+    pub currency: String,
+    /// Sample matching items (up to 50)
+    pub sample_items: Vec<crate::steam::market::prices::MarketPriceItem>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/broadcasters/{channel_id}/rewards/preview-filter",
+    tag = "Rewards",
+    summary = "Preview filter reward items and price",
+    description = "Tests a filter configuration against market prices, returning the total count of matching skins, sample items, and estimated Twitch channel points cost.",
+    params(
+        ("channel_id" = String, Path, description = "Twitch channel ID"),
+    ),
+    request_body = PreviewFilterBody,
+    responses(
+        (status = 200, description = "Preview calculated successfully", body = PreviewFilterResponse),
+        (status = 400, description = "Invalid request or filter parameters"),
+        (status = 401, description = "Unauthorized — missing or invalid session cookie"),
+        (status = 403, description = "Forbidden — no access to this channel"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(
+        ("session_id" = [])
+    )
+)]
+pub async fn preview_filter(
+    auth: AuthorizedChannel,
+    State(state): State<Arc<AppState>>,
+    JsonArg(body): JsonArg<PreviewFilterBody>,
+) -> Result<Json<PreviewFilterResponse>, ApiError> {
+    if body.filter_config.min_price < 0.0 || body.filter_config.max_price < body.filter_config.min_price {
+        return Err(ApiError::BadRequest {
+            message: "Invalid filter price range: min_price must be >= 0 and max_price >= min_price".into(),
+            param: "filter_config".into(),
+        });
+    }
+
+    let setting = state.db.get_or_create_broadcaster_setting(&auth.channel_id).await?;
+    let cached_balance = state.get_cached_or_fetch_balance(&auth.channel_id).await.ok();
+    let currency = body.currency
+        .filter(|c| !c.trim().is_empty())
+        .or_else(|| cached_balance.map(|b| b.currency))
+        .unwrap_or_else(|| "RUB".to_string());
+
+    let all_prices = state.get_cached_or_fetch_prices(&currency).await
+        .map_err(|e| ApiError::Internal { message: format!("Failed to fetch market prices: {}", e) })?;
+
+    let matching = crate::steam::market::prices::filter_prices(&all_prices, &body.filter_config);
+    let total_matching_items = matching.len();
+
+    let strategy = body.price_strategy.unwrap_or(crate::db::rewards::PriceStrategy::Average);
+    let prices: Vec<f64> = matching.iter().map(|i| i.price).collect();
+
+    let min_price = prices.iter().copied().min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(0.0);
+    let max_price = crate::steam::market::prices::calculate_max(&prices).unwrap_or(0.0);
+    let average_price = crate::steam::market::prices::calculate_average(&prices).unwrap_or(0.0);
+    let median_price = crate::steam::market::prices::calculate_median(&mut prices.clone()).unwrap_or(0.0);
+
+    let calculated_market_price = match strategy {
+        crate::db::rewards::PriceStrategy::Average => average_price,
+        crate::db::rewards::PriceStrategy::Median => median_price,
+        crate::db::rewards::PriceStrategy::Max => max_price,
+    };
+
+    let markup_factor = 1.0 + (body.twitch_price_markup_percentage.unwrap_or(0) as f64 / 100.0).max(0.0);
+    let raw_cost = calculated_market_price * markup_factor * setting.base_price_multiplier as f64;
+    let estimated_twitch_points = (raw_cost.ceil() as u32).max(1);
+
+    let sample_items: Vec<crate::steam::market::prices::MarketPriceItem> = matching.into_iter().take(50).collect();
+
+    Ok(Json(PreviewFilterResponse {
+        total_matching_items,
+        min_price,
+        max_price,
+        average_price,
+        median_price,
+        calculated_market_price,
+        estimated_twitch_points,
+        currency,
+        sample_items,
+    }))
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -1122,6 +1389,118 @@ mod tests {
             _ => unreachable!(),
         };
         assert!(patch_reason.is_none());
+    }
+
+    #[test]
+    fn test_create_reward_body_defaults() {
+        let json_str = r#"{
+            "twitch_title": "Test Reward",
+            "twitch_description": "Desc",
+            "permissible_market_price_deviation": 10,
+            "twitch_price_markup_percentage": 100,
+            "global_cooldown_seconds": 0,
+            "max_redemptions_per_stream": 0,
+            "max_redemptions_per_user_per_stream": 0,
+            "market_autobuy": true,
+            "is_paused": false
+        }"#;
+
+        let parsed: CreateRewardBody = serde_json::from_str(json_str).unwrap();
+        assert_eq!(parsed.reward_type, crate::db::rewards::RewardType::Fixed);
+        assert_eq!(parsed.pricing_mode, crate::db::rewards::PricingMode::Auto);
+        assert!(parsed.price_strategy.is_none());
+        assert!(parsed.filter_config.is_none());
+        assert!(parsed.pool_items.is_none());
+    }
+
+    #[test]
+    fn test_create_reward_body_pool_and_manual() {
+        let json_str = r#"{
+            "twitch_title": "Pool Reward",
+            "twitch_description": "Desc",
+            "reward_type": "POOL",
+            "pricing_mode": "MANUAL",
+            "manual_twitch_points": 5000,
+            "pool_items": [
+                {
+                    "market_hash_name": "AK-47 | Redline (Field-Tested)",
+                    "weight": 80.0,
+                    "permissible_market_price_deviation": 10
+                },
+                {
+                    "market_hash_name": "AWP | Asiimov (Field-Tested)",
+                    "weight": 20.0,
+                    "permissible_market_price_deviation": 5
+                }
+            ],
+            "permissible_market_price_deviation": 10,
+            "twitch_price_markup_percentage": 50,
+            "global_cooldown_seconds": 0,
+            "max_redemptions_per_stream": 0,
+            "max_redemptions_per_user_per_stream": 0,
+            "market_autobuy": true,
+            "is_paused": false
+        }"#;
+
+        let parsed: CreateRewardBody = serde_json::from_str(json_str).unwrap();
+        assert_eq!(parsed.reward_type, crate::db::rewards::RewardType::Pool);
+        assert_eq!(parsed.pricing_mode, crate::db::rewards::PricingMode::Manual);
+        assert_eq!(parsed.manual_twitch_points, Some(5000));
+        assert_eq!(parsed.pool_items.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_create_reward_body_filter() {
+        let json_str = r#"{
+            "twitch_title": "Random Pistol",
+            "twitch_description": "Desc",
+            "reward_type": "FILTER",
+            "pricing_mode": "AUTO",
+            "price_strategy": "MEDIAN",
+            "filter_config": {
+                "min_price": 10.0,
+                "max_price": 50.0,
+                "name_contains": "Glock-18",
+                "min_volume": 100
+            },
+            "permissible_market_price_deviation": 15,
+            "twitch_price_markup_percentage": 20,
+            "global_cooldown_seconds": 0,
+            "max_redemptions_per_stream": 0,
+            "max_redemptions_per_user_per_stream": 0,
+            "market_autobuy": true,
+            "is_paused": false
+        }"#;
+
+        let parsed: CreateRewardBody = serde_json::from_str(json_str).unwrap();
+        assert_eq!(parsed.reward_type, crate::db::rewards::RewardType::Filter);
+        assert_eq!(parsed.price_strategy, Some(crate::db::rewards::PriceStrategy::Median));
+        let filter = parsed.filter_config.unwrap();
+        assert_eq!(filter.min_price, 10.0);
+        assert_eq!(filter.max_price, 50.0);
+        assert_eq!(filter.name_contains.as_deref(), Some("Glock-18"));
+        assert_eq!(filter.min_volume, Some(100));
+    }
+
+    #[test]
+    fn test_update_reward_body_deserialization() {
+        let json_str = r#"{
+            "reward_type": "FILTER",
+            "pricing_mode": "MANUAL",
+            "manual_twitch_points": 12000,
+            "price_strategy": "MAX",
+            "filter_config": {
+                "min_price": 5.0,
+                "max_price": 25.0
+            }
+        }"#;
+
+        let parsed: UpdateRewardBody = serde_json::from_str(json_str).unwrap();
+        assert_eq!(parsed.reward_type, Some(crate::db::rewards::RewardType::Filter));
+        assert_eq!(parsed.pricing_mode, Some(crate::db::rewards::PricingMode::Manual));
+        assert_eq!(parsed.manual_twitch_points, Some(12000));
+        assert_eq!(parsed.price_strategy, Some(crate::db::rewards::PriceStrategy::Max));
+        assert!(parsed.filter_config.is_some());
     }
 }
 

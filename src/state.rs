@@ -46,6 +46,7 @@ pub struct AppState {
 
     pub bot_info: RwLock<Option<BotInfo>>,
     pub market_balances: RwLock<HashMap<String, CachedMarketBalance>>,
+    pub market_prices: RwLock<HashMap<String, (std::time::Instant, Arc<Vec<crate::steam::market::prices::MarketPriceItem>>)>>,
     pub chat_messages: RwLock<HashMap<String, HashMap<String, String>>>,
     pub active_broadcaster_tasks: Mutex<HashMap<String, CancellationToken>>,
 
@@ -90,6 +91,7 @@ impl AppState {
                 .expect("FRONTEND_URL not found in the environment"),
             bot_info: RwLock::new(bot_info),
             market_balances: RwLock::new(HashMap::new()),
+            market_prices: RwLock::new(HashMap::new()),
             chat_messages: RwLock::new(chat_messages_map),
             active_broadcaster_tasks: Mutex::new(HashMap::new()),
             db,
@@ -343,13 +345,43 @@ impl AppState {
         };
 
         for reward in rewards {
-            if reward.current_market_price <= 0 {
-                continue;
-            }
+            let max_price_minor: i64 = match reward.reward_type {
+                crate::db::rewards::RewardType::Fixed => {
+                    if reward.current_market_price <= 0 {
+                        continue;
+                    }
+                    let p = reward.current_market_price as i64;
+                    p + (p * reward.permissible_market_price_deviation as i64) / 100
+                }
+                crate::db::rewards::RewardType::Filter => {
+                    if let Some(ref f) = reward.filter_config {
+                        let p_minor = market::major_to_minor(f.max_price, &reward.currency);
+                        p_minor + (p_minor * reward.permissible_market_price_deviation as i64) / 100
+                    } else {
+                        if reward.current_market_price <= 0 {
+                            continue;
+                        }
+                        let p = reward.current_market_price as i64;
+                        p + (p * reward.permissible_market_price_deviation as i64) / 100
+                    }
+                }
+                crate::db::rewards::RewardType::Pool => {
+                    if let Some(ref items) = reward.pool_items {
+                        items.iter().map(|i| {
+                            let p = i.current_market_price as i64;
+                            p + (p * i.permissible_market_price_deviation as i64) / 100
+                        }).max().unwrap_or(reward.current_market_price as i64)
+                    } else {
+                        if reward.current_market_price <= 0 {
+                            continue;
+                        }
+                        let p = reward.current_market_price as i64;
+                        p + (p * reward.permissible_market_price_deviation as i64) / 100
+                    }
+                }
+            };
 
-            let max_price = (reward.current_market_price as i64)
-                + ((reward.current_market_price as i64 * reward.permissible_market_price_deviation as i64) / 100);
-            let cost = market::minor_to_major(max_price, &reward.currency);
+            let cost = market::minor_to_major(max_price_minor, &reward.currency);
             let has_enough_money = current_balance >= cost;
 
             let (target_paused, target_pause_reason) = if !has_enough_money {
@@ -492,4 +524,40 @@ impl AppState {
     pub fn get_channel_custom_chat_messages(&self, channel_id: &str) -> HashMap<String, String> {
         self.chat_messages.read().get(channel_id).cloned().unwrap_or_default()
     }
-}
+
+    /// Retrieve market prices for the given currency, using a 60-second in-memory cache.
+    pub async fn get_cached_or_fetch_prices(
+        &self,
+        currency: &str,
+    ) -> Result<Arc<Vec<crate::steam::market::prices::MarketPriceItem>>, String> {
+        let currency_upper = currency.to_uppercase();
+        {
+            let cache = self.market_prices.read();
+            if let Some((instant, items)) = cache.get(&currency_upper) {
+                if instant.elapsed() < std::time::Duration::from_secs(60) {
+                    return Ok(Arc::clone(items));
+                }
+            }
+        }
+
+        let res = self.market_client.get_prices(&currency_upper).await
+            .map_err(|e| format!("Network error fetching prices: {}", e))?;
+
+        if let Some(err) = res.error {
+            return Err(format!("Market error fetching prices: {}", err));
+        }
+
+        if !res.success {
+            return Err("Unsuccessful response from market prices endpoint".to_string());
+        }
+
+        let items = Arc::new(res.items.unwrap_or_default());
+        {
+            let mut cache = self.market_prices.write();
+            cache.insert(currency_upper, (std::time::Instant::now(), Arc::clone(&items)));
+        }
+
+        Ok(items)
+    }
+}
+

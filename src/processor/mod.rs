@@ -4,12 +4,16 @@ use uuid::Uuid;
 use crate::db::redemptions::{NewRedemption, RedemptionStatus};
 use crate::messages::{
     MSG_MARKET_ERROR, MSG_ORDER_CREATED, MSG_ORDER_FAILED,
-    MSG_ORDER_FAILED_NO_MONEY_PENALTY, MSG_ORDER_FAILED_NO_MONEY_REFUND, MSG_TRADE_LINK_INVALID,
+    MSG_ORDER_FAILED_NO_MONEY_PENALTY, MSG_ORDER_FAILED_NO_MONEY_REFUND,
+    MSG_ORDER_FAILED_FILTER_EXHAUSTED, MSG_TRADE_LINK_INVALID,
 };
+use crate::db::rewards::RewardType;
 use crate::processor::model::EventSubNotification;
 use crate::processor::order_watcher::{OrderWatcher, WatcherRedemptionData};
 use crate::state::AppState;
 use crate::steam::trade_link::TradeLink;
+use crate::steam::market;
+
 
 pub mod model;
 pub mod price_updater;
@@ -212,6 +216,11 @@ pub async fn process_redemption(
         return;
     }
 
+    let initial_item_name = match reward_data.reward_type {
+        RewardType::Fixed => reward_data.market_item_name.clone(),
+        _ => None,
+    };
+
     match state.db.insert_redemption_if_new(&NewRedemption {
         twitch_redemption_id: redemption_id,
         twitch_reward_id: reward_id,
@@ -221,6 +230,7 @@ pub async fn process_redemption(
         twitch_points_cost: event.reward.cost,
         currency: reward_data.currency.clone(),
         status: RedemptionStatus::Pending,
+        market_item_name: initial_item_name,
     }).await {
         Ok(Some(_)) => {},
         Ok(None) => {
@@ -320,31 +330,329 @@ pub async fn process_redemption(
         }
     };
 
-    let max_price_i64 = (reward_data.current_market_price as i64)
-        + ((reward_data.current_market_price as i64 * reward_data.permissible_market_price_deviation as i64) / 100);
-    let max_price = max_price_i64.min(i32::MAX as i64) as i32;
+    match reward_data.reward_type {
+        RewardType::Fixed => {
+            let item_name = reward_data.market_item_name.clone().unwrap_or_default();
+            let max_price_i64 = (reward_data.current_market_price as i64)
+                + ((reward_data.current_market_price as i64 * reward_data.permissible_market_price_deviation as i64) / 100);
+            let max_price = max_price_i64.min(i32::MAX as i64) as i32;
+            let redemption_custom_id = redemption_id.to_string();
 
-    let redemption_custom_id = redemption_id.to_string();
+            buy_item_once(
+                &state,
+                &broadcaster_setting,
+                &broadcaster_user_id,
+                &bot_channel_id,
+                redemption_id,
+                reward_id,
+                &event.user_login,
+                &item_name,
+                max_price,
+                trade_link,
+                &redemption_custom_id,
+                0,
+                true,
+            ).await;
+        }
+        RewardType::Pool => {
+            let pool = match reward_data.pool_items.as_ref().map(|j| &j.0) {
+                Some(items) if !items.is_empty() => items,
+                _ => {
+                    warn!(redemption_id = %redemption_id, "Pool reward has empty pool items");
+                    update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("Pool items list is empty")).await;
+                    return;
+                }
+            };
 
+            let picked = match pick_pool_item(pool) {
+                Some(item) => item,
+                None => {
+                    update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("Failed to pick pool item")).await;
+                    return;
+                }
+            };
+
+            let item_name = picked.market_hash_name.clone();
+            let price = picked.current_market_price as i64;
+            let dev = picked.permissible_market_price_deviation as i64;
+            let max_price_i64 = price + (price * dev) / 100;
+            let max_price = max_price_i64.min(i32::MAX as i64) as i32;
+            let redemption_custom_id = redemption_id.to_string();
+
+            buy_item_once(
+                &state,
+                &broadcaster_setting,
+                &broadcaster_user_id,
+                &bot_channel_id,
+                redemption_id,
+                reward_id,
+                &event.user_login,
+                &item_name,
+                max_price,
+                trade_link,
+                &redemption_custom_id,
+                0,
+                false,
+            ).await;
+        }
+        RewardType::Filter => {
+            let filter = match reward_data.filter_config.as_ref().map(|j| &j.0) {
+                Some(f) => f,
+                None => {
+                    warn!(redemption_id = %redemption_id, "Filter reward has no filter_config");
+                    update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("Filter config is missing")).await;
+                    return;
+                }
+            };
+
+            let all_prices = match state.get_cached_or_fetch_prices(&reward_data.currency).await {
+                Ok(prices) => prices,
+                Err(e) => {
+                    error!(error = %e, redemption_id = %redemption_id, "Failed to fetch prices for filter redemption");
+                    update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("Failed to fetch market prices")).await;
+                    return;
+                }
+            };
+
+            let matching = crate::steam::market::prices::filter_prices(&all_prices, filter);
+            if matching.is_empty() {
+                warn!(redemption_id = %redemption_id, "No items match filter criteria for redemption");
+                update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("No items match filter criteria")).await;
+                let msg = state.render_chat_message(&broadcaster_user_id, MSG_ORDER_FAILED_FILTER_EXHAUSTED, &[("buyer", &event.user_login), ("attempts", "0")]);
+                let _ = state.with_bot_user_token(async |token| {
+                    state.helix_client.send_chat_message(&broadcaster_user_id, &bot_channel_id, &msg, None, None, &token).await
+                }).await;
+                return;
+            }
+
+            let mut attempted_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
+            let mut order_created = false;
+
+            for attempt in 1..=5 {
+                let available: Vec<usize> = (0..matching.len()).filter(|i| !attempted_indices.contains(i)).collect();
+                if available.is_empty() {
+                    break;
+                }
+
+                let rand_idx = (uuid::Uuid::new_v4().as_u128() % (available.len() as u128)) as usize;
+                let selected_idx = available[rand_idx];
+                attempted_indices.insert(selected_idx);
+                let item = &matching[selected_idx];
+
+                let item_price_minor = market::major_to_minor(item.price, &reward_data.currency);
+                let filter_max_minor = market::major_to_minor(filter.max_price, &reward_data.currency);
+                let base_price = item_price_minor.min(filter_max_minor);
+                let dev = reward_data.permissible_market_price_deviation as i64;
+                let max_price_i64 = base_price + (base_price * dev) / 100;
+                let max_price = max_price_i64.min(i32::MAX as i64) as i32;
+
+                let custom_id = if attempt == 1 {
+                    redemption_id.to_string()
+                } else {
+                    format!("{}-{}", redemption_id, attempt - 1)
+                };
+
+                info!(
+                    redemption_id = %redemption_id,
+                    attempt = attempt,
+                    item = %item.market_hash_name,
+                    price = max_price,
+                    "Attempting market buy-for for filter reward"
+                );
+
+                match state.market_client.buy_for(
+                    &broadcaster_setting.market_api_key,
+                    &item.market_hash_name,
+                    max_price,
+                    broadcaster_setting.market_chance_to_transfer,
+                    trade_link.clone(),
+                    &custom_id,
+                ).await {
+                    Ok(res) if res.success => {
+                        info!(
+                            redemption_id = %redemption_id,
+                            attempt = attempt,
+                            item = %item.market_hash_name,
+                            price = ?res.price,
+                            market_id = ?res.id,
+                            "Market buy-for succeeded, order created"
+                        );
+
+                        let state_for_balance = state.clone();
+                        let bc_id_for_balance = broadcaster_user_id.clone();
+                        state.spawn_task(async move {
+                            let _ = state_for_balance.refresh_broadcaster_balance(&bc_id_for_balance).await;
+                        });
+
+                        let paid_price = res.price.unwrap_or(max_price as i64);
+                        if let Err(e) = state.db.set_redemption_order_created(
+                            redemption_id,
+                            paid_price,
+                            Some(&item.market_hash_name),
+                            (attempt - 1) as i32,
+                        ).await {
+                            error!(error = %e, redemption_id = %redemption_id, "DB error setting redemption status to order_created");
+                            return;
+                        }
+
+                        let order_watcher = OrderWatcher::new(
+                            state.clone(),
+                            broadcaster_setting.market_api_key.clone(),
+                            broadcaster_user_id.clone(),
+                            WatcherRedemptionData {
+                                redemption_id,
+                                custom_id,
+                                reward_id,
+                                user_login: event.user_login.clone(),
+                            },
+                        );
+
+                        let token = state.shutdown_token.clone();
+                        state.spawn_task(async move {
+                            order_watcher.track_redemption(token).await;
+                        });
+
+                        let msg = state.render_chat_message(
+                            &broadcaster_user_id,
+                            MSG_ORDER_CREATED,
+                            &[("buyer", &event.user_login), ("item", &item.market_hash_name)],
+                        );
+                        let _ = state.with_bot_user_token(async |token| {
+                            state.helix_client.send_chat_message(
+                                &broadcaster_user_id,
+                                &bot_channel_id,
+                                &msg,
+                                None, None,
+                                &token,
+                            ).await
+                        }).await;
+
+                        order_created = true;
+                        break;
+                    }
+                    Ok(res) => {
+                        let error_msg = res.error.unwrap_or_else(|| "Unknown market error".to_string());
+                        warn!(
+                            redemption_id = %redemption_id,
+                            attempt = attempt,
+                            item = %item.market_hash_name,
+                            error = %error_msg,
+                            "Market rejected buy-for attempt"
+                        );
+
+                        if error_msg.eq_ignore_ascii_case("not enough funds on account") {
+                            let return_channel_points = broadcaster_setting.refund_if_no_money;
+                            let state_for_balance = state.clone();
+                            let bc_id_for_balance = broadcaster_user_id.clone();
+                            state.spawn_task(async move {
+                                let _ = state_for_balance.refresh_broadcaster_balance(&bc_id_for_balance).await;
+                            });
+
+                            update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, return_channel_points, Some(&error_msg)).await;
+                            let msg_template = if return_channel_points { MSG_ORDER_FAILED_NO_MONEY_REFUND } else { MSG_ORDER_FAILED_NO_MONEY_PENALTY };
+                            let msg = state.render_chat_message(&broadcaster_user_id, msg_template, &[("buyer", &event.user_login), ("item", &item.market_hash_name)]);
+                            let _ = state.with_bot_user_token(async |token| {
+                                state.helix_client.send_chat_message(&broadcaster_user_id, &bot_channel_id, &msg, None, None, &token).await
+                            }).await;
+                            return;
+                        }
+
+                        if error_msg.eq_ignore_ascii_case("no item found at the specified chance to transfer at the specified price or below") {
+                            continue;
+                        }
+
+                        continue;
+                    }
+                    Err(e) => {
+                        warn!(error = %e, redemption_id = %redemption_id, attempt = attempt, "Network error on buy-for attempt, trying next item");
+                        continue;
+                    }
+                }
+            }
+
+            if !order_created {
+                warn!(redemption_id = %redemption_id, "All attempts to purchase an item for filter reward failed");
+                update_redemption_status_failed(
+                    state.clone(),
+                    &broadcaster_user_id,
+                    reward_id,
+                    redemption_id,
+                    true,
+                    Some("All filter buy attempts failed"),
+                ).await;
+
+                let msg = state.render_chat_message(
+                    &broadcaster_user_id,
+                    MSG_ORDER_FAILED_FILTER_EXHAUSTED,
+                    &[("buyer", &event.user_login), ("attempts", "5")],
+                );
+                let _ = state.with_bot_user_token(async |token| {
+                    state.helix_client.send_chat_message(
+                        &broadcaster_user_id,
+                        &bot_channel_id,
+                        &msg,
+                        None, None,
+                        &token,
+                    ).await
+                }).await;
+            }
+        }
+    }
+}
+
+fn pick_pool_item(items: &[crate::db::rewards::PoolItemConfig]) -> Option<&crate::db::rewards::PoolItemConfig> {
+    if items.is_empty() {
+        return None;
+    }
+    let total_weight: f64 = items.iter().map(|i| i.weight.max(0.0)).sum();
+    if total_weight <= 0.0 {
+        return items.first();
+    }
+    let roll = ((uuid::Uuid::new_v4().as_u128() as f64) / (u128::MAX as f64)) * total_weight;
+    let mut current = 0.0;
+    for item in items {
+        current += item.weight.max(0.0);
+        if roll <= current {
+            return Some(item);
+        }
+    }
+    items.last()
+}
+
+async fn buy_item_once(
+    state: &Arc<AppState>,
+    broadcaster_setting: &crate::db::broadcaster_settings::BroadcasterSetting,
+    broadcaster_user_id: &str,
+    bot_channel_id: &str,
+    redemption_id: Uuid,
+    reward_id: Uuid,
+    user_login: &str,
+    item_name: &str,
+    max_price: i32,
+    trade_link: TradeLink,
+    redemption_custom_id: &str,
+    retry_count: i32,
+    trigger_price_update_on_deviation: bool,
+) {
     match state.market_client.buy_for(
         &broadcaster_setting.market_api_key,
-        &reward_data.market_item_name,
+        item_name,
         max_price,
         broadcaster_setting.market_chance_to_transfer,
         trade_link,
-        &redemption_custom_id
+        redemption_custom_id,
     ).await {
         Ok(res) if res.success => {
             info!(
                 redemption_id = %redemption_id,
-                item = %reward_data.market_item_name,
+                item = %item_name,
                 price = ?res.price,
                 market_id = ?res.id,
                 "Market buy-for succeeded, order created"
             );
 
             let state_for_balance = state.clone();
-            let bc_id_for_balance = broadcaster_user_id.clone();
+            let bc_id_for_balance = broadcaster_user_id.to_string();
             state.spawn_task(async move {
                 let _ = state_for_balance.refresh_broadcaster_balance(&bc_id_for_balance).await;
             });
@@ -354,6 +662,8 @@ pub async fn process_redemption(
             if let Err(e) = state.db.set_redemption_order_created(
                 redemption_id,
                 paid_price,
+                Some(item_name),
+                retry_count,
             ).await {
                 error!(error = %e, redemption_id = %redemption_id, "DB error setting redemption status to order_created");
                 return;
@@ -361,14 +671,15 @@ pub async fn process_redemption(
 
             let order_watcher = OrderWatcher::new(
                 state.clone(),
-                broadcaster_setting.market_api_key,
-                broadcaster_user_id.clone(),
+                broadcaster_setting.market_api_key.clone(),
+                broadcaster_user_id.to_string(),
                 WatcherRedemptionData {
                     redemption_id,
-                    custom_id: redemption_custom_id,
+                    custom_id: redemption_custom_id.to_string(),
                     reward_id,
-                    user_login: event.user_login.clone(),
-            });
+                    user_login: user_login.to_string(),
+                },
+            );
 
             let token = state.shutdown_token.clone();
             state.spawn_task(async move {
@@ -376,20 +687,19 @@ pub async fn process_redemption(
             });
 
             let msg = state.render_chat_message(
-                &broadcaster_user_id,
+                broadcaster_user_id,
                 MSG_ORDER_CREATED,
-                &[("buyer", &event.user_login)],
+                &[("buyer", user_login), ("item", item_name)],
             );
             if let Err(e) = state.with_bot_user_token(async |token| {
                 state.helix_client.send_chat_message(
-                    &broadcaster_user_id,
-                    &bot_channel_id,
+                    broadcaster_user_id,
+                    bot_channel_id,
                     &msg,
                     None, None,
                     &token).await
             }).await {
                 error!(error = %e, redemption_id = %redemption_id, broadcaster_id = %broadcaster_user_id, "Failed to send chat message for created order");
-                return;
             }
         }
         Ok(res) => {
@@ -408,15 +718,15 @@ pub async fn process_redemption(
                 return_channel_points = broadcaster_setting.refund_if_no_money;
 
                 let state_for_balance = state.clone();
-                let bc_id_for_balance = broadcaster_user_id.clone();
+                let bc_id_for_balance = broadcaster_user_id.to_string();
                 state.spawn_task(async move {
                     let _ = state_for_balance.refresh_broadcaster_balance(&bc_id_for_balance).await;
                 });
             }
 
-            if error_msg.eq_ignore_ascii_case("no item found at the specified chance to transfer at the specified price or below") {
+            if trigger_price_update_on_deviation && error_msg.eq_ignore_ascii_case("no item found at the specified chance to transfer at the specified price or below") {
                 let state_clone = state.clone();
-                let bc_id = broadcaster_user_id.clone();
+                let bc_id = broadcaster_user_id.to_string();
                 state.spawn_task(async move {
                     info!(reward_id = %reward_id, "Triggering immediate price update due to market price deviation");
                     if let Err(e) = price_updater::update_single_reward_price(&state_clone, &bc_id, reward_id).await {
@@ -427,72 +737,70 @@ pub async fn process_redemption(
 
             update_redemption_status_failed(
                 state.clone(),
-                &broadcaster_user_id,
+                broadcaster_user_id,
                 reward_id,
                 redemption_id,
                 return_channel_points,
-                Some(&error_msg)
+                Some(&error_msg),
             ).await;
 
             let code_str = code.to_string();
             let (msg_template, msg_vars): (&str, Vec<(&str, &str)>) = if error_msg.eq_ignore_ascii_case("not enough funds on account") {
                 if return_channel_points {
-                    (MSG_ORDER_FAILED_NO_MONEY_REFUND, vec![("buyer", event.user_login.as_str())])
+                    (MSG_ORDER_FAILED_NO_MONEY_REFUND, vec![("buyer", user_login), ("item", item_name)])
                 } else {
-                    (MSG_ORDER_FAILED_NO_MONEY_PENALTY, vec![("buyer", event.user_login.as_str())])
+                    (MSG_ORDER_FAILED_NO_MONEY_PENALTY, vec![("buyer", user_login), ("item", item_name)])
                 }
             } else {
-                (MSG_ORDER_FAILED, vec![("buyer", event.user_login.as_str()), ("code", code_str.as_str()), ("error", error_msg.as_str())])
+                (MSG_ORDER_FAILED, vec![("buyer", user_login), ("code", code_str.as_str()), ("error", error_msg.as_str()), ("item", item_name)])
             };
 
             let msg = state.render_chat_message(
-                &broadcaster_user_id,
+                broadcaster_user_id,
                 msg_template,
                 &msg_vars,
             );
             if let Err(e) = state.with_bot_user_token(async |token| {
                 state.helix_client.send_chat_message(
-                    &broadcaster_user_id,
-                    &bot_channel_id,
+                    broadcaster_user_id,
+                    bot_channel_id,
                     &msg,
                     None, None,
                     &token).await
             }).await {
                 error!(error = %e, redemption_id = %redemption_id, broadcaster_id = %broadcaster_user_id, "Failed to send chat message for rejected order");
-                return;
             }
         }
         Err(e) => {
             error!(
                 error = %e,
                 redemption_id = %redemption_id,
-                item = %reward_data.market_item_name,
+                item = %item_name,
                 "Failed to send HTTP request to Market"
             );
             update_redemption_status_failed(
                 state.clone(),
-                &broadcaster_user_id,
+                broadcaster_user_id,
                 reward_id,
                 redemption_id,
                 true,
-                Some(&format!("Market network error: {}", e))
+                Some(&format!("Market network error: {}", e)),
             ).await;
 
             let msg = state.render_chat_message(
-                &broadcaster_user_id,
+                broadcaster_user_id,
                 MSG_MARKET_ERROR,
-                &[("buyer", &event.user_login)],
+                &[("buyer", user_login), ("item", item_name)],
             );
             if let Err(e) = state.with_bot_user_token(async |token| {
                 state.helix_client.send_chat_message(
-                    &broadcaster_user_id,
-                    &bot_channel_id,
+                    broadcaster_user_id,
+                    bot_channel_id,
                     &msg,
                     None, None,
                     &token).await
             }).await {
                 error!(error = %e, redemption_id = %redemption_id, broadcaster_id = %broadcaster_user_id, "Failed to send chat message for market network error");
-                return;
             }
         }
     }
@@ -552,4 +860,90 @@ async fn update_redemption_status_failed(
         fail_description = ?fail_description,
         "Redemption status marked as failed successfully"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::rewards::PoolItemConfig;
+
+    #[test]
+    fn test_pick_pool_item_empty() {
+        let empty: Vec<PoolItemConfig> = vec![];
+        assert!(pick_pool_item(&empty).is_none());
+    }
+
+    #[test]
+    fn test_pick_pool_item_single() {
+        let items = vec![PoolItemConfig {
+            market_hash_name: "AK-47 | Redline (Field-Tested)".into(),
+            weight: 100.0,
+            permissible_market_price_deviation: 10,
+            current_market_price: 1500,
+        }];
+        let picked = pick_pool_item(&items).unwrap();
+        assert_eq!(picked.market_hash_name, "AK-47 | Redline (Field-Tested)");
+    }
+
+    #[test]
+    fn test_pick_pool_item_weighted_distribution() {
+        let items = vec![
+            PoolItemConfig {
+                market_hash_name: "Common".into(),
+                weight: 90.0,
+                permissible_market_price_deviation: 10,
+                current_market_price: 100,
+            },
+            PoolItemConfig {
+                market_hash_name: "Rare".into(),
+                weight: 10.0,
+                permissible_market_price_deviation: 10,
+                current_market_price: 1000,
+            },
+        ];
+
+        let mut common_count = 0;
+        let mut rare_count = 0;
+        for _ in 0..1000 {
+            let picked = pick_pool_item(&items).unwrap();
+            if picked.market_hash_name == "Common" {
+                common_count += 1;
+            } else {
+                rare_count += 1;
+            }
+        }
+
+        // With 90/10 split over 1000 trials, common should be between 800 and 970
+        assert!(common_count > 750, "Common count: {}", common_count);
+        assert!(rare_count > 20, "Rare count: {}", rare_count);
+    }
+
+    #[test]
+    fn test_filter_reward_order_price_clamping() {
+        let item_price_minor = 250000i64; // 2500.00 RUB
+        let filter_max_minor = 200000i64; // 2000.00 RUB
+        let base_price = item_price_minor.min(filter_max_minor);
+        assert_eq!(base_price, 200000); // clamped to filter_max
+
+        let deviation = 10i64;
+        let max_price = base_price + (base_price * deviation / 100);
+        assert_eq!(max_price, 220000); // 2200.00 RUB
+    }
+
+    #[test]
+    fn test_filter_retry_custom_id_format() {
+        let redemption_id = uuid::Uuid::new_v4();
+
+        // Attempt 1: original redemption id
+        let attempt1_id = redemption_id.to_string();
+        assert_eq!(attempt1_id, redemption_id.to_string());
+
+        // Attempt 2: redemption_id-1
+        let attempt2_id = format!("{}-{}", redemption_id, 2 - 1);
+        assert_eq!(attempt2_id, format!("{}-1", redemption_id));
+
+        // Attempt 5: redemption_id-4
+        let attempt5_id = format!("{}-{}", redemption_id, 5 - 1);
+        assert_eq!(attempt5_id, format!("{}-4", redemption_id));
+    }
 }

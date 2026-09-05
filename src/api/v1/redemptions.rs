@@ -35,6 +35,8 @@ pub struct RedemptionResponse {
     pub currency: String,
     /// Current redemption status
     pub status: RedemptionStatus,
+    /// Market item name redeemed/purchased (if known)
+    pub market_item_name: Option<String>,
     /// Number of retry attempts
     pub retry_count: i32,
     /// Failure cause code (if failed)
@@ -58,6 +60,7 @@ impl From<Redemption> for RedemptionResponse {
             market_paid_price: r.market_paid_price,
             currency: r.currency,
             status: r.status,
+            market_item_name: r.market_item_name,
             retry_count: r.retry_count,
             fail_cause: r.fail_cause,
             fail_description: r.fail_description,
@@ -239,9 +242,16 @@ pub async fn retry_redemption(
     let new_retry_count = state.db.increment_retry_count(redemption_id).await?;
     let custom_id = format!("{}-{}", redemption.twitch_redemption_id, new_retry_count);
 
+    let item_name = redemption.market_item_name.as_deref()
+        .or(reward.market_item_name.as_deref())
+        .ok_or_else(|| ApiError::BadRequest {
+            message: "No market item name associated with redemption".into(),
+            param: "market_item_name".into(),
+        })?;
+
     let market_result = state.market_client.buy_for(
         &setting.market_api_key,
-        &reward.market_item_name,
+        item_name,
         max_price,
         setting.market_chance_to_transfer,
         trade_link,
@@ -254,6 +264,8 @@ pub async fn retry_redemption(
             state.db.set_redemption_order_created(
                 redemption_id,
                 paid_price,
+                Some(item_name),
+                new_retry_count,
             ).await?;
             
             let order_watcher = OrderWatcher::new(

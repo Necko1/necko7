@@ -4,6 +4,7 @@ use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 pub mod sell_buy;
 pub mod items;
 pub mod account;
+pub mod prices;
 
 pub struct MarketClient {
     http_client: reqwest::Client,
@@ -30,3 +31,13 @@ pub fn minor_to_major(amount: i64, currency: &str) -> f64 {
 
     amount as f64 / div
 }
+
+pub fn major_to_minor(amount: f64, currency: &str) -> i64 {
+    let mul = if currency.eq_ignore_ascii_case("usd")
+        || currency.eq_ignore_ascii_case("eur")
+    {
+        1000.0
+    } else { 100.0 };
+
+    (amount * mul).round() as i64
+}

@@ -36,6 +36,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         rewards::delete_reward,
         rewards::update_reward_price,
         rewards::batch_rewards,
+        rewards::preview_filter,
         redemptions::list_redemptions,
         redemptions::retry_redemption,
         redemptions::refund_redemption,
@@ -59,6 +60,8 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         rewards::UpdateRewardBody,
         rewards::BatchRewardBody,
         rewards::ListRewardsQuery,
+        rewards::PreviewFilterBody,
+        rewards::PreviewFilterResponse,
         redemptions::RedemptionResponse,
         redemptions::PaginatedRedemptionsResponse,
         redemptions::ListRedemptionsQuery,
@@ -70,6 +73,12 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         crate::db::channel_permissions::ChannelRole,
         crate::db::redemptions::RedemptionStatus,
         crate::db::rewards::PauseReason,
+        crate::db::rewards::RewardType,
+        crate::db::rewards::PricingMode,
+        crate::db::rewards::PriceStrategy,
+        crate::db::rewards::FilterConfig,
+        crate::db::rewards::PoolItemConfig,
+        crate::steam::market::prices::MarketPriceItem,
     )),
     tags(
         (name = "Auth", description = "Twitch OAuth 2.0 authentication flows and session management"),
@@ -112,6 +121,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/broadcasters/{channel_id}/permissions", get(permissions::list_permissions).post(permissions::grant_permission))
         .route("/broadcasters/{channel_id}/permissions/{user_id}", delete(permissions::revoke_permission))
         .route("/broadcasters/{channel_id}/rewards", get(rewards::list_rewards).post(rewards::create_reward))
+        .route("/broadcasters/{channel_id}/rewards/preview-filter", post(rewards::preview_filter))
         .route("/broadcasters/{channel_id}/rewards/batch", post(rewards::batch_rewards))
         .route("/broadcasters/{channel_id}/rewards/{reward_id}", put(rewards::update_reward).delete(rewards::delete_reward))
         .route("/broadcasters/{channel_id}/rewards/{reward_id}/update-price", post(rewards::update_reward_price))
@@ -142,5 +152,18 @@ mod tests {
         let json = serde_json::to_string(&doc).unwrap();
         assert!(json.contains("/api/v1/proxy/image"), "OpenAPI schema must contain /api/v1/proxy/image");
         assert!(json.contains("ImageProxyParams"), "OpenAPI schema must contain ImageProxyParams");
+    }
+
+    #[test]
+    fn test_openapi_schema_contains_reward_types_and_filter() {
+        let doc = ApiDoc::openapi();
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(json.contains("RewardType"), "OpenAPI schema must contain RewardType");
+        assert!(json.contains("PricingMode"), "OpenAPI schema must contain PricingMode");
+        assert!(json.contains("PriceStrategy"), "OpenAPI schema must contain PriceStrategy");
+        assert!(json.contains("FilterConfig"), "OpenAPI schema must contain FilterConfig");
+        assert!(json.contains("PoolItemConfig"), "OpenAPI schema must contain PoolItemConfig");
+        assert!(json.contains("PreviewFilterResponse"), "OpenAPI schema must contain PreviewFilterResponse");
+        assert!(json.contains("/api/v1/broadcasters/{channel_id}/rewards/preview-filter"), "OpenAPI schema must contain preview-filter endpoint");
     }
 }

@@ -7,6 +7,7 @@ pub const MSG_ORDER_CREATED: &str = "order_created";
 pub const MSG_ORDER_FAILED: &str = "order_failed";
 pub const MSG_ORDER_FAILED_NO_MONEY_REFUND: &str = "order_failed_no_money_refund";
 pub const MSG_ORDER_FAILED_NO_MONEY_PENALTY: &str = "order_failed_no_money_penalty";
+pub const MSG_ORDER_FAILED_FILTER_EXHAUSTED: &str = "order_failed_filter_exhausted";
 pub const MSG_MARKET_ERROR: &str = "market_error";
 pub const MSG_TRADE_CREATED: &str = "trade_created";
 pub const MSG_TRADE_ACCEPTED: &str = "trade_accepted";
@@ -15,12 +16,13 @@ pub const MSG_TRADE_FAILED_BUYER_PENALTY: &str = "trade_failed_buyer_penalty";
 pub const MSG_TRADE_FAILED_SELLER_REFUND: &str = "trade_failed_seller_refund";
 pub const MSG_TRADE_TIMEOUT: &str = "trade_timeout";
 
-pub const ALL_MESSAGE_KEYS: [&str; 12] = [
+pub const ALL_MESSAGE_KEYS: [&str; 13] = [
     MSG_TRADE_LINK_INVALID,
     MSG_ORDER_CREATED,
     MSG_ORDER_FAILED,
     MSG_ORDER_FAILED_NO_MONEY_REFUND,
     MSG_ORDER_FAILED_NO_MONEY_PENALTY,
+    MSG_ORDER_FAILED_FILTER_EXHAUSTED,
     MSG_MARKET_ERROR,
     MSG_TRADE_CREATED,
     MSG_TRADE_ACCEPTED,
@@ -38,6 +40,7 @@ pub struct ChatMessageTemplates {
     pub order_failed: String,
     pub order_failed_no_money_refund: String,
     pub order_failed_no_money_penalty: String,
+    pub order_failed_filter_exhausted: String,
     pub market_error: String,
     pub trade_created: String,
     pub trade_accepted: String,
@@ -55,6 +58,7 @@ impl Default for ChatMessageTemplates {
             order_failed: "@{buyer} не удалось создать ордер на маркете, вернул баллы. ошибка {code}: {error}".to_string(),
             order_failed_no_money_refund: "@{buyer} на балансе бота недостаточно средств для покупки скина. Вернул баллы канала.".to_string(),
             order_failed_no_money_penalty: "@{buyer} на балансе бота недостаточно средств для покупки скина, и по настройкам стримера баллы не возвращаются.".to_string(),
+            order_failed_filter_exhausted: "@{buyer} не удалось подобрать доступный скин по фильтрам награды (все попытки исчерпаны). Вернул баллы канала.".to_string(),
             market_error: "@{buyer} произошла внутренняя ошибка при отправке запроса на маркет. ничего трогать не буду, подробности в логах.".to_string(),
             trade_created: "@{buyer}, трейд был создан, у тебя есть {remaining} чтобы его принять - {tradeoffer}".to_string(),
             trade_accepted: "@{buyer} щекочет мой мозг, видимо трейд принял. не забудь об отзыве - @(ладно пока не надо отзывов на эту хуйню)".to_string(),
@@ -69,12 +73,13 @@ impl Default for ChatMessageTemplates {
 impl ChatMessageTemplates {
     /// Convert templates to a flat HashMap<message_id, template_string>.
     pub fn to_map(&self) -> HashMap<String, String> {
-        let mut map = HashMap::with_capacity(12);
+        let mut map = HashMap::with_capacity(13);
         map.insert(MSG_TRADE_LINK_INVALID.to_string(), self.trade_link_invalid.clone());
         map.insert(MSG_ORDER_CREATED.to_string(), self.order_created.clone());
         map.insert(MSG_ORDER_FAILED.to_string(), self.order_failed.clone());
         map.insert(MSG_ORDER_FAILED_NO_MONEY_REFUND.to_string(), self.order_failed_no_money_refund.clone());
         map.insert(MSG_ORDER_FAILED_NO_MONEY_PENALTY.to_string(), self.order_failed_no_money_penalty.clone());
+        map.insert(MSG_ORDER_FAILED_FILTER_EXHAUSTED.to_string(), self.order_failed_filter_exhausted.clone());
         map.insert(MSG_MARKET_ERROR.to_string(), self.market_error.clone());
         map.insert(MSG_TRADE_CREATED.to_string(), self.trade_created.clone());
         map.insert(MSG_TRADE_ACCEPTED.to_string(), self.trade_accepted.clone());
@@ -94,6 +99,7 @@ impl ChatMessageTemplates {
             order_failed: map.get(MSG_ORDER_FAILED).cloned().unwrap_or(default.order_failed),
             order_failed_no_money_refund: map.get(MSG_ORDER_FAILED_NO_MONEY_REFUND).cloned().unwrap_or(default.order_failed_no_money_refund),
             order_failed_no_money_penalty: map.get(MSG_ORDER_FAILED_NO_MONEY_PENALTY).cloned().unwrap_or(default.order_failed_no_money_penalty),
+            order_failed_filter_exhausted: map.get(MSG_ORDER_FAILED_FILTER_EXHAUSTED).cloned().unwrap_or(default.order_failed_filter_exhausted),
             market_error: map.get(MSG_MARKET_ERROR).cloned().unwrap_or(default.market_error),
             trade_created: map.get(MSG_TRADE_CREATED).cloned().unwrap_or(default.trade_created),
             trade_accepted: map.get(MSG_TRADE_ACCEPTED).cloned().unwrap_or(default.trade_accepted),
@@ -113,6 +119,7 @@ impl ChatMessageTemplates {
             MSG_ORDER_FAILED => Some(default.order_failed),
             MSG_ORDER_FAILED_NO_MONEY_REFUND => Some(default.order_failed_no_money_refund),
             MSG_ORDER_FAILED_NO_MONEY_PENALTY => Some(default.order_failed_no_money_penalty),
+            MSG_ORDER_FAILED_FILTER_EXHAUSTED => Some(default.order_failed_filter_exhausted),
             MSG_MARKET_ERROR => Some(default.market_error),
             MSG_TRADE_CREATED => Some(default.trade_created),
             MSG_TRADE_ACCEPTED => Some(default.trade_accepted),
@@ -128,20 +135,22 @@ impl ChatMessageTemplates {
     pub fn placeholders_for_message(message_id: &str) -> Vec<&'static str> {
         match message_id {
             MSG_TRADE_LINK_INVALID => vec!["buyer"],
-            MSG_ORDER_CREATED => vec!["buyer"],
+            MSG_ORDER_CREATED => vec!["buyer", "item"],
             MSG_ORDER_FAILED => vec!["buyer", "code", "error"],
             MSG_ORDER_FAILED_NO_MONEY_REFUND => vec!["buyer"],
             MSG_ORDER_FAILED_NO_MONEY_PENALTY => vec!["buyer"],
+            MSG_ORDER_FAILED_FILTER_EXHAUSTED => vec!["buyer", "attempts"],
             MSG_MARKET_ERROR => vec!["buyer"],
-            MSG_TRADE_CREATED => vec!["buyer", "remaining", "tradeoffer"],
-            MSG_TRADE_ACCEPTED => vec!["buyer"],
-            MSG_TRADE_FAILED_BUYER_REFUND => vec!["buyer"],
-            MSG_TRADE_FAILED_BUYER_PENALTY => vec!["buyer"],
-            MSG_TRADE_FAILED_SELLER_REFUND => vec!["buyer"],
-            MSG_TRADE_TIMEOUT => vec!["buyer"],
+            MSG_TRADE_CREATED => vec!["buyer", "remaining", "tradeoffer", "item"],
+            MSG_TRADE_ACCEPTED => vec!["buyer", "item"],
+            MSG_TRADE_FAILED_BUYER_REFUND => vec!["buyer", "item"],
+            MSG_TRADE_FAILED_BUYER_PENALTY => vec!["buyer", "item"],
+            MSG_TRADE_FAILED_SELLER_REFUND => vec!["buyer", "item"],
+            MSG_TRADE_TIMEOUT => vec!["buyer", "item"],
             _ => vec!["buyer"],
         }
     }
+
 
     /// Return map of all message keys to their supported placeholder lists.
     pub fn all_placeholders() -> HashMap<String, Vec<String>> {
@@ -219,7 +228,7 @@ mod tests {
     fn test_default_message_templates_roundtrip() {
         let defaults = ChatMessageTemplates::default();
         let map = defaults.to_map();
-        assert_eq!(map.len(), 12);
+        assert_eq!(map.len(), 13);
         let restored = ChatMessageTemplates::from_map(&map);
         assert_eq!(defaults, restored);
     }
