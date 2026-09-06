@@ -49,7 +49,6 @@ pub struct AppState {
     pub market_prices: RwLock<HashMap<String, (std::time::Instant, Arc<Vec<crate::steam::market::prices::MarketPriceItem>>)>>,
     pub chat_messages: RwLock<HashMap<String, HashMap<String, HashMap<String, String>>>>,
     pub active_broadcaster_tasks: Mutex<HashMap<String, CancellationToken>>,
-    pub chat_session_id: Arc<RwLock<Option<String>>>,
     pub twitch_user_cache: RwLock<HashMap<String, (std::time::Instant, Arc<crate::helix::api::users::UserInfo>)>>,
 
     pub db: Db,
@@ -96,7 +95,6 @@ impl AppState {
             market_prices: RwLock::new(HashMap::new()),
             chat_messages: RwLock::new(chat_messages_map),
             active_broadcaster_tasks: Mutex::new(HashMap::new()),
-            chat_session_id: Arc::new(RwLock::new(None)),
             twitch_user_cache: RwLock::new(HashMap::new()),
             db,
             app_initialized: AtomicBool::new(app_initialized),
@@ -284,30 +282,99 @@ impl AppState {
         }).await
     }
 
-    pub async fn subscribe_broadcaster_chat_ws(&self, broadcaster_id: &str) -> AppResult<()> {
-        let session_id = match self.chat_session_id.read().clone() {
-            Some(s) => s,
-            None => return Ok(()), // WebSocket is not currently connected; will subscribe on welcome
-        };
-
+    pub async fn create_chat_eventsub_subscription(
+        &self,
+        broadcaster_user_id: &str,
+    ) -> AppResult<()> {
         let bot_id = {
             let guard = self.bot_info.read();
-            guard.as_ref().map(|b| b.user_id.clone()).ok_or("The bot is not initialized")?
+            guard
+                .as_ref()
+                .map(|b| b.user_id.clone())
+                .ok_or("The bot is not initialized")?
         };
 
-        let bc_id = broadcaster_id.to_string();
-        let s_id = session_id.clone();
-        let b_id = bot_id.clone();
+        let callback_url = format!("{}/api/v1/eventsub", self.app_url);
 
-        self.with_bot_user_token(|token| {
-            let bc_id = bc_id.clone();
-            let b_id = b_id.clone();
-            let s_id = s_id.clone();
+        let body = api::eventsub::format_chat_message_subscription(
+            &callback_url,
+            &self.webhook_secret,
+            broadcaster_user_id,
+            &bot_id,
+        );
+
+        tracing::info!(
+            broadcaster_id = %broadcaster_user_id,
+            bot_id = %bot_id,
+            callback = %callback_url,
+            "Creating Twitch EventSub chat message webhook subscription"
+        );
+
+        self.with_app_token(|token| {
+            let body = body.clone();
             async move {
-                self.helix_client.create_chat_message_websocket_subscription(
-                    &bc_id,
-                    &b_id,
-                    &s_id,
+                self.helix_client.create_subscription(body, &token).await
+            }
+        }).await
+    }
+
+    pub async fn subscribe_all_active_broadcasters_to_chat(&self) -> AppResult<()> {
+        let broadcasters = self.db.get_all_broadcasters().await?;
+        for broadcaster in broadcasters {
+            let is_active = match self.db.get_broadcaster_setting(&broadcaster.channel_id).await {
+                Ok(Some(s)) => s.is_active,
+                _ => true,
+            };
+            if is_active {
+                if let Err(e) = self.create_chat_eventsub_subscription(&broadcaster.channel_id).await {
+                    tracing::warn!(
+                        error = %e,
+                        broadcaster_id = %broadcaster.channel_id,
+                        broadcaster_login = %broadcaster.channel_login,
+                        "Failed to subscribe broadcaster to chat EventSub webhook"
+                    );
+                } else {
+                    tracing::info!(
+                        broadcaster_id = %broadcaster.channel_id,
+                        broadcaster_login = %broadcaster.channel_login,
+                        "Successfully subscribed broadcaster to chat EventSub webhook"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn send_chat_message(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+        reply_parent_message_id: Option<&str>,
+    ) -> AppResult<crate::helix::api::chat::SentMessageResponse> {
+        let bot_channel_id = {
+            let guard = self.bot_info.read();
+            guard
+                .as_ref()
+                .map(|b| b.user_id.clone())
+                .ok_or("The bot is not initialized")?
+        };
+
+        let broadcaster_id = broadcaster_id.to_string();
+        let message = message.to_string();
+        let reply_id = reply_parent_message_id.map(|s| s.to_string());
+
+        self.with_app_token(|token| {
+            let broadcaster_id = broadcaster_id.clone();
+            let bot_channel_id = bot_channel_id.clone();
+            let message = message.clone();
+            let reply_id = reply_id.clone();
+            async move {
+                self.helix_client.send_chat_message(
+                    &broadcaster_id,
+                    &bot_channel_id,
+                    &message,
+                    reply_id.as_deref(),
+                    None,
                     &token,
                 ).await
             }
@@ -490,6 +557,7 @@ impl AppState {
     pub async fn recover_eventsub_subscriptions(&self) {
         match self.db.get_all_broadcasters().await {
             Ok(broadcasters) => {
+                let has_bot = self.bot_info.read().is_some();
                 for broadcaster in broadcasters {
                     let is_active = match self.db.get_broadcaster_setting(&broadcaster.channel_id).await {
                         Ok(Some(s)) => s.is_active,
@@ -507,8 +575,19 @@ impl AppState {
                                 error = %e,
                                 broadcaster_login = %broadcaster.channel_login,
                                 broadcaster_id = %broadcaster.channel_id,
-                                "Failed to recover EventSub subscription"
+                                "Failed to recover EventSub redemption subscription"
                             );
+                        }
+
+                        if has_bot {
+                            if let Err(e) = self.create_chat_eventsub_subscription(&broadcaster.channel_id).await {
+                                tracing::warn!(
+                                    error = %e,
+                                    broadcaster_login = %broadcaster.channel_login,
+                                    broadcaster_id = %broadcaster.channel_id,
+                                    "Failed to recover EventSub chat subscription"
+                                );
+                            }
                         }
                     }
                 }

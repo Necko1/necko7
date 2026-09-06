@@ -119,17 +119,10 @@ pub async fn process_redemption(
         return;
     }
 
-    let bot_channel_id = {
-        let guard = state.bot_info.read();
-
-        match guard.as_ref() {
-            Some(s) => s.user_id.clone(),
-            None => {
-                error!(redemption_id = %redemption_id, "Bot account is not initialized in AppState; cannot process redemption");
-                return;
-            }
-        }
-    };
+    if state.bot_info.read().is_none() {
+        error!(redemption_id = %redemption_id, "Bot account is not initialized in AppState; cannot process redemption");
+        return;
+    }
 
     let trade_link = match TradeLink::parse(&event.user_input) {
         Some(t) => t,
@@ -154,14 +147,7 @@ pub async fn process_redemption(
                 MSG_TRADE_LINK_INVALID,
                 &[("buyer", &event.user_login)],
             );
-            if let Err(e) = state.with_bot_user_token(async |token| {
-                state.helix_client.send_chat_message(
-                    &broadcaster_user_id,
-                    &bot_channel_id,
-                    &msg,
-                    None, None,
-                    &token).await
-            }).await {
+            if let Err(e) = state.send_chat_message(&broadcaster_user_id, &msg, None).await {
                 error!(error = %e, redemption_id = %redemption_id, broadcaster_id = %broadcaster_user_id, "Failed to send chat message informing user of invalid trade link");
                 return;
             }
@@ -297,14 +283,7 @@ pub async fn process_redemption(
             };
 
             let msg = state.render_chat_message(&broadcaster_user_id, template_key, &vars);
-            if let Err(e) = state.with_bot_user_token(async |token| {
-                state.helix_client.send_chat_message(
-                    &broadcaster_user_id,
-                    &bot_channel_id,
-                    &msg,
-                    None, None,
-                    &token).await
-            }).await {
+            if let Err(e) = state.send_chat_message(&broadcaster_user_id, &msg, None).await {
                 error!(error = %e, redemption_id = %redemption_id, "Failed to send chat message for chat requirements failure");
             }
 
@@ -358,15 +337,7 @@ pub async fn process_redemption(
                                     ("hours", hours_str.as_str()),
                                 ],
                             );
-                            let _ = state.with_bot_user_token(async |token| {
-                                state.helix_client.send_chat_message(
-                                    &broadcaster_user_id,
-                                    &bot_channel_id,
-                                    &msg,
-                                    None, None,
-                                    &token,
-                                ).await
-                            }).await;
+                            let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await;
 
                             return;
                         }
@@ -416,15 +387,7 @@ pub async fn process_redemption(
                                     ("hours", hours_str.as_str()),
                                 ],
                             );
-                            let _ = state.with_bot_user_token(async |token| {
-                                state.helix_client.send_chat_message(
-                                    &broadcaster_user_id,
-                                    &bot_channel_id,
-                                    &msg,
-                                    None, None,
-                                    &token,
-                                ).await
-                            }).await;
+                            let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await;
 
                             return;
                         }
@@ -477,9 +440,7 @@ pub async fn process_redemption(
                         MSG_ORDER_FAILED,
                         &[("buyer", &event.user_login), ("code", "LIMIT"), ("error", "цена скина на маркете ниже установленного стримером минимума"), ("item", &item_name)],
                     );
-                    let _ = state.with_bot_user_token(async |token| {
-                        state.helix_client.send_chat_message(&broadcaster_user_id, &bot_channel_id, &msg, None, None, &token).await
-                    }).await;
+                    let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await;
                     return;
                 }
             }
@@ -518,9 +479,7 @@ pub async fn process_redemption(
                         MSG_ORDER_FAILED,
                         &[("buyer", &event.user_login), ("code", "LIMIT"), ("error", "цена скина на маркете превысила установленный стримером лимит"), ("item", &item_name)],
                     );
-                    let _ = state.with_bot_user_token(async |token| {
-                        state.helix_client.send_chat_message(&broadcaster_user_id, &bot_channel_id, &msg, None, None, &token).await
-                    }).await;
+                    let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await;
                     return;
                 }
             }
@@ -531,7 +490,6 @@ pub async fn process_redemption(
                 &state,
                 &broadcaster_setting,
                 &broadcaster_user_id,
-                &bot_channel_id,
                 redemption_id,
                 reward_id,
                 &event.user_login,
@@ -572,7 +530,6 @@ pub async fn process_redemption(
                 &state,
                 &broadcaster_setting,
                 &broadcaster_user_id,
-                &bot_channel_id,
                 redemption_id,
                 reward_id,
                 &event.user_login,
@@ -608,9 +565,7 @@ pub async fn process_redemption(
                 warn!(redemption_id = %redemption_id, "No items match filter criteria for redemption");
                 update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("No items match filter criteria")).await;
                 let msg = state.render_chat_message(&broadcaster_user_id, MSG_ORDER_FAILED_FILTER_EXHAUSTED, &[("buyer", &event.user_login), ("attempts", "0")]);
-                let _ = state.with_bot_user_token(async |token| {
-                    state.helix_client.send_chat_message(&broadcaster_user_id, &bot_channel_id, &msg, None, None, &token).await
-                }).await;
+                let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await;
                 return;
             }
 
@@ -708,15 +663,7 @@ pub async fn process_redemption(
                             MSG_ORDER_CREATED,
                             &[("buyer", &event.user_login), ("item", &item.market_hash_name)],
                         );
-                        let _ = state.with_bot_user_token(async |token| {
-                            state.helix_client.send_chat_message(
-                                &broadcaster_user_id,
-                                &bot_channel_id,
-                                &msg,
-                                None, None,
-                                &token,
-                            ).await
-                        }).await;
+                        let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await;
 
                         order_created = true;
                         break;
@@ -746,9 +693,7 @@ pub async fn process_redemption(
                             update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, return_channel_points, Some(&error_msg)).await;
                             let msg_template = if return_channel_points { MSG_ORDER_FAILED_NO_MONEY_REFUND } else { MSG_ORDER_FAILED_NO_MONEY_PENALTY };
                             let msg = state.render_chat_message(&broadcaster_user_id, msg_template, &[("buyer", &event.user_login), ("item", &item.market_hash_name)]);
-                            let _ = state.with_bot_user_token(async |token| {
-                                state.helix_client.send_chat_message(&broadcaster_user_id, &bot_channel_id, &msg, None, None, &token).await
-                            }).await;
+                            let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await;
                             return;
                         }
 
@@ -766,9 +711,7 @@ pub async fn process_redemption(
                                 msg_template,
                                 &[("buyer", &event.user_login), ("item", &item.market_hash_name), ("code", &code_str), ("error", &error_msg)],
                             );
-                            let _ = state.with_bot_user_token(async |token| {
-                                state.helix_client.send_chat_message(&broadcaster_user_id, &bot_channel_id, &msg, None, None, &token).await
-                            }).await;
+                            let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await;
                             return;
                         }
 
@@ -801,15 +744,7 @@ pub async fn process_redemption(
                     MSG_ORDER_FAILED_FILTER_EXHAUSTED,
                     &[("buyer", &event.user_login), ("attempts", "5")],
                 );
-                let _ = state.with_bot_user_token(async |token| {
-                    state.helix_client.send_chat_message(
-                        &broadcaster_user_id,
-                        &bot_channel_id,
-                        &msg,
-                        None, None,
-                        &token,
-                    ).await
-                }).await;
+                let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await;
             }
         }
     }
@@ -918,7 +853,6 @@ async fn buy_item_once(
     state: &Arc<AppState>,
     broadcaster_setting: &crate::db::broadcaster_settings::BroadcasterSetting,
     broadcaster_user_id: &str,
-    bot_channel_id: &str,
     redemption_id: Uuid,
     reward_id: Uuid,
     user_login: &str,
@@ -988,14 +922,7 @@ async fn buy_item_once(
                 MSG_ORDER_CREATED,
                 &[("buyer", user_login), ("item", item_name)],
             );
-            if let Err(e) = state.with_bot_user_token(async |token| {
-                state.helix_client.send_chat_message(
-                    broadcaster_user_id,
-                    bot_channel_id,
-                    &msg,
-                    None, None,
-                    &token).await
-            }).await {
+            if let Err(e) = state.send_chat_message(broadcaster_user_id, &msg, None).await {
                 error!(error = %e, redemption_id = %redemption_id, broadcaster_id = %broadcaster_user_id, "Failed to send chat message for created order");
             }
         }
@@ -1064,14 +991,7 @@ async fn buy_item_once(
                 msg_template,
                 &msg_vars,
             );
-            if let Err(e) = state.with_bot_user_token(async |token| {
-                state.helix_client.send_chat_message(
-                    broadcaster_user_id,
-                    bot_channel_id,
-                    &msg,
-                    None, None,
-                    &token).await
-            }).await {
+            if let Err(e) = state.send_chat_message(broadcaster_user_id, &msg, None).await {
                 error!(error = %e, redemption_id = %redemption_id, broadcaster_id = %broadcaster_user_id, "Failed to send chat message for rejected order");
             }
         }
@@ -1096,14 +1016,7 @@ async fn buy_item_once(
                 MSG_MARKET_ERROR,
                 &[("buyer", user_login), ("item", item_name)],
             );
-            if let Err(e) = state.with_bot_user_token(async |token| {
-                state.helix_client.send_chat_message(
-                    broadcaster_user_id,
-                    bot_channel_id,
-                    &msg,
-                    None, None,
-                    &token).await
-            }).await {
+            if let Err(e) = state.send_chat_message(broadcaster_user_id, &msg, None).await {
                 error!(error = %e, redemption_id = %redemption_id, broadcaster_id = %broadcaster_user_id, "Failed to send chat message for market network error");
             }
         }

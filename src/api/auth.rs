@@ -231,6 +231,13 @@ pub async fn auth_callback(
             state.app_initialized.store(true, Ordering::Relaxed);
 
             info!(bot_login = %channel_login, bot_id = %channel_id, "Bot account successfully authorized and saved to DB");
+
+            let state_clone = state.clone();
+            state.spawn_task(async move {
+                if let Err(e) = state_clone.subscribe_all_active_broadcasters_to_chat().await {
+                    error!(error = %e, "Failed to subscribe active broadcasters to chat EventSub on bot auth");
+                }
+            });
         } else {
             error!(bot_login = %channel_login, bot_id = %channel_id, "Failed to serialize bot account info to JSON");
         }
@@ -282,7 +289,12 @@ pub async fn auth_callback(
         let cid_clone = channel_id.clone();
         state.spawn_task(async move {
             if let Err(err) = state_clone.create_eventsub_subscription(&cid_clone).await {
-                error!(error = %err, channel_id = %cid_clone, "Failed to create EventSub subscription for new streamer");
+                error!(error = %err, channel_id = %cid_clone, "Failed to create EventSub redemption subscription for new streamer");
+            }
+            if state_clone.bot_info.read().is_some() {
+                if let Err(err) = state_clone.create_chat_eventsub_subscription(&cid_clone).await {
+                    error!(error = %err, channel_id = %cid_clone, "Failed to create EventSub chat subscription for new streamer");
+                }
             }
         });
 

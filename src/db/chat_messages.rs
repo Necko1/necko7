@@ -54,7 +54,8 @@ impl Db {
     pub async fn insert_chat_message(&self, msg: &NewChatMessage) -> DbResult<()> {
         sqlx::query(
             "INSERT INTO chat_messages (message_id, broadcaster_id, chatter_user_id, chatter_user_login, message_text, char_count, sent_at, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())"
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+             ON CONFLICT (message_id) DO NOTHING"
         )
         .bind(&msg.message_id)
         .bind(&msg.broadcaster_id)

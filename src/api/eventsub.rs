@@ -85,25 +85,46 @@ pub async fn handle_eventsub(
             let event_type = get_header(&headers, "twitch-eventsub-subscription-type");
             info!(msg_id, event_type, "Received EventSub notification");
 
-            if !event_type.eq("channel.channel_points_custom_reward_redemption.add") {
-                tracing::debug!(event_type, "Ignoring non-redemption EventSub notification");
-                return StatusCode::NO_CONTENT.into_response();
-            }
-
-            match serde_json::from_slice::<EventSubNotification>(&body) {
-                Ok(notification) => {
-                    let state_clone = state.clone();
-                    state.spawn_task(async move {
-                        process_redemption(state_clone, notification).await;
-                    });
+            match event_type {
+                "channel.channel_points_custom_reward_redemption.add" => {
+                    match serde_json::from_slice::<EventSubNotification>(&body) {
+                        Ok(notification) => {
+                            let state_clone = state.clone();
+                            state.spawn_task(async move {
+                                process_redemption(state_clone, notification).await;
+                            });
+                        }
+                        Err(e) => {
+                            error!(
+                                error = %e,
+                                msg_id,
+                                body = %String::from_utf8_lossy(&body),
+                                "CRITICAL: Failed to deserialize EventSubNotification payload; redemption was NOT processed!"
+                            );
+                        }
+                    }
                 }
-                Err(e) => {
-                    error!(
-                        error = %e,
-                        msg_id,
-                        body = %String::from_utf8_lossy(&body),
-                        "CRITICAL: Failed to deserialize EventSubNotification payload; redemption was NOT processed!"
-                    );
+                "channel.chat.message" => {
+                    match serde_json::from_slice::<crate::processor::model::EventSubChatMessageNotification>(&body) {
+                        Ok(notification) => {
+                            let state_clone = state.clone();
+                            let msg_timestamp = msg_timestamp.to_string();
+                            state.spawn_task(async move {
+                                crate::processor::process_chat_message(state_clone, notification, &msg_timestamp).await;
+                            });
+                        }
+                        Err(e) => {
+                            error!(
+                                error = %e,
+                                msg_id,
+                                body = %String::from_utf8_lossy(&body),
+                                "CRITICAL: Failed to deserialize EventSubChatMessageNotification payload; chat message was NOT processed!"
+                            );
+                        }
+                    }
+                }
+                _ => {
+                    tracing::debug!(event_type, "Ignoring unknown EventSub notification type");
                 }
             }
             StatusCode::NO_CONTENT.into_response()
@@ -121,12 +142,21 @@ pub async fn handle_eventsub(
                     if status != "authorization_revoked" && status != "user_removed" {
                         let state_clone = state.clone();
                         let bc_id = bc_id.to_string();
+                        let sub_type = sub_type.to_string();
                         state.spawn_task(async move {
-                            info!("Attempting to re-subscribe revoked EventSub for broadcaster {}", bc_id);
-                            if let Err(e) = state_clone.create_eventsub_subscription(&bc_id).await {
-                                error!("Failed to re-subscribe after revocation for broadcaster {}: {}", bc_id, e);
+                            info!("Attempting to re-subscribe revoked EventSub ({}) for broadcaster {}", sub_type, bc_id);
+                            if sub_type == "channel.chat.message" {
+                                if let Err(e) = state_clone.create_chat_eventsub_subscription(&bc_id).await {
+                                    error!("Failed to re-subscribe chat after revocation for broadcaster {}: {}", bc_id, e);
+                                } else {
+                                    info!("Successfully re-subscribed chat EventSub for broadcaster {}", bc_id);
+                                }
                             } else {
-                                info!("Successfully re-subscribed EventSub for broadcaster {}", bc_id);
+                                if let Err(e) = state_clone.create_eventsub_subscription(&bc_id).await {
+                                    error!("Failed to re-subscribe after revocation for broadcaster {}: {}", bc_id, e);
+                                } else {
+                                    info!("Successfully re-subscribed EventSub for broadcaster {}", bc_id);
+                                }
                             }
                         });
                     }

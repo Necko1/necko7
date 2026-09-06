@@ -282,6 +282,18 @@ pub async fn update_broadcaster_settings(
     if let Some(is_active) = patch.is_active {
         if is_active {
             crate::processor::start_broadcaster_tasks(state.clone(), auth.channel_id.clone());
+            let state_clone = state.clone();
+            let cid_clone = auth.channel_id.clone();
+            state.spawn_task(async move {
+                if let Err(e) = state_clone.create_eventsub_subscription(&cid_clone).await {
+                    tracing::warn!(error = %e, channel_id = %cid_clone, "Failed to re-subscribe EventSub redemption");
+                }
+                if state_clone.bot_info.read().is_some() {
+                    if let Err(e) = state_clone.create_chat_eventsub_subscription(&cid_clone).await {
+                        tracing::warn!(error = %e, channel_id = %cid_clone, "Failed to re-subscribe EventSub chat");
+                    }
+                }
+            });
         } else {
             crate::processor::stop_broadcaster_tasks(&state, &auth.channel_id);
         }

@@ -32,14 +32,6 @@ pub fn start_broadcaster_tasks(state: Arc<AppState>, channel_id: String) {
         state_cleanup.active_broadcaster_tasks.lock().remove(&cid_cleanup);
         debug!(channel_id = %cid_cleanup, "Broadcaster background tasks completed and cleaned up from active tasks map");
     });
-
-    let state_chat = Arc::clone(&state);
-    let cid_chat = channel_id.clone();
-    state.spawn_task(async move {
-        if let Err(e) = state_chat.subscribe_broadcaster_chat_ws(&cid_chat).await {
-            warn!(error = %e, channel_id = %cid_chat, "Failed to subscribe broadcaster to chat WebSocket on task startup");
-        }
-    });
 }
 
 pub fn stop_broadcaster_tasks(state: &AppState, channel_id: &str) {
@@ -51,11 +43,6 @@ pub fn stop_broadcaster_tasks(state: &AppState, channel_id: &str) {
 }
 
 pub async fn start_background_tasks(state: Arc<AppState>) {
-    let state_chat = state.clone();
-    state.spawn_task(async move {
-        crate::processor::chat_listener::run_chat_listener(state_chat).await;
-    });
-
     let state_eventsub = state.clone();
     state.spawn_task(async move {
         state_eventsub.recover_eventsub_subscriptions().await;

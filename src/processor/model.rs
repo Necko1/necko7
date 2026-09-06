@@ -34,3 +34,24 @@ pub struct RedemptionReward {
     pub cost: i64,
     pub prompt: Option<String>,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct EventSubChatMessageNotification {
+    pub subscription: EventSubSubscription,
+    pub event: ChatMessageEvent,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChatMessageEvent {
+    pub broadcaster_user_id: String,
+    pub broadcaster_user_login: String,
+    pub chatter_user_id: String,
+    pub chatter_user_login: String,
+    pub message_id: String,
+    pub message: ChatMessageContent,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChatMessageContent {
+    pub text: String,
+}

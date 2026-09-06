@@ -153,11 +153,6 @@ impl OrderWatcher {
             "Steam trade offer detected, transitioning to Sent stage"
         );
 
-        let sender_id = match self.get_sender_id() {
-            Some(sid) => sid,
-            None => { return; }
-        };
-
         let remaining = current_trade.receive_until.unwrap().remaining_pretty();
         let tradeoffer = format!("https://steamcommunity.com/tradeoffer/{}/",
                                  current_trade.trade_id.as_deref().unwrap_or(""));
@@ -173,14 +168,7 @@ impl OrderWatcher {
             ],
         );
 
-        if let Err(e) = self.state.with_bot_user_token(async |token| {
-            self.state.helix_client.send_chat_message(
-                &self.broadcaster_id,
-                &sender_id,
-                &msg,
-                None, None,
-                &token).await
-        }).await {
+        if let Err(e) = self.state.send_chat_message(&self.broadcaster_id, &msg, None).await {
             error!(
                 error = %e,
                 redemption_id = %self.redemption.redemption_id,
@@ -210,11 +198,6 @@ impl OrderWatcher {
             "Steam trade accepted by user! Transitioning to Claimed stage"
         );
 
-        let sender_id = match self.get_sender_id() {
-            Some(sid) => sid,
-            None => { return; }
-        };
-
         let msg = self.state.render_chat_message(
             &self.broadcaster_id,
             MSG_TRADE_ACCEPTED,
@@ -224,14 +207,7 @@ impl OrderWatcher {
             ],
         );
 
-        if let Err(e) = self.state.with_bot_user_token(async |token| {
-            self.state.helix_client.send_chat_message(
-                &self.broadcaster_id,
-                &sender_id,
-                &msg,
-                None, None,
-                &token).await
-        }).await {
+        if let Err(e) = self.state.send_chat_message(&self.broadcaster_id, &msg, None).await {
             error!(
                 error = %e,
                 redemption_id = %self.redemption.redemption_id,
@@ -293,11 +269,6 @@ impl OrderWatcher {
             }
         };
 
-        let sender_id = match self.get_sender_id() {
-            Some(sid) => sid,
-            None => { return; }
-        };
-
         let buyer_fault = current_trade.causer.is_some_and(|c| c.eq("buyer"));
         let should_refund = !buyer_fault || refund_on_buyer_fail;
 
@@ -327,14 +298,7 @@ impl OrderWatcher {
             ],
         );
 
-        if let Err(e) = self.state.with_bot_user_token(async |token| {
-            self.state.helix_client.send_chat_message(
-                &self.broadcaster_id,
-                &sender_id,
-                &message,
-                None, None,
-                &token).await
-        }).await {
+        if let Err(e) = self.state.send_chat_message(&self.broadcaster_id, &message, None).await {
             error!(error = %e, redemption_id = %self.redemption.redemption_id, broadcaster_id = %self.broadcaster_id, "Failed to send not-claimed chat message");
         };
 
@@ -377,25 +341,13 @@ impl OrderWatcher {
     async fn process_timed_out(&mut self) {
         self.stage = OrderStage::Exit;
 
-        let sender_id = match self.get_sender_id() {
-            Some(sid) => sid,
-            None => return,
-        };
-
         let msg = self.state.render_chat_message(
             &self.broadcaster_id,
             MSG_TRADE_TIMEOUT,
             &[("buyer", &self.redemption.user_login)],
         );
 
-        if let Err(e) = self.state.with_bot_user_token(async |token| {
-            self.state.helix_client.send_chat_message(
-                &self.broadcaster_id,
-                &sender_id,
-                &msg,
-                None, None,
-                &token).await
-        }).await {
+        if let Err(e) = self.state.send_chat_message(&self.broadcaster_id, &msg, None).await {
             error!(error = %e, redemption_id = %self.redemption.redemption_id, broadcaster_id = %self.broadcaster_id, "Failed to send timeout chat message");
         };
 
@@ -424,23 +376,5 @@ impl OrderWatcher {
         self.state.spawn_task(async move {
             let _ = state_for_balance.refresh_broadcaster_balance(&bc_id_for_balance).await;
         });
-    }
-
-    fn get_sender_id(&mut self) -> Option<String> {
-        let guard = self.state.bot_info.read();
-        let info = match guard.as_ref() {
-            Some(i) => i,
-            None => {
-                error!(
-                    redemption_id = %self.redemption.redemption_id,
-                    broadcaster_id = %self.broadcaster_id,
-                    "Bot account is not initialized in AppState during order tracking"
-                );
-                self.stage = OrderStage::Exit;
-                return None;
-            }
-        };
-
-        Some(info.user_id.clone())
     }
 }
