@@ -82,27 +82,27 @@ pub struct ChatMessageTemplates {
 impl Default for ChatMessageTemplates {
     fn default() -> Self {
         Self {
-            trade_link_invalid: "@{buyer} не смог спарсить трейд ссылку, вернул баллы.".to_string(),
-            order_created: "@{buyer} создал ордер на маркете, ожидай трейда в скорем времени (до 5-и минут) или другого сообщения от меня в чате".to_string(),
-            order_failed: "@{buyer} не удалось создать ордер на маркете, вернул баллы. ошибка {code}: {error}".to_string(),
-            order_failed_no_money_refund: "@{buyer} на балансе бота недостаточно средств для покупки скина. Вернул баллы канала.".to_string(),
-            order_failed_no_money_penalty: "@{buyer} на балансе бота недостаточно средств для покупки скина, и по настройкам стримера баллы не возвращаются.".to_string(),
-            order_failed_filter_exhausted: "@{buyer} не удалось подобрать доступный скин по фильтрам награды (все попытки исчерпаны). Вернул баллы канала.".to_string(),
-            market_error: "@{buyer} произошла внутренняя ошибка при отправке запроса на маркет. ничего трогать не буду, подробности в логах.".to_string(),
-            trade_created: "@{buyer}, трейд был создан, у тебя есть {remaining} чтобы его принять - {tradeoffer}".to_string(),
-            trade_accepted: "@{buyer} щекочет мой мозг, видимо трейд принял. не забудь об отзыве - @(ладно пока не надо отзывов на эту хуйню)".to_string(),
-            trade_failed_buyer_refund: "@{buyer} въебал трейд? красавчик. повезло, что стример сказал возвращать баллы в таких случаях.".to_string(),
-            trade_failed_buyer_penalty: "@{buyer} въебал трейд? красавчик. какое счастье, что стример сказал мне нихуя не возвращать в таких случаях. в следующий раз будь аккуратнее 😁😁😁😁".to_string(),
-            trade_failed_seller_refund: "@{buyer} сорянчик, продавец долбоёб кажется решил нихуя не отправлять. ну или другая причина, крч возвращаю баллы, можешь попробовать ещё раз купить".to_string(),
-            trade_timeout: "@{buyer} трейд превысил максимальное время ожидания (30 минут). баллы возвращать не буду во избежение потери денег.".to_string(),
-            chat_req_failed_messages_refund: "@{buyer} недостаточно сообщений для получения награды: у вас {user_messages}, требуется {min_messages} за последние {hours} ч. Баллы возвращены.".to_string(),
-            chat_req_failed_messages_penalty: "@{buyer} недостаточно сообщений для получения награды: у вас {user_messages}, требуется {min_messages} за последние {hours} ч. Баллы не возвращаются.".to_string(),
-            chat_req_failed_characters_refund: "@{buyer} недостаточно символов в чате: у вас {user_characters}, требуется {min_characters} за последние {hours} ч. Баллы возвращены.".to_string(),
-            chat_req_failed_characters_penalty: "@{buyer} недостаточно символов в чате: у вас {user_characters}, требуется {min_characters} за последние {hours} ч. Баллы не возвращаются.".to_string(),
-            chat_req_failed_both_refund: "@{buyer} недостаточно активности в чате: требуется {min_messages} сообщений {operator} {min_characters} символов за последние {hours} ч. Баллы возвращены.".to_string(),
-            chat_req_failed_both_penalty: "@{buyer} недостаточно активности в чате: требуется {min_messages} сообщений {operator} {min_characters} символов за последние {hours} ч. Баллы не возвращаются.".to_string(),
-            user_purchase_limit_reached: "@{buyer} вы достигли лимита покупок этого скина ({limit} за {period}). Баллы канала возвращены.".to_string(),
-            global_purchase_limit_reached: "@{buyer} общий лимит покупок этого скина на канале ({limit} за {period}) исчерпан. Награда временно приостановлена, баллы канала возвращены.".to_string(),
+            trade_link_invalid: "@{buyer} Invalid Steam trade URL. Channel points refunded.".to_string(),
+            order_created: "@{buyer} Market order created. Please wait for the trade offer (up to 5 minutes).".to_string(),
+            order_failed: "@{buyer} Failed to create market order. Channel points refunded. Error {code}: {error}".to_string(),
+            order_failed_no_money_refund: "@{buyer} Insufficient bot balance to purchase the item. Channel points refunded.".to_string(),
+            order_failed_no_money_penalty: "@{buyer} Insufficient bot balance to purchase the item. Channel points are not refunded per streamer settings.".to_string(),
+            order_failed_filter_exhausted: "@{buyer} No items found matching the reward filters (attempts exhausted). Channel points refunded.".to_string(),
+            market_error: "@{buyer} An internal market error occurred. Please check logs for details.".to_string(),
+            trade_created: "@{buyer} Trade offer created. You have {remaining} to accept it: {tradeoffer}".to_string(),
+            trade_accepted: "@{buyer} Trade offer accepted. Enjoy your skin!".to_string(),
+            trade_failed_buyer_refund: "@{buyer} Trade offer failed or was declined. Channel points refunded.".to_string(),
+            trade_failed_buyer_penalty: "@{buyer} Trade offer failed or was declined. Channel points are not refunded per streamer settings.".to_string(),
+            trade_failed_seller_refund: "@{buyer} Seller failed to send the item. Channel points refunded.".to_string(),
+            trade_timeout: "@{buyer} Trade offer timed out. Channel points are not refunded.".to_string(),
+            chat_req_failed_messages_refund: "@{buyer} Not enough chat messages: you have {user_messages}, required {min_messages} ({period}). Channel points refunded.".to_string(),
+            chat_req_failed_messages_penalty: "@{buyer} Not enough chat messages: you have {user_messages}, required {min_messages} ({period}). Channel points are not refunded.".to_string(),
+            chat_req_failed_characters_refund: "@{buyer} Not enough chat characters: you have {user_characters}, required {min_characters} ({period}). Channel points refunded.".to_string(),
+            chat_req_failed_characters_penalty: "@{buyer} Not enough chat characters: you have {user_characters}, required {min_characters} ({period}). Channel points are not refunded.".to_string(),
+            chat_req_failed_both_refund: "@{buyer} Not enough chat activity: required {min_messages} messages {operator} {min_characters} characters ({period}). Channel points refunded.".to_string(),
+            chat_req_failed_both_penalty: "@{buyer} Not enough chat activity: required {min_messages} messages {operator} {min_characters} characters ({period}). Channel points are not refunded.".to_string(),
+            user_purchase_limit_reached: "@{buyer} You have reached the purchase limit for this reward ({limit} / {period}). Channel points refunded.".to_string(),
+            global_purchase_limit_reached: "@{buyer} Global purchase limit for this reward has been reached ({limit} / {period}). Reward paused, channel points refunded.".to_string(),
         }
     }
 }
@@ -231,13 +231,13 @@ impl ChatMessageTemplates {
             MSG_TRADE_FAILED_SELLER_REFUND => vec!["buyer", "item"],
             MSG_TRADE_TIMEOUT => vec!["buyer", "item"],
             MSG_CHAT_REQ_FAILED_MESSAGES_REFUND | MSG_CHAT_REQ_FAILED_MESSAGES_PENALTY | MSG_CHAT_REQ_FAILED_MESSAGES => {
-                vec!["buyer", "user_messages", "min_messages", "hours"]
+                vec!["buyer", "user_messages", "min_messages", "hours", "period"]
             }
             MSG_CHAT_REQ_FAILED_CHARACTERS_REFUND | MSG_CHAT_REQ_FAILED_CHARACTERS_PENALTY | MSG_CHAT_REQ_FAILED_CHARACTERS => {
-                vec!["buyer", "user_characters", "min_characters", "hours"]
+                vec!["buyer", "user_characters", "min_characters", "hours", "period"]
             }
             MSG_CHAT_REQ_FAILED_BOTH_REFUND | MSG_CHAT_REQ_FAILED_BOTH_PENALTY | MSG_CHAT_REQ_FAILED_BOTH => {
-                vec!["buyer", "user_messages", "min_messages", "user_characters", "min_characters", "hours", "operator"]
+                vec!["buyer", "user_messages", "min_messages", "user_characters", "min_characters", "hours", "period", "operator"]
             }
             MSG_USER_PURCHASE_LIMIT_REACHED | MSG_GLOBAL_PURCHASE_LIMIT_REACHED => {
                 vec!["buyer", "limit", "period", "item"]
@@ -355,12 +355,12 @@ mod tests {
                 ("buyer", "alice"),
                 ("user_messages", "12"),
                 ("min_messages", "50"),
-                ("hours", "72"),
+                ("period", "72h"),
             ],
         );
         assert_eq!(
             rendered_msgs_ref,
-            "@alice недостаточно сообщений для получения награды: у вас 12, требуется 50 за последние 72 ч. Баллы возвращены."
+            "@alice Not enough chat messages: you have 12, required 50 (72h). Channel points refunded."
         );
 
         let rendered_msgs_pen = render_template(
@@ -369,12 +369,12 @@ mod tests {
                 ("buyer", "alice"),
                 ("user_messages", "12"),
                 ("min_messages", "50"),
-                ("hours", "72"),
+                ("period", "all-time"),
             ],
         );
         assert_eq!(
             rendered_msgs_pen,
-            "@alice недостаточно сообщений для получения награды: у вас 12, требуется 50 за последние 72 ч. Баллы не возвращаются."
+            "@alice Not enough chat messages: you have 12, required 50 (all-time). Channel points are not refunded."
         );
     }
 }

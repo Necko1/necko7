@@ -170,12 +170,9 @@ pub async fn process_redemption(
 
     // Check chat activity requirements if configured on the reward
     if reward_data.chat_min_messages.is_some() || reward_data.chat_min_characters.is_some() {
-        let hours = reward_data.chat_time_window_hours.unwrap_or(24);
-        let since = if hours > 0 {
-            Some(chrono::Utc::now() - chrono::Duration::hours(hours as i64))
-        } else {
-            None
-        };
+        let since = reward_data.chat_time_window_hours.filter(|&h| h > 0).map(|h| {
+            chrono::Utc::now() - chrono::Duration::hours(h as i64)
+        });
 
         let (user_msgs, user_chars) = match state.db.get_user_chat_stats(
             &broadcaster_user_id,
@@ -232,14 +229,17 @@ pub async fn process_redemption(
                 Some("User did not meet chat activity requirements")
             ).await;
 
-            let hours_str = hours.to_string();
+            let (hours_str, period_str) = match reward_data.chat_time_window_hours {
+                Some(h) if h > 0 => (h.to_string(), format!("{}h", h)),
+                _ => ("all-time".to_string(), "all-time".to_string()),
+            };
             let user_msgs_str = user_msgs.to_string();
             let user_chars_str = user_chars.to_string();
             let min_msgs_str = reward_data.chat_min_messages.map(|m| m.to_string()).unwrap_or_default();
             let min_chars_str = reward_data.chat_min_characters.map(|c| c.to_string()).unwrap_or_default();
             let op_str = match operator {
-                crate::db::rewards::ChatLogicalOperator::And => "и",
-                crate::db::rewards::ChatLogicalOperator::Or => "или",
+                crate::db::rewards::ChatLogicalOperator::And => "and",
+                crate::db::rewards::ChatLogicalOperator::Or => "or",
             };
 
             let (template_key, vars) = if reward_data.chat_min_messages.is_some() && reward_data.chat_min_characters.is_none() {
@@ -255,6 +255,7 @@ pub async fn process_redemption(
                         ("user_messages", user_msgs_str.as_str()),
                         ("min_messages", min_msgs_str.as_str()),
                         ("hours", hours_str.as_str()),
+                        ("period", period_str.as_str()),
                     ],
                 )
             } else if reward_data.chat_min_characters.is_some() && reward_data.chat_min_messages.is_none() {
@@ -270,6 +271,7 @@ pub async fn process_redemption(
                         ("user_characters", user_chars_str.as_str()),
                         ("min_characters", min_chars_str.as_str()),
                         ("hours", hours_str.as_str()),
+                        ("period", period_str.as_str()),
                     ],
                 )
             } else {
@@ -287,6 +289,7 @@ pub async fn process_redemption(
                         ("user_characters", user_chars_str.as_str()),
                         ("min_characters", min_chars_str.as_str()),
                         ("hours", hours_str.as_str()),
+                        ("period", period_str.as_str()),
                         ("operator", op_str),
                     ],
                 )
@@ -341,7 +344,7 @@ pub async fn process_redemption(
                             ).await;
 
                             let limit_str = rule.max_redemptions.to_string();
-                            let hours_str = rule.window_hours.map(|h| h.to_string()).unwrap_or_default();
+                            let hours_str = rule.window_hours.map(|h| h.to_string()).unwrap_or_else(|| "all-time".to_string());
                             let period_str = format_limit_period(rule.window_hours);
                             let msg = state.render_chat_message(
                                 &broadcaster_user_id,
@@ -399,7 +402,7 @@ pub async fn process_redemption(
                             ).await;
 
                             let limit_str = rule.max_redemptions.to_string();
-                            let hours_str = rule.window_hours.map(|h| h.to_string()).unwrap_or_default();
+                            let hours_str = rule.window_hours.map(|h| h.to_string()).unwrap_or_else(|| "all-time".to_string());
                             let period_str = format_limit_period(rule.window_hours);
                             let msg = state.render_chat_message(
                                 &broadcaster_user_id,
@@ -865,10 +868,10 @@ async fn check_and_pause_if_global_limit_reached(
 
 fn format_limit_period(window_hours: Option<i32>) -> String {
     match window_hours {
-        Some(168) => "неделю".to_string(),
-        Some(720) => "месяц".to_string(),
-        Some(h) => format!("{} ч.", h),
-        None => "всё время".to_string(),
+        Some(168) => "week".to_string(),
+        Some(720) => "month".to_string(),
+        Some(h) => format!("{}h", h),
+        None => "all-time".to_string(),
     }
 }
 
