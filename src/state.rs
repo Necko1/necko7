@@ -47,7 +47,7 @@ pub struct AppState {
     pub bot_info: RwLock<Option<BotInfo>>,
     pub market_balances: RwLock<HashMap<String, CachedMarketBalance>>,
     pub market_prices: RwLock<HashMap<String, (std::time::Instant, Arc<Vec<crate::steam::market::prices::MarketPriceItem>>)>>,
-    pub chat_messages: RwLock<HashMap<String, HashMap<String, String>>>,
+    pub chat_messages: RwLock<HashMap<String, HashMap<String, HashMap<String, String>>>>,
     pub active_broadcaster_tasks: Mutex<HashMap<String, CancellationToken>>,
     pub chat_session_id: Arc<RwLock<Option<String>>>,
     pub twitch_user_cache: RwLock<HashMap<String, (std::time::Instant, Arc<crate::helix::api::users::UserInfo>)>>,
@@ -521,14 +521,18 @@ impl AppState {
 
     /// Retrieve the effective template for a specific message ID, falling back to default if unset.
     pub fn get_chat_message_template(&self, channel_id: &str, message_id: &str) -> String {
-        if let Some(channel_msgs) = self.chat_messages.read().get(channel_id) {
-            if let Some(tpl) = channel_msgs.get(message_id) {
-                if !tpl.trim().is_empty() {
-                    return tpl.clone();
+        if let Some((cat, key)) = crate::messages::resolve_category_and_key(message_id) {
+            if let Some(channel_msgs) = self.chat_messages.read().get(channel_id) {
+                if let Some(cat_map) = channel_msgs.get(cat) {
+                    if let Some(tpl) = cat_map.get(key) {
+                        if !tpl.trim().is_empty() {
+                            return tpl.clone();
+                        }
+                    }
                 }
             }
         }
-        crate::messages::ChatMessageTemplates::get_default_message(message_id)
+        crate::messages::CategorizedChatMessages::get_default_message(message_id)
             .unwrap_or_else(|| format!("[Missing template for {}]", message_id))
     }
 
@@ -544,18 +548,25 @@ impl AppState {
     }
 
     /// Update the in-memory chat messages cache for a channel.
-    pub fn update_chat_messages_cache(&self, channel_id: &str, messages: HashMap<String, String>) {
+    pub fn update_chat_messages_cache(
+        &self,
+        channel_id: &str,
+        messages: HashMap<String, HashMap<String, String>>,
+    ) {
         self.chat_messages.write().insert(channel_id.to_string(), messages);
     }
 
     /// Get all effective chat messages for a channel (custom overrides merged on top of defaults).
-    pub fn get_channel_chat_messages_merged(&self, channel_id: &str) -> HashMap<String, String> {
+    pub fn get_channel_chat_messages_merged(&self, channel_id: &str) -> crate::messages::CategorizedChatMessages {
         let custom = self.chat_messages.read().get(channel_id).cloned().unwrap_or_default();
-        crate::messages::ChatMessageTemplates::merge_with_defaults(&custom)
+        crate::messages::CategorizedChatMessages::merge_with_overrides(
+            &crate::messages::CategorizedChatMessages::default(),
+            &custom,
+        )
     }
 
     /// Get only the custom message overrides configured for a channel.
-    pub fn get_channel_custom_chat_messages(&self, channel_id: &str) -> HashMap<String, String> {
+    pub fn get_channel_custom_chat_messages(&self, channel_id: &str) -> HashMap<String, HashMap<String, String>> {
         self.chat_messages.read().get(channel_id).cloned().unwrap_or_default()
     }
 

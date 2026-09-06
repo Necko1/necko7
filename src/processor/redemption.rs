@@ -18,6 +18,7 @@ use crate::processor::order_watcher::{OrderWatcher, WatcherRedemptionData};
 use crate::processor::price_updater;
 use crate::state::AppState;
 use crate::steam::market;
+use crate::steam::market::errors::{classify_market_buy_for_error, MarketBuyForErrorKind};
 use crate::steam::trade_link::TradeLink;
 
 pub async fn process_redemption(
@@ -722,17 +723,19 @@ pub async fn process_redemption(
                     }
                     Ok(res) => {
                         let error_msg = res.error.unwrap_or_else(|| "Unknown market error".to_string());
+                        let code = res.code.unwrap_or(0);
                         warn!(
                             redemption_id = %redemption_id,
                             attempt = attempt,
                             item = %item.market_hash_name,
+                            code = code,
                             error = %error_msg,
                             "Market rejected buy-for attempt"
                         );
 
-                        let error_lower = error_msg.to_lowercase();
+                        let kind = classify_market_buy_for_error(code, &error_msg);
 
-                        if error_msg.eq_ignore_ascii_case("not enough funds on account") {
+                        if kind == MarketBuyForErrorKind::NotEnoughFunds {
                             let return_channel_points = broadcaster_setting.refund_if_no_money;
                             let state_for_balance = state.clone();
                             let bc_id_for_balance = broadcaster_user_id.clone();
@@ -749,10 +752,27 @@ pub async fn process_redemption(
                             return;
                         }
 
-                        let price_error: bool = error_lower == "no item found at the specified chance to transfer at the specified price or below"
-                            || error_lower == "не найден предмет с указанным шансом на передачу по указанной цене или ниже";
+                        if kind.is_buyer_terminal_error() {
+                            warn!(
+                                redemption_id = %redemption_id,
+                                kind = ?kind,
+                                "Buyer terminal error encountered on filter reward, aborting pool attempts and refunding"
+                            );
+                            update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some(&error_msg)).await;
+                            let msg_template = kind.to_market_error_message_key().unwrap_or(MSG_ORDER_FAILED);
+                            let code_str = code.to_string();
+                            let msg = state.render_chat_message(
+                                &broadcaster_user_id,
+                                msg_template,
+                                &[("buyer", &event.user_login), ("item", &item.market_hash_name), ("code", &code_str), ("error", &error_msg)],
+                            );
+                            let _ = state.with_bot_user_token(async |token| {
+                                state.helix_client.send_chat_message(&broadcaster_user_id, &bot_channel_id, &msg, None, None, &token).await
+                            }).await;
+                            return;
+                        }
 
-                        if price_error {
+                        if kind == MarketBuyForErrorKind::PriceOrChanceDeviation {
                             continue;
                         }
 
@@ -989,9 +1009,12 @@ async fn buy_item_once(
                 "Market rejected buy-for"
             );
 
-            let mut return_channel_points = true;
 
-            if error_msg.eq_ignore_ascii_case("not enough funds on account") {
+            let kind = classify_market_buy_for_error(code, &error_msg);
+
+            let not_enough_funds = kind == MarketBuyForErrorKind::NotEnoughFunds;
+            let mut return_channel_points = true;
+            if not_enough_funds {
                 return_channel_points = broadcaster_setting.refund_if_no_money;
 
                 let state_for_balance = state.clone();
@@ -1001,10 +1024,7 @@ async fn buy_item_once(
                 });
             }
 
-            let error_lower = error_msg.to_lowercase();
-
-            let price_error: bool = error_lower == "no item found at the specified chance to transfer at the specified price or below"
-                || error_lower == "не найден предмет с указанным шансом на передачу по указанной цене или ниже";
+            let price_error = kind == MarketBuyForErrorKind::PriceOrChanceDeviation;
 
             if trigger_price_update_on_deviation && price_error {
                 let state_clone = state.clone();
@@ -1027,12 +1047,14 @@ async fn buy_item_once(
             ).await;
 
             let code_str = code.to_string();
-            let (msg_template, msg_vars): (&str, Vec<(&str, &str)>) = if error_msg.eq_ignore_ascii_case("not enough funds on account") {
+            let (msg_template, msg_vars): (&str, Vec<(&str, &str)>) = if not_enough_funds {
                 if return_channel_points {
                     (MSG_ORDER_FAILED_NO_MONEY_REFUND, vec![("buyer", user_login), ("item", item_name)])
                 } else {
                     (MSG_ORDER_FAILED_NO_MONEY_PENALTY, vec![("buyer", user_login), ("item", item_name)])
                 }
+            } else if let Some(specific_market_msg) = kind.to_market_error_message_key() {
+                (specific_market_msg, vec![("buyer", user_login), ("item", item_name), ("code", code_str.as_str()), ("error", error_msg.as_str())])
             } else {
                 (MSG_ORDER_FAILED, vec![("buyer", user_login), ("code", code_str.as_str()), ("error", error_msg.as_str()), ("item", item_name)])
             };

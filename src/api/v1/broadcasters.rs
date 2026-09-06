@@ -111,7 +111,7 @@ pub struct BroadcasterSettingsResponse {
     /// Market chance percentage to transfer item
     pub market_chance_to_transfer: i16,
     /// Effective Twitch chat message templates for this broadcaster
-    pub chat_messages: HashMap<String, String>,
+    pub chat_messages: crate::messages::CategorizedChatMessages,
 }
 
 #[utoipa::path(
@@ -211,8 +211,8 @@ pub struct UpdateBroadcasterSettingsBody {
     pub pause_reward_if_no_money: Option<bool>,
     /// Market chance percentage to transfer item
     pub market_chance_to_transfer: Option<i16>,
-    /// Twitch chat message templates to customize (message_id -> template_text)
-    pub chat_messages: Option<HashMap<String, String>>,
+    /// Twitch chat message templates to customize (category -> message_key -> template_text)
+    pub chat_messages: Option<HashMap<String, HashMap<String, String>>>,
 }
 
 #[utoipa::path(
@@ -328,19 +328,19 @@ pub struct ChatMessagesResponse {
     /// Twitch channel ID
     pub channel_id: String,
     /// Effective templates currently in use (custom overrides + defaults for unset)
-    pub messages: HashMap<String, String>,
+    pub messages: crate::messages::CategorizedChatMessages,
     /// Custom overrides saved for this channel
-    pub custom_messages: HashMap<String, String>,
+    pub custom_messages: HashMap<String, HashMap<String, String>>,
     /// Global default templates
-    pub default_messages: HashMap<String, String>,
-    /// Supported placeholders for each message ID
-    pub placeholders: HashMap<String, Vec<String>>,
+    pub default_messages: crate::messages::CategorizedChatMessages,
+    /// Supported placeholders for each message ID grouped by category
+    pub placeholders: crate::messages::CategorizedPlaceholders,
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct UpdateChatMessagesBody {
-    /// Map of message_id to template text
-    pub messages: HashMap<String, String>,
+    /// Map of category -> { message_key: template_text }
+    pub messages: HashMap<String, HashMap<String, String>>,
 }
 
 #[utoipa::path(
@@ -348,7 +348,7 @@ pub struct UpdateChatMessagesBody {
     path = "/api/v1/broadcasters/{channel_id}/messages",
     tag = "Broadcasters",
     summary = "Get broadcaster chat message templates",
-    description = "Returns the broadcaster's Twitch chat message templates, including effective templates, custom overrides, defaults, and supported placeholders.",
+    description = "Returns the broadcaster's Twitch chat message templates grouped into 5 categories, including effective templates, custom overrides, defaults, and supported placeholders.",
     params(
         ("channel_id" = String, Path, description = "Twitch channel ID of the broadcaster"),
     ),
@@ -368,8 +368,8 @@ pub async fn get_broadcaster_chat_messages(
 ) -> Result<Json<ChatMessagesResponse>, ApiError> {
     let effective = state.get_channel_chat_messages_merged(&auth.channel_id);
     let custom = state.get_channel_custom_chat_messages(&auth.channel_id);
-    let defaults = crate::messages::ChatMessageTemplates::default().to_map();
-    let placeholders = crate::messages::ChatMessageTemplates::all_placeholders();
+    let defaults = crate::messages::CategorizedChatMessages::default();
+    let placeholders = crate::messages::CategorizedChatMessages::all_placeholders();
 
     Ok(Json(ChatMessagesResponse {
         channel_id: auth.channel_id,
@@ -417,8 +417,8 @@ pub async fn update_broadcaster_chat_messages(
 
     let effective = state.get_channel_chat_messages_merged(&auth.channel_id);
     let custom = state.get_channel_custom_chat_messages(&auth.channel_id);
-    let defaults = crate::messages::ChatMessageTemplates::default().to_map();
-    let placeholders = crate::messages::ChatMessageTemplates::all_placeholders();
+    let defaults = crate::messages::CategorizedChatMessages::default();
+    let placeholders = crate::messages::CategorizedChatMessages::all_placeholders();
 
     Ok(Json(ChatMessagesResponse {
         channel_id: auth.channel_id,

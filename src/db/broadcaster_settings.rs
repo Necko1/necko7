@@ -15,8 +15,14 @@ pub struct BroadcasterSetting {
     pub refund_if_no_money: bool,
     pub pause_reward_if_no_money: bool,
     pub market_chance_to_transfer: i16,
-    pub chat_messages: sqlx::types::Json<HashMap<String, String>>,
+    pub chat_messages: sqlx::types::Json<serde_json::Value>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl BroadcasterSetting {
+    pub fn parsed_chat_messages(&self) -> HashMap<String, HashMap<String, String>> {
+        crate::messages::parse_custom_messages(self.chat_messages.0.clone())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -30,7 +36,7 @@ pub struct NewBroadcasterSetting {
     pub refund_if_no_money: bool,
     pub pause_reward_if_no_money: bool,
     pub market_chance_to_transfer: i16,
-    pub chat_messages: HashMap<String, String>,
+    pub chat_messages: HashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -43,7 +49,7 @@ pub struct UpdateBroadcasterSetting {
     pub refund_if_no_money: Option<bool>,
     pub pause_reward_if_no_money: Option<bool>,
     pub market_chance_to_transfer: Option<i16>,
-    pub chat_messages: Option<HashMap<String, String>>,
+    pub chat_messages: Option<HashMap<String, HashMap<String, String>>>,
 }
 
 impl Db {
@@ -144,20 +150,20 @@ impl Db {
         self.create_broadcaster_setting(&new).await
     }
 
-    pub async fn get_broadcaster_chat_messages(&self, channel_id: &str) -> DbResult<Option<HashMap<String, String>>> {
-        let row = sqlx::query_scalar::<_, sqlx::types::Json<HashMap<String, String>>>(
+    pub async fn get_broadcaster_chat_messages(&self, channel_id: &str) -> DbResult<Option<HashMap<String, HashMap<String, String>>>> {
+        let row = sqlx::query_scalar::<_, sqlx::types::Json<serde_json::Value>>(
             "SELECT chat_messages FROM broadcaster_settings WHERE channel_id = $1"
         )
         .bind(channel_id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(|j| j.0))
+        Ok(row.map(|j| crate::messages::parse_custom_messages(j.0)))
     }
 
     pub async fn update_broadcaster_chat_messages(
         &self,
         channel_id: &str,
-        messages: &HashMap<String, String>,
+        messages: &HashMap<String, HashMap<String, String>>,
     ) -> DbResult<()> {
         sqlx::query(
             "UPDATE broadcaster_settings SET chat_messages = $2, updated_at = NOW() WHERE channel_id = $1"
@@ -171,13 +177,13 @@ impl Db {
 
     pub async fn get_all_broadcaster_chat_messages(
         &self,
-    ) -> DbResult<Vec<(String, HashMap<String, String>)>> {
-        let rows = sqlx::query_as::<_, (String, sqlx::types::Json<HashMap<String, String>>)>(
+    ) -> DbResult<Vec<(String, HashMap<String, HashMap<String, String>>)>> {
+        let rows = sqlx::query_as::<_, (String, sqlx::types::Json<serde_json::Value>)>(
             "SELECT channel_id, chat_messages FROM broadcaster_settings"
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().map(|(id, j)| (id, j.0)).collect())
+        Ok(rows.into_iter().map(|(id, j)| (id, crate::messages::parse_custom_messages(j.0))).collect())
     }
 }
 

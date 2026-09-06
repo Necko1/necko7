@@ -5,6 +5,7 @@ pub mod sell_buy;
 pub mod items;
 pub mod account;
 pub mod prices;
+pub mod errors;
 
 pub struct MarketClient {
     http_client: reqwest::Client,
