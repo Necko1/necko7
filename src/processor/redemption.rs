@@ -295,7 +295,7 @@ pub async fn process_redemption(
         if !limits.is_empty() {
             // 1. Check global limits first
             for rule in &limits.global {
-                match state.db.count_reward_redemptions(reward_id, None, rule.window_hours).await {
+                match state.db.count_reward_redemptions(reward_id, None, rule.window_hours, Some(redemption_id)).await {
                     Ok(count) => {
                         if count >= rule.max_redemptions as i64 {
                             warn!(
@@ -350,7 +350,7 @@ pub async fn process_redemption(
 
             // 2. Check user limits
             for rule in &limits.user {
-                match state.db.count_reward_redemptions(reward_id, Some(&event.user_id), rule.window_hours).await {
+                match state.db.count_reward_redemptions(reward_id, Some(&event.user_id), rule.window_hours, Some(redemption_id)).await {
                     Ok(count) => {
                         if count >= rule.max_redemptions as i64 {
                             warn!(
@@ -794,7 +794,7 @@ async fn check_and_pause_if_global_limit_reached(
     };
 
     for rule in &limits.global {
-        match state.db.count_reward_redemptions(reward_id, None, rule.window_hours).await {
+        match state.db.count_reward_redemptions(reward_id, None, rule.window_hours, None).await {
             Ok(count) => {
                 if count >= rule.max_redemptions as i64 {
                     info!(

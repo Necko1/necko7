@@ -336,11 +336,13 @@ impl Db {
     /// - If `user_id` is Some, counts only for that user. If None, counts globally.
     /// - If `window_hours` is Some, counts within the rolling window (`created_at >= NOW() - window_hours`).
     ///   If None, counts across all-time.
+    /// - If `exclude_redemption_id` is Some, excludes that specific redemption (e.g. the currently incoming pending redemption).
     pub async fn count_reward_redemptions(
         &self,
         reward_id: Uuid,
         user_id: Option<&str>,
         window_hours: Option<i32>,
+        exclude_redemption_id: Option<Uuid>,
     ) -> DbResult<i64> {
         let window_since = window_hours.map(|h| chrono::Utc::now() - chrono::Duration::hours(h as i64));
 
@@ -350,11 +352,13 @@ impl Db {
              WHERE twitch_reward_id = $1
                AND status IN ('COMPLETED', 'ORDER_CREATED', 'PENDING')
                AND ($2::VARCHAR IS NULL OR user_id = $2)
-               AND ($3::TIMESTAMPTZ IS NULL OR created_at >= $3)"
+               AND ($3::TIMESTAMPTZ IS NULL OR created_at >= $3)
+               AND ($4::UUID IS NULL OR twitch_redemption_id != $4)"
         )
         .bind(reward_id)
         .bind(user_id)
         .bind(window_since)
+        .bind(exclude_redemption_id)
         .fetch_one(&self.pool)
         .await?;
 

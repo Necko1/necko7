@@ -513,7 +513,7 @@ pub async fn check_and_sync_purchase_limits(
         Some(limits) if limits.has_global_limits() => {
             let mut reached = false;
             for rule in &limits.global {
-                let count = state.db.count_reward_redemptions(reward.twitch_id, None, rule.window_hours).await?;
+                let count = state.db.count_reward_redemptions(reward.twitch_id, None, rule.window_hours, None).await?;
                 if count >= rule.max_redemptions as i64 {
                     reached = true;
                     break;
