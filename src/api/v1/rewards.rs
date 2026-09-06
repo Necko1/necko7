@@ -81,6 +81,8 @@ pub struct RewardResponse {
     pub chat_logical_operator: Option<crate::db::rewards::ChatLogicalOperator>,
     /// Whether channel points are refunded if chat requirements are not met
     pub refund_if_chat_req_failed: bool,
+    /// Configured purchase limits (global and per-user limits by time window)
+    pub purchase_limits: Option<crate::db::rewards::RewardPurchaseLimitsConfig>,
     /// Reward creation timestamp
     pub created_at: chrono::DateTime<Utc>,
     /// Reward last update timestamp
@@ -119,6 +121,7 @@ impl From<Reward> for RewardResponse {
             chat_time_window_hours: r.chat_time_window_hours,
             chat_logical_operator: r.chat_logical_operator,
             refund_if_chat_req_failed: r.refund_if_chat_req_failed,
+            purchase_limits: r.purchase_limits.map(|j| j.0),
             created_at: r.created_at,
             updated_at: r.updated_at,
         }
@@ -244,10 +247,48 @@ pub struct CreateRewardBody {
     /// Whether channel points are refunded if viewer does not meet chat requirements (default: true)
     #[serde(default = "default_true")]
     pub refund_if_chat_req_failed: bool,
+    /// Optional purchase limits configuration (global and per-user limits by time window)
+    pub purchase_limits: Option<crate::db::rewards::RewardPurchaseLimitsConfig>,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn validate_purchase_limits(limits: &crate::db::rewards::RewardPurchaseLimitsConfig) -> Result<(), ApiError> {
+    for (idx, rule) in limits.global.iter().enumerate() {
+        if rule.max_redemptions <= 0 {
+            return Err(ApiError::BadRequest {
+                message: format!("purchase_limits.global[{}] max_redemptions must be greater than 0", idx),
+                param: format!("purchase_limits.global[{}].max_redemptions", idx),
+            });
+        }
+        if let Some(h) = rule.window_hours {
+            if h <= 0 {
+                return Err(ApiError::BadRequest {
+                    message: format!("purchase_limits.global[{}] window_hours must be greater than 0", idx),
+                    param: format!("purchase_limits.global[{}].window_hours", idx),
+                });
+            }
+        }
+    }
+    for (idx, rule) in limits.user.iter().enumerate() {
+        if rule.max_redemptions <= 0 {
+            return Err(ApiError::BadRequest {
+                message: format!("purchase_limits.user[{}] max_redemptions must be greater than 0", idx),
+                param: format!("purchase_limits.user[{}].max_redemptions", idx),
+            });
+        }
+        if let Some(h) = rule.window_hours {
+            if h <= 0 {
+                return Err(ApiError::BadRequest {
+                    message: format!("purchase_limits.user[{}] window_hours must be greater than 0", idx),
+                    param: format!("purchase_limits.user[{}].window_hours", idx),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 #[utoipa::path(
@@ -346,6 +387,10 @@ pub async fn create_reward(
                 param: "max_market_price".into(),
             });
         }
+    }
+
+    if let Some(ref limits) = body.purchase_limits {
+        validate_purchase_limits(limits)?;
     }
 
     let setting = state.db.get_or_create_broadcaster_setting(&auth.channel_id).await?;
@@ -689,6 +734,7 @@ pub async fn create_reward(
         chat_time_window_hours: body.chat_time_window_hours,
         chat_logical_operator: body.chat_logical_operator,
         refund_if_chat_req_failed: body.refund_if_chat_req_failed,
+        purchase_limits: body.purchase_limits.map(sqlx::types::Json),
     };
 
     let reward = state.db.create_reward(&new_reward).await?;
@@ -759,6 +805,8 @@ pub struct UpdateRewardBody {
     pub chat_logical_operator: Option<crate::db::rewards::ChatLogicalOperator>,
     /// Whether channel points are refunded if viewer does not meet chat requirements
     pub refund_if_chat_req_failed: Option<bool>,
+    /// Optional purchase limits configuration (global and per-user limits by time window)
+    pub purchase_limits: Option<crate::db::rewards::RewardPurchaseLimitsConfig>,
 }
 
 #[utoipa::path(
@@ -901,6 +949,10 @@ pub async fn update_reward(
         }
     }
 
+    if let Some(ref limits) = body.purchase_limits {
+        validate_purchase_limits(limits)?;
+    }
+
     let setting = state.db.get_or_create_broadcaster_setting(&auth.channel_id).await?;
     let effective_pricing_mode = body.pricing_mode.unwrap_or(existing.pricing_mode);
 
@@ -1009,6 +1061,7 @@ pub async fn update_reward(
         chat_time_window_hours: body.chat_time_window_hours,
         chat_logical_operator: body.chat_logical_operator,
         refund_if_chat_req_failed: body.refund_if_chat_req_failed,
+        purchase_limits: body.purchase_limits.map(sqlx::types::Json),
     };
 
     state.db.update_reward(reward_id, &patch).await?;
@@ -1794,14 +1847,90 @@ mod tests {
             chat_time_window_hours: None,
             chat_logical_operator: None,
             refund_if_chat_req_failed: true,
+            purchase_limits: Some(sqlx::types::Json(crate::db::rewards::RewardPurchaseLimitsConfig {
+                global: vec![
+                    crate::db::rewards::PurchaseLimitRule {
+                        window_hours: Some(168),
+                        max_redemptions: 10,
+                    },
+                ],
+                user: vec![
+                    crate::db::rewards::PurchaseLimitRule {
+                        window_hours: Some(24),
+                        max_redemptions: 1,
+                    },
+                ],
+            })),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
 
         let res = RewardResponse::from(reward);
         assert_eq!(res.manual_twitch_points, Some(50000));
+        let limits = res.purchase_limits.as_ref().unwrap();
+        assert_eq!(limits.global.len(), 1);
+        assert_eq!(limits.global[0].max_redemptions, 10);
+        assert_eq!(limits.user.len(), 1);
+        assert_eq!(limits.user[0].max_redemptions, 1);
         let json = serde_json::to_string(&res).unwrap();
         assert!(json.contains("\"manual_twitch_points\":50000"));
+        assert!(json.contains("\"purchase_limits\""));
+    }
+
+    #[test]
+    fn test_create_and_update_reward_body_with_purchase_limits() {
+        let json_create = r#"{
+            "twitch_title": "Limited Skin",
+            "twitch_description": "Only 5 per week!",
+            "market_item_name": "AK-47 | Redline (Field-Tested)",
+            "reward_type": "FIXED",
+            "pricing_mode": "MANUAL",
+            "manual_twitch_points": 50000,
+            "purchase_limits": {
+                "global": [
+                    { "window_hours": 168, "max_redemptions": 5 },
+                    { "window_hours": null, "max_redemptions": 50 }
+                ],
+                "user": [
+                    { "window_hours": 24, "max_redemptions": 1 },
+                    { "window_hours": null, "max_redemptions": 3 }
+                ]
+            },
+            "permissible_market_price_deviation": 10,
+            "twitch_price_markup_percentage": 0,
+            "global_cooldown_seconds": 0,
+            "max_redemptions_per_stream": 0,
+            "max_redemptions_per_user_per_stream": 0,
+            "market_autobuy": true,
+            "is_paused": false
+        }"#;
+
+        let parsed_create: CreateRewardBody = serde_json::from_str(json_create).unwrap();
+        let limits = parsed_create.purchase_limits.unwrap();
+        assert_eq!(limits.global.len(), 2);
+        assert_eq!(limits.global[0].window_hours, Some(168));
+        assert_eq!(limits.global[0].max_redemptions, 5);
+        assert_eq!(limits.global[1].window_hours, None);
+        assert_eq!(limits.global[1].max_redemptions, 50);
+        assert_eq!(limits.user.len(), 2);
+        assert_eq!(limits.user[0].window_hours, Some(24));
+        assert_eq!(limits.user[0].max_redemptions, 1);
+        assert_eq!(limits.user[1].window_hours, None);
+        assert_eq!(limits.user[1].max_redemptions, 3);
+
+        let json_update = r#"{
+            "purchase_limits": {
+                "global": [
+                    { "window_hours": 72, "max_redemptions": 10 }
+                ]
+            }
+        }"#;
+        let parsed_update: UpdateRewardBody = serde_json::from_str(json_update).unwrap();
+        let upd_limits = parsed_update.purchase_limits.unwrap();
+        assert_eq!(upd_limits.global.len(), 1);
+        assert_eq!(upd_limits.global[0].window_hours, Some(72));
+        assert_eq!(upd_limits.global[0].max_redemptions, 10);
+        assert!(upd_limits.user.is_empty());
     }
 }
 

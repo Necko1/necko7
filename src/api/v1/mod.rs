@@ -45,6 +45,8 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         stats::get_stats,
         proxy::image_proxy,
         chat_stats::get_chat_leaderboard,
+        chat_stats::get_channel_chat_dashboard,
+        chat_stats::get_channel_chat_messages,
         chat_stats::get_user_chat_stats,
         chat_stats::get_user_chat_summary,
         chat_stats::get_user_chat_messages,
@@ -80,6 +82,13 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         chat_stats::UserStatsQuery,
         chat_stats::PaginatedUserMessagesResponse,
         chat_stats::UserMessagesQuery,
+        chat_stats::PaginatedChannelMessagesResponse,
+        chat_stats::ChannelMessagesQuery,
+        chat_stats::ChatDashboardQuery,
+        crate::db::chat_messages::ChatDashboardData,
+        crate::db::chat_messages::ChatDashboardSummary,
+        crate::db::chat_messages::ChatTimelinePoint,
+        crate::db::chat_messages::ChatTopUserItem,
         chat_stats::UserRedemptionsQuery,
         crate::db::chat_messages::LeaderboardUserItem,
         crate::db::chat_messages::UserChatSummary,
@@ -95,6 +104,8 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         crate::db::rewards::PriceStrategy,
         crate::db::rewards::FilterConfig,
         crate::db::rewards::PoolItemConfig,
+        crate::db::rewards::RewardPurchaseLimitsConfig,
+        crate::db::rewards::PurchaseLimitRule,
         crate::steam::market::prices::MarketPriceItem,
     )),
     tags(
@@ -119,12 +130,14 @@ struct SecurityAddon;
 
 impl utoipa::Modify for SecurityAddon {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
-        use utoipa::openapi::security::{SecurityScheme, ApiKey};
-        let components = openapi.components.get_or_insert_with(Default::default);
-        components.add_security_scheme(
-            "session_id",
-            SecurityScheme::ApiKey(ApiKey::Cookie(utoipa::openapi::security::ApiKeyValue::new("session_id"))),
-        );
+        use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
+
+        if let Some(components) = openapi.components.as_mut() {
+            components.add_security_scheme(
+                "session_id",
+                SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::new("session_id"))),
+            );
+        }
     }
 }
 
@@ -149,6 +162,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/broadcasters/{channel_id}/redemptions/{redemption_id}/penalty", post(redemptions::penalty_redemption))
         .route("/broadcasters/{channel_id}/stats", get(stats::get_stats))
         .route("/broadcasters/{channel_id}/chat/leaderboard", get(chat_stats::get_chat_leaderboard))
+        .route("/broadcasters/{channel_id}/chat/dashboard", get(chat_stats::get_channel_chat_dashboard))
+        .route("/broadcasters/{channel_id}/chat/messages", get(chat_stats::get_channel_chat_messages))
         .route("/broadcasters/{channel_id}/chat/users/{user_id}/stats", get(chat_stats::get_user_chat_stats))
         .route("/broadcasters/{channel_id}/chat/users/{user_id}/summary", get(chat_stats::get_user_chat_summary))
         .route("/broadcasters/{channel_id}/chat/users/{user_id}/messages", get(chat_stats::get_user_chat_messages))
@@ -199,5 +214,9 @@ mod tests {
         assert!(json.contains("LeaderboardUserItem"), "OpenAPI schema must contain LeaderboardUserItem");
         assert!(json.contains("PaginatedLeaderboardResponse"), "OpenAPI schema must contain PaginatedLeaderboardResponse");
         assert!(json.contains("/api/v1/broadcasters/{channel_id}/chat/leaderboard"), "OpenAPI schema must contain leaderboard route");
+        assert!(json.contains("/api/v1/broadcasters/{channel_id}/chat/dashboard"), "OpenAPI schema must contain dashboard route");
+        assert!(json.contains("/api/v1/broadcasters/{channel_id}/chat/messages"), "OpenAPI schema must contain messages route");
+        assert!(json.contains("ChatDashboardData"), "OpenAPI schema must contain ChatDashboardData");
+        assert!(json.contains("PaginatedChannelMessagesResponse"), "OpenAPI schema must contain PaginatedChannelMessagesResponse");
     }
 }

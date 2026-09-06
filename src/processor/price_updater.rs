@@ -95,6 +95,16 @@ impl PriceUpdater {
                     "Failed to update price for reward"
                 );
             }
+
+            if let Err(e) = check_and_sync_purchase_limits(&self.state, &reward).await {
+                warn!(
+                    error = %e,
+                    reward = %reward.twitch_title,
+                    reward_id = %reward.twitch_id,
+                    broadcaster_id = %self.broadcaster_id,
+                    "Failed to sync purchase limits for reward"
+                );
+            }
         }
 
         Ok(())
@@ -360,6 +370,7 @@ async fn apply_twitch_and_db_cost_update(
     state.db.update_reward(reward.twitch_id, &update_patch).await?;
 
     check_and_sync_price_limits(state, reward, new_market_price).await?;
+    check_and_sync_purchase_limits(state, reward).await?;
 
     Ok(())
 }
@@ -493,5 +504,158 @@ pub async fn check_and_sync_price_limits(
 
     Ok(())
 }
+
+pub async fn check_and_sync_purchase_limits(
+    state: &Arc<AppState>,
+    reward: &Reward,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let (has_global_limits, is_limit_reached) = match reward.purchase_limits.as_ref().map(|j| &j.0) {
+        Some(limits) if limits.has_global_limits() => {
+            let mut reached = false;
+            for rule in &limits.global {
+                let count = state.db.count_reward_redemptions(reward.twitch_id, None, rule.window_hours).await?;
+                if count >= rule.max_redemptions as i64 {
+                    reached = true;
+                    break;
+                }
+            }
+            (true, reached)
+        }
+        _ => (false, false),
+    };
+
+    if !has_global_limits && !matches!(reward.pause_reason, Some(crate::db::rewards::PauseReason::LimitReached)) {
+        return Ok(());
+    }
+
+    if is_limit_reached {
+        if !reward.is_paused {
+            warn!(
+                reward_id = %reward.twitch_id,
+                title = %reward.twitch_title,
+                "Reward global purchase limit reached; pausing on Twitch and DB with LIMIT_REACHED"
+            );
+
+            let bc_id = reward.streamer_id.clone();
+            let bc_ref = bc_id.clone();
+            let r_id = reward.twitch_id.to_string();
+            let state_clone = state.clone();
+
+            state.with_broadcaster_token(&bc_ref, move |token| {
+                let b = bc_id.clone();
+                let r = r_id.clone();
+                let s = state_clone.clone();
+                async move {
+                    s.helix_client.update_custom_reward(
+                        &b,
+                        &r,
+                        UpdateCustomReward {
+                            is_paused: Some(true),
+                            ..Default::default()
+                        },
+                        &token,
+                    ).await
+                }
+            }).await
+            .map_err(|e| e.to_string())?;
+
+            state.db.set_reward_paused(
+                reward.twitch_id,
+                true,
+                Some(crate::db::rewards::PauseReason::LimitReached),
+            ).await?;
+        }
+    } else {
+        // Purchases are within limits! If it was paused due to LimitReached, auto-unpause it!
+        if reward.is_paused && matches!(reward.pause_reason, Some(crate::db::rewards::PauseReason::LimitReached)) {
+            // Also check if price limits or balance would prevent unpausing
+            let price_out_of_bounds = reward.min_market_price.is_some_and(|min_p| reward.current_market_price < min_p)
+                || reward.max_market_price.is_some_and(|max_p| reward.current_market_price > max_p);
+
+            if price_out_of_bounds {
+                warn!(
+                    reward_id = %reward.twitch_id,
+                    title = %reward.twitch_title,
+                    "Reward purchase limit freed up, but price is out of bounds; switching reason to PRICE_LIMIT"
+                );
+                state.db.set_reward_paused(
+                    reward.twitch_id,
+                    true,
+                    Some(crate::db::rewards::PauseReason::PriceLimit),
+                ).await?;
+                return Ok(());
+            }
+
+            let setting = state.db.get_broadcaster_setting(&reward.streamer_id).await?;
+            let has_enough_money = if let Some(ref s) = setting {
+                if s.pause_reward_if_no_money {
+                    if let Ok(balance) = state.get_cached_or_fetch_balance(&reward.streamer_id).await {
+                        let dev = reward.permissible_market_price_deviation as i64;
+                        let max_price_minor = reward.current_market_price as i64 + (reward.current_market_price as i64 * dev) / 100;
+                        let cost = market::minor_to_major(max_price_minor, &reward.currency);
+                        balance.money >= cost
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                }
+            } else {
+                true
+            };
+
+            if has_enough_money {
+                info!(
+                    reward_id = %reward.twitch_id,
+                    title = %reward.twitch_title,
+                    "Reward purchase count is within limits; auto-unpausing reward"
+                );
+
+                let bc_id = reward.streamer_id.clone();
+                let bc_ref = bc_id.clone();
+                let r_id = reward.twitch_id.to_string();
+                let state_clone = state.clone();
+
+                state.with_broadcaster_token(&bc_ref, move |token| {
+                    let b = bc_id.clone();
+                    let r = r_id.clone();
+                    let s = state_clone.clone();
+                    async move {
+                        s.helix_client.update_custom_reward(
+                            &b,
+                            &r,
+                            UpdateCustomReward {
+                                is_paused: Some(false),
+                                ..Default::default()
+                            },
+                            &token,
+                        ).await
+                    }
+                }).await
+                .map_err(|e| e.to_string())?;
+
+                state.db.set_reward_paused(
+                    reward.twitch_id,
+                    false,
+                    None,
+                ).await?;
+            } else {
+                warn!(
+                    reward_id = %reward.twitch_id,
+                    title = %reward.twitch_title,
+                    "Reward purchase limit freed up, but broadcaster has insufficient balance; switching reason to NO_MONEY"
+                );
+                state.db.set_reward_paused(
+                    reward.twitch_id,
+                    true,
+                    Some(crate::db::rewards::PauseReason::NoMoney),
+                ).await?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 
 

@@ -15,11 +15,21 @@ pub const MSG_TRADE_FAILED_BUYER_REFUND: &str = "trade_failed_buyer_refund";
 pub const MSG_TRADE_FAILED_BUYER_PENALTY: &str = "trade_failed_buyer_penalty";
 pub const MSG_TRADE_FAILED_SELLER_REFUND: &str = "trade_failed_seller_refund";
 pub const MSG_TRADE_TIMEOUT: &str = "trade_timeout";
+pub const MSG_CHAT_REQ_FAILED_MESSAGES_REFUND: &str = "chat_req_failed_messages_refund";
+pub const MSG_CHAT_REQ_FAILED_MESSAGES_PENALTY: &str = "chat_req_failed_messages_penalty";
+pub const MSG_CHAT_REQ_FAILED_CHARACTERS_REFUND: &str = "chat_req_failed_characters_refund";
+pub const MSG_CHAT_REQ_FAILED_CHARACTERS_PENALTY: &str = "chat_req_failed_characters_penalty";
+pub const MSG_CHAT_REQ_FAILED_BOTH_REFUND: &str = "chat_req_failed_both_refund";
+pub const MSG_CHAT_REQ_FAILED_BOTH_PENALTY: &str = "chat_req_failed_both_penalty";
+pub const MSG_USER_PURCHASE_LIMIT_REACHED: &str = "user_purchase_limit_reached";
+pub const MSG_GLOBAL_PURCHASE_LIMIT_REACHED: &str = "global_purchase_limit_reached";
+
+// Legacy keys retained for backwards compatibility
 pub const MSG_CHAT_REQ_FAILED_MESSAGES: &str = "chat_req_failed_messages";
 pub const MSG_CHAT_REQ_FAILED_CHARACTERS: &str = "chat_req_failed_characters";
 pub const MSG_CHAT_REQ_FAILED_BOTH: &str = "chat_req_failed_both";
 
-pub const ALL_MESSAGE_KEYS: [&str; 16] = [
+pub const ALL_MESSAGE_KEYS: [&str; 21] = [
     MSG_TRADE_LINK_INVALID,
     MSG_ORDER_CREATED,
     MSG_ORDER_FAILED,
@@ -33,9 +43,14 @@ pub const ALL_MESSAGE_KEYS: [&str; 16] = [
     MSG_TRADE_FAILED_BUYER_PENALTY,
     MSG_TRADE_FAILED_SELLER_REFUND,
     MSG_TRADE_TIMEOUT,
-    MSG_CHAT_REQ_FAILED_MESSAGES,
-    MSG_CHAT_REQ_FAILED_CHARACTERS,
-    MSG_CHAT_REQ_FAILED_BOTH,
+    MSG_CHAT_REQ_FAILED_MESSAGES_REFUND,
+    MSG_CHAT_REQ_FAILED_MESSAGES_PENALTY,
+    MSG_CHAT_REQ_FAILED_CHARACTERS_REFUND,
+    MSG_CHAT_REQ_FAILED_CHARACTERS_PENALTY,
+    MSG_CHAT_REQ_FAILED_BOTH_REFUND,
+    MSG_CHAT_REQ_FAILED_BOTH_PENALTY,
+    MSG_USER_PURCHASE_LIMIT_REACHED,
+    MSG_GLOBAL_PURCHASE_LIMIT_REACHED,
 ];
 
 /// Default templates for all Twitch bot chat messages.
@@ -54,9 +69,14 @@ pub struct ChatMessageTemplates {
     pub trade_failed_buyer_penalty: String,
     pub trade_failed_seller_refund: String,
     pub trade_timeout: String,
-    pub chat_req_failed_messages: String,
-    pub chat_req_failed_characters: String,
-    pub chat_req_failed_both: String,
+    pub chat_req_failed_messages_refund: String,
+    pub chat_req_failed_messages_penalty: String,
+    pub chat_req_failed_characters_refund: String,
+    pub chat_req_failed_characters_penalty: String,
+    pub chat_req_failed_both_refund: String,
+    pub chat_req_failed_both_penalty: String,
+    pub user_purchase_limit_reached: String,
+    pub global_purchase_limit_reached: String,
 }
 
 impl Default for ChatMessageTemplates {
@@ -75,9 +95,14 @@ impl Default for ChatMessageTemplates {
             trade_failed_buyer_penalty: "@{buyer} въебал трейд? красавчик. какое счастье, что стример сказал мне нихуя не возвращать в таких случаях. в следующий раз будь аккуратнее 😁😁😁😁".to_string(),
             trade_failed_seller_refund: "@{buyer} сорянчик, продавец долбоёб кажется решил нихуя не отправлять. ну или другая причина, крч возвращаю баллы, можешь попробовать ещё раз купить".to_string(),
             trade_timeout: "@{buyer} трейд превысил максимальное время ожидания (30 минут). баллы возвращать не буду во избежение потери денег.".to_string(),
-            chat_req_failed_messages: "@{buyer} недостаточно сообщений для получения награды: у вас {user_messages}, требуется {min_messages} за последние {hours} ч. {refund_status}".to_string(),
-            chat_req_failed_characters: "@{buyer} недостаточно символов в чате: у вас {user_characters}, требуется {min_characters} за последние {hours} ч. {refund_status}".to_string(),
-            chat_req_failed_both: "@{buyer} недостаточно активности в чате: требуется {min_messages} сообщений {operator} {min_characters} символов за последние {hours} ч. {refund_status}".to_string(),
+            chat_req_failed_messages_refund: "@{buyer} недостаточно сообщений для получения награды: у вас {user_messages}, требуется {min_messages} за последние {hours} ч. Баллы возвращены.".to_string(),
+            chat_req_failed_messages_penalty: "@{buyer} недостаточно сообщений для получения награды: у вас {user_messages}, требуется {min_messages} за последние {hours} ч. Баллы не возвращаются.".to_string(),
+            chat_req_failed_characters_refund: "@{buyer} недостаточно символов в чате: у вас {user_characters}, требуется {min_characters} за последние {hours} ч. Баллы возвращены.".to_string(),
+            chat_req_failed_characters_penalty: "@{buyer} недостаточно символов в чате: у вас {user_characters}, требуется {min_characters} за последние {hours} ч. Баллы не возвращаются.".to_string(),
+            chat_req_failed_both_refund: "@{buyer} недостаточно активности в чате: требуется {min_messages} сообщений {operator} {min_characters} символов за последние {hours} ч. Баллы возвращены.".to_string(),
+            chat_req_failed_both_penalty: "@{buyer} недостаточно активности в чате: требуется {min_messages} сообщений {operator} {min_characters} символов за последние {hours} ч. Баллы не возвращаются.".to_string(),
+            user_purchase_limit_reached: "@{buyer} вы достигли лимита покупок этого скина ({limit} за {period}). Баллы канала возвращены.".to_string(),
+            global_purchase_limit_reached: "@{buyer} общий лимит покупок этого скина на канале ({limit} за {period}) исчерпан. Награда временно приостановлена, баллы канала возвращены.".to_string(),
         }
     }
 }
@@ -85,7 +110,7 @@ impl Default for ChatMessageTemplates {
 impl ChatMessageTemplates {
     /// Convert templates to a flat HashMap<message_id, template_string>.
     pub fn to_map(&self) -> HashMap<String, String> {
-        let mut map = HashMap::with_capacity(16);
+        let mut map = HashMap::with_capacity(21);
         map.insert(MSG_TRADE_LINK_INVALID.to_string(), self.trade_link_invalid.clone());
         map.insert(MSG_ORDER_CREATED.to_string(), self.order_created.clone());
         map.insert(MSG_ORDER_FAILED.to_string(), self.order_failed.clone());
@@ -99,9 +124,14 @@ impl ChatMessageTemplates {
         map.insert(MSG_TRADE_FAILED_BUYER_PENALTY.to_string(), self.trade_failed_buyer_penalty.clone());
         map.insert(MSG_TRADE_FAILED_SELLER_REFUND.to_string(), self.trade_failed_seller_refund.clone());
         map.insert(MSG_TRADE_TIMEOUT.to_string(), self.trade_timeout.clone());
-        map.insert(MSG_CHAT_REQ_FAILED_MESSAGES.to_string(), self.chat_req_failed_messages.clone());
-        map.insert(MSG_CHAT_REQ_FAILED_CHARACTERS.to_string(), self.chat_req_failed_characters.clone());
-        map.insert(MSG_CHAT_REQ_FAILED_BOTH.to_string(), self.chat_req_failed_both.clone());
+        map.insert(MSG_CHAT_REQ_FAILED_MESSAGES_REFUND.to_string(), self.chat_req_failed_messages_refund.clone());
+        map.insert(MSG_CHAT_REQ_FAILED_MESSAGES_PENALTY.to_string(), self.chat_req_failed_messages_penalty.clone());
+        map.insert(MSG_CHAT_REQ_FAILED_CHARACTERS_REFUND.to_string(), self.chat_req_failed_characters_refund.clone());
+        map.insert(MSG_CHAT_REQ_FAILED_CHARACTERS_PENALTY.to_string(), self.chat_req_failed_characters_penalty.clone());
+        map.insert(MSG_CHAT_REQ_FAILED_BOTH_REFUND.to_string(), self.chat_req_failed_both_refund.clone());
+        map.insert(MSG_CHAT_REQ_FAILED_BOTH_PENALTY.to_string(), self.chat_req_failed_both_penalty.clone());
+        map.insert(MSG_USER_PURCHASE_LIMIT_REACHED.to_string(), self.user_purchase_limit_reached.clone());
+        map.insert(MSG_GLOBAL_PURCHASE_LIMIT_REACHED.to_string(), self.global_purchase_limit_reached.clone());
         map
     }
 
@@ -122,9 +152,36 @@ impl ChatMessageTemplates {
             trade_failed_buyer_penalty: map.get(MSG_TRADE_FAILED_BUYER_PENALTY).cloned().unwrap_or(default.trade_failed_buyer_penalty),
             trade_failed_seller_refund: map.get(MSG_TRADE_FAILED_SELLER_REFUND).cloned().unwrap_or(default.trade_failed_seller_refund),
             trade_timeout: map.get(MSG_TRADE_TIMEOUT).cloned().unwrap_or(default.trade_timeout),
-            chat_req_failed_messages: map.get(MSG_CHAT_REQ_FAILED_MESSAGES).cloned().unwrap_or(default.chat_req_failed_messages),
-            chat_req_failed_characters: map.get(MSG_CHAT_REQ_FAILED_CHARACTERS).cloned().unwrap_or(default.chat_req_failed_characters),
-            chat_req_failed_both: map.get(MSG_CHAT_REQ_FAILED_BOTH).cloned().unwrap_or(default.chat_req_failed_both),
+            chat_req_failed_messages_refund: map.get(MSG_CHAT_REQ_FAILED_MESSAGES_REFUND)
+                .or_else(|| map.get(MSG_CHAT_REQ_FAILED_MESSAGES))
+                .cloned()
+                .unwrap_or(default.chat_req_failed_messages_refund),
+            chat_req_failed_messages_penalty: map.get(MSG_CHAT_REQ_FAILED_MESSAGES_PENALTY)
+                .or_else(|| map.get(MSG_CHAT_REQ_FAILED_MESSAGES))
+                .cloned()
+                .unwrap_or(default.chat_req_failed_messages_penalty),
+            chat_req_failed_characters_refund: map.get(MSG_CHAT_REQ_FAILED_CHARACTERS_REFUND)
+                .or_else(|| map.get(MSG_CHAT_REQ_FAILED_CHARACTERS))
+                .cloned()
+                .unwrap_or(default.chat_req_failed_characters_refund),
+            chat_req_failed_characters_penalty: map.get(MSG_CHAT_REQ_FAILED_CHARACTERS_PENALTY)
+                .or_else(|| map.get(MSG_CHAT_REQ_FAILED_CHARACTERS))
+                .cloned()
+                .unwrap_or(default.chat_req_failed_characters_penalty),
+            chat_req_failed_both_refund: map.get(MSG_CHAT_REQ_FAILED_BOTH_REFUND)
+                .or_else(|| map.get(MSG_CHAT_REQ_FAILED_BOTH))
+                .cloned()
+                .unwrap_or(default.chat_req_failed_both_refund),
+            chat_req_failed_both_penalty: map.get(MSG_CHAT_REQ_FAILED_BOTH_PENALTY)
+                .or_else(|| map.get(MSG_CHAT_REQ_FAILED_BOTH))
+                .cloned()
+                .unwrap_or(default.chat_req_failed_both_penalty),
+            user_purchase_limit_reached: map.get(MSG_USER_PURCHASE_LIMIT_REACHED)
+                .cloned()
+                .unwrap_or(default.user_purchase_limit_reached),
+            global_purchase_limit_reached: map.get(MSG_GLOBAL_PURCHASE_LIMIT_REACHED)
+                .cloned()
+                .unwrap_or(default.global_purchase_limit_reached),
         }
     }
 
@@ -145,9 +202,14 @@ impl ChatMessageTemplates {
             MSG_TRADE_FAILED_BUYER_PENALTY => Some(default.trade_failed_buyer_penalty),
             MSG_TRADE_FAILED_SELLER_REFUND => Some(default.trade_failed_seller_refund),
             MSG_TRADE_TIMEOUT => Some(default.trade_timeout),
-            MSG_CHAT_REQ_FAILED_MESSAGES => Some(default.chat_req_failed_messages),
-            MSG_CHAT_REQ_FAILED_CHARACTERS => Some(default.chat_req_failed_characters),
-            MSG_CHAT_REQ_FAILED_BOTH => Some(default.chat_req_failed_both),
+            MSG_CHAT_REQ_FAILED_MESSAGES_REFUND | MSG_CHAT_REQ_FAILED_MESSAGES => Some(default.chat_req_failed_messages_refund),
+            MSG_CHAT_REQ_FAILED_MESSAGES_PENALTY => Some(default.chat_req_failed_messages_penalty),
+            MSG_CHAT_REQ_FAILED_CHARACTERS_REFUND | MSG_CHAT_REQ_FAILED_CHARACTERS => Some(default.chat_req_failed_characters_refund),
+            MSG_CHAT_REQ_FAILED_CHARACTERS_PENALTY => Some(default.chat_req_failed_characters_penalty),
+            MSG_CHAT_REQ_FAILED_BOTH_REFUND | MSG_CHAT_REQ_FAILED_BOTH => Some(default.chat_req_failed_both_refund),
+            MSG_CHAT_REQ_FAILED_BOTH_PENALTY => Some(default.chat_req_failed_both_penalty),
+            MSG_USER_PURCHASE_LIMIT_REACHED => Some(default.user_purchase_limit_reached),
+            MSG_GLOBAL_PURCHASE_LIMIT_REACHED => Some(default.global_purchase_limit_reached),
             _ => None,
         }
     }
@@ -168,13 +230,21 @@ impl ChatMessageTemplates {
             MSG_TRADE_FAILED_BUYER_PENALTY => vec!["buyer", "item"],
             MSG_TRADE_FAILED_SELLER_REFUND => vec!["buyer", "item"],
             MSG_TRADE_TIMEOUT => vec!["buyer", "item"],
-            MSG_CHAT_REQ_FAILED_MESSAGES => vec!["buyer", "user_messages", "min_messages", "hours", "refund_status"],
-            MSG_CHAT_REQ_FAILED_CHARACTERS => vec!["buyer", "user_characters", "min_characters", "hours", "refund_status"],
-            MSG_CHAT_REQ_FAILED_BOTH => vec!["buyer", "user_messages", "min_messages", "user_characters", "min_characters", "hours", "operator", "refund_status"],
+            MSG_CHAT_REQ_FAILED_MESSAGES_REFUND | MSG_CHAT_REQ_FAILED_MESSAGES_PENALTY | MSG_CHAT_REQ_FAILED_MESSAGES => {
+                vec!["buyer", "user_messages", "min_messages", "hours"]
+            }
+            MSG_CHAT_REQ_FAILED_CHARACTERS_REFUND | MSG_CHAT_REQ_FAILED_CHARACTERS_PENALTY | MSG_CHAT_REQ_FAILED_CHARACTERS => {
+                vec!["buyer", "user_characters", "min_characters", "hours"]
+            }
+            MSG_CHAT_REQ_FAILED_BOTH_REFUND | MSG_CHAT_REQ_FAILED_BOTH_PENALTY | MSG_CHAT_REQ_FAILED_BOTH => {
+                vec!["buyer", "user_messages", "min_messages", "user_characters", "min_characters", "hours", "operator"]
+            }
+            MSG_USER_PURCHASE_LIMIT_REACHED | MSG_GLOBAL_PURCHASE_LIMIT_REACHED => {
+                vec!["buyer", "limit", "period", "item"]
+            }
             _ => vec!["buyer"],
         }
     }
-
 
     /// Return map of all message keys to their supported placeholder lists.
     pub fn all_placeholders() -> HashMap<String, Vec<String>> {
@@ -252,7 +322,7 @@ mod tests {
     fn test_default_message_templates_roundtrip() {
         let defaults = ChatMessageTemplates::default();
         let map = defaults.to_map();
-        assert_eq!(map.len(), 16);
+        assert_eq!(map.len(), 21);
         let restored = ChatMessageTemplates::from_map(&map);
         assert_eq!(defaults, restored);
     }
@@ -279,50 +349,32 @@ mod tests {
     fn test_render_chat_requirement_templates() {
         let defaults = ChatMessageTemplates::default();
 
-        let rendered_msgs = render_template(
-            &defaults.chat_req_failed_messages,
+        let rendered_msgs_ref = render_template(
+            &defaults.chat_req_failed_messages_refund,
             &[
                 ("buyer", "alice"),
                 ("user_messages", "12"),
                 ("min_messages", "50"),
                 ("hours", "72"),
-                ("refund_status", "Баллы возвращены."),
             ],
         );
         assert_eq!(
-            rendered_msgs,
+            rendered_msgs_ref,
             "@alice недостаточно сообщений для получения награды: у вас 12, требуется 50 за последние 72 ч. Баллы возвращены."
         );
 
-        let rendered_chars = render_template(
-            &defaults.chat_req_failed_characters,
+        let rendered_msgs_pen = render_template(
+            &defaults.chat_req_failed_messages_penalty,
             &[
-                ("buyer", "bob"),
-                ("user_characters", "120"),
-                ("min_characters", "1000"),
-                ("hours", "24"),
-                ("refund_status", "Баллы возвращены."),
+                ("buyer", "alice"),
+                ("user_messages", "12"),
+                ("min_messages", "50"),
+                ("hours", "72"),
             ],
         );
         assert_eq!(
-            rendered_chars,
-            "@bob недостаточно символов в чате: у вас 120, требуется 1000 за последние 24 ч. Баллы возвращены."
-        );
-
-        let rendered_both = render_template(
-            &defaults.chat_req_failed_both,
-            &[
-                ("buyer", "charlie"),
-                ("min_messages", "10"),
-                ("operator", "И"),
-                ("min_characters", "200"),
-                ("hours", "48"),
-                ("refund_status", "Баллы не возвращаются."),
-            ],
-        );
-        assert_eq!(
-            rendered_both,
-            "@charlie недостаточно активности в чате: требуется 10 сообщений И 200 символов за последние 48 ч. Баллы не возвращаются."
+            rendered_msgs_pen,
+            "@alice недостаточно сообщений для получения награды: у вас 12, требуется 50 за последние 72 ч. Баллы не возвращаются."
         );
     }
 }

@@ -17,6 +17,10 @@ pub struct BroadcasterListItem {
     pub channel_id: String,
     /// Twitch channel login name
     pub channel_login: String,
+    /// Twitch channel display name
+    pub display_name: Option<String>,
+    /// Twitch channel avatar image URL
+    pub profile_image_url: Option<String>,
     /// User's role on this channel
     pub role: ChannelRole,
 }
@@ -33,6 +37,8 @@ pub struct BroadcasterListItem {
                 {
                     "channel_id": "123456789",
                     "channel_login": "some_streamer",
+                    "display_name": "Some_Streamer",
+                    "profile_image_url": "https://static-cdn.jtvnw.net/jtv_user_pictures/avatar.png",
                     "role": "OWNER"
                 }
             ])
@@ -56,6 +62,8 @@ pub async fn list_broadcasters(
         result.push(BroadcasterListItem {
             channel_id: perm.channel_id,
             channel_login: String::new(),
+            display_name: None,
+            profile_image_url: None,
             role: perm.role,
         });
     }
@@ -63,6 +71,13 @@ pub async fn list_broadcasters(
     for item in &mut result {
         if let Ok(Some(b)) = state.db.get_broadcaster_by_id(&item.channel_id).await {
             item.channel_login = b.channel_login;
+        }
+        if let Some(user_info) = state.get_twitch_user_cached(&item.channel_id).await {
+            if item.channel_login.is_empty() {
+                item.channel_login = user_info.login.clone();
+            }
+            item.display_name = Some(user_info.display_name.clone());
+            item.profile_image_url = Some(user_info.profile_image_url.clone());
         }
     }
 
@@ -75,6 +90,10 @@ pub struct BroadcasterSettingsResponse {
     pub channel_id: String,
     /// Twitch channel login name
     pub channel_login: String,
+    /// Twitch channel display name
+    pub display_name: Option<String>,
+    /// Twitch channel avatar image URL
+    pub profile_image_url: Option<String>,
     /// Whether this broadcaster is actively using the bot
     pub is_active: bool,
     /// Whether a market API key is configured
@@ -109,6 +128,8 @@ pub struct BroadcasterSettingsResponse {
             example = json!({
                 "channel_id": "123456789",
                 "channel_login": "some_streamer",
+                "display_name": "Some_Streamer",
+                "profile_image_url": "https://static-cdn.jtvnw.net/jtv_user_pictures/avatar.png",
                 "is_active": true,
                 "market_api_key_set": true,
                 "base_price_multiplier": 150,
@@ -148,9 +169,18 @@ pub async fn get_broadcaster_settings(
     let channel_login = broadcaster.map(|b| b.channel_login).unwrap_or_default();
     let chat_messages = state.get_channel_chat_messages_merged(&auth.channel_id);
 
+    let twitch_user = state.get_twitch_user_cached(&auth.channel_id).await;
+    let (display_name, profile_image_url) = if let Some(ref u) = twitch_user {
+        (Some(u.display_name.clone()), Some(u.profile_image_url.clone()))
+    } else {
+        (None, None)
+    };
+
     Ok(Json(BroadcasterSettingsResponse {
         channel_id: setting.channel_id,
         channel_login,
+        display_name,
+        profile_image_url,
         is_active: setting.is_active,
         market_api_key_set: !setting.market_api_key.is_empty(),
         base_price_multiplier: setting.base_price_multiplier,
@@ -269,10 +299,18 @@ pub async fn update_broadcaster_settings(
     let broadcaster = state.db.get_broadcaster_by_id(&auth.channel_id).await?;
     let channel_login = broadcaster.map(|b| b.channel_login).unwrap_or_default();
     let chat_messages = state.get_channel_chat_messages_merged(&auth.channel_id);
+    let twitch_user = state.get_twitch_user_cached(&auth.channel_id).await;
+    let (display_name, profile_image_url) = if let Some(ref u) = twitch_user {
+        (Some(u.display_name.clone()), Some(u.profile_image_url.clone()))
+    } else {
+        (None, None)
+    };
 
     Ok(Json(BroadcasterSettingsResponse {
         channel_id: setting.channel_id,
         channel_login,
+        display_name,
+        profile_image_url,
         is_active: setting.is_active,
         market_api_key_set: !setting.market_api_key.is_empty(),
         base_price_multiplier: setting.base_price_multiplier,

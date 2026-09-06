@@ -9,7 +9,9 @@ use crate::api::extractor::authorized_channel::AuthorizedChannel;
 use crate::api::extractor::path::PathArg;
 use crate::api::extractor::query::QueryArg;
 use crate::api::v1::redemptions::{PaginatedRedemptionsResponse, RedemptionResponse};
-use crate::db::chat_messages::{ChatMessage, LeaderboardUserItem, UserChatSummary};
+use crate::db::chat_messages::{
+    ChatMessage, ChatDashboardData, LeaderboardUserItem, UserChatSummary,
+};
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -219,6 +221,8 @@ pub async fn get_user_chat_summary(
 pub struct UserMessagesQuery {
     /// Time window in hours. If not specified, returns messages from all time.
     pub time_window_hours: Option<i32>,
+    /// Search substring in message text (case-insensitive)
+    pub search: Option<String>,
     /// Number of records to skip (default: 0)
     pub offset: Option<i64>,
     /// Maximum number of records to return (default: 50, max: 100)
@@ -242,7 +246,7 @@ pub struct PaginatedUserMessagesResponse {
     path = "/api/v1/broadcasters/{channel_id}/chat/users/{user_id}/messages",
     tag = "Chat Analytics",
     summary = "Get user message history",
-    description = "Returns chronological message history sent by a specific user in this channel with timestamp and character counts.",
+    description = "Returns chronological message history sent by a specific user in this channel with optional text search, timestamp and character counts.",
     params(
         ("channel_id" = String, Path, description = "Twitch channel ID"),
         ("user_id" = String, Path, description = "Twitch user ID"),
@@ -277,6 +281,7 @@ pub async fn get_user_chat_messages(
         since,
         limit,
         offset,
+        query.search.as_deref(),
     ).await?;
 
     Ok(Json(PaginatedUserMessagesResponse {
@@ -285,6 +290,132 @@ pub async fn get_user_chat_messages(
         offset,
         limit,
     }))
+}
+
+#[derive(Deserialize, ToSchema, utoipa::IntoParams)]
+pub struct ChannelMessagesQuery {
+    /// Filter by chatter Twitch user ID
+    pub user_id: Option<String>,
+    /// Filter by chatter Twitch username/login
+    pub chatter_login: Option<String>,
+    /// Search substring in message text (case-insensitive)
+    pub search: Option<String>,
+    /// Time window in hours. If not specified, returns messages from all time.
+    pub time_window_hours: Option<i32>,
+    /// Number of records to skip (default: 0)
+    pub offset: Option<i64>,
+    /// Maximum number of records to return (default: 50, max: 100)
+    pub limit: Option<i64>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct PaginatedChannelMessagesResponse {
+    /// List of chat messages
+    pub items: Vec<ChatMessage>,
+    /// Total number of messages matching the filter
+    pub total: i64,
+    /// Number of records skipped
+    pub offset: i64,
+    /// Maximum number of records returned
+    pub limit: i64,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/broadcasters/{channel_id}/chat/messages",
+    tag = "Chat Analytics",
+    summary = "Search channel chat messages",
+    description = "Searches and filters chat messages sent in this channel with pagination, text substring search, user filter, and time window.",
+    params(
+        ("channel_id" = String, Path, description = "Twitch channel ID"),
+        ChannelMessagesQuery,
+    ),
+    responses(
+        (status = 200, description = "Channel chat messages matching filter", body = PaginatedChannelMessagesResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(
+        ("session_id" = [])
+    )
+)]
+pub async fn get_channel_chat_messages(
+    auth: AuthorizedChannel,
+    State(state): State<Arc<AppState>>,
+    QueryArg(query): QueryArg<ChannelMessagesQuery>,
+) -> Result<Json<PaginatedChannelMessagesResponse>, ApiError> {
+    let offset = query.offset.unwrap_or(0).max(0);
+    let limit = query.limit.unwrap_or(50).clamp(1, 100);
+
+    let since = query.time_window_hours
+        .filter(|&h| h > 0)
+        .map(|h| Utc::now() - Duration::hours(h as i64));
+
+    let (items, total) = state.db.get_channel_messages(
+        &auth.channel_id,
+        query.user_id.as_deref(),
+        query.chatter_login.as_deref(),
+        since,
+        limit,
+        offset,
+        query.search.as_deref(),
+    ).await?;
+
+    Ok(Json(PaginatedChannelMessagesResponse {
+        items,
+        total,
+        offset,
+        limit,
+    }))
+}
+
+#[derive(Deserialize, ToSchema, utoipa::IntoParams)]
+pub struct ChatDashboardQuery {
+    /// Time window in hours (e.g. 24, 168 for week, 720 for month). If not specified, returns stats for all time.
+    pub time_window_hours: Option<i32>,
+    /// Bucket interval in hours for timeline chart (e.g. 1, 6, 24). Default is 1 hour.
+    pub bucket_hours: Option<i32>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/broadcasters/{channel_id}/chat/dashboard",
+    tag = "Chat Analytics",
+    summary = "Get channel chat analytics dashboard",
+    description = "Returns high-level aggregate metrics, activity timeline chart points bucketed by hours, and top chatters for this channel within an optional time window.",
+    params(
+        ("channel_id" = String, Path, description = "Twitch channel ID"),
+        ChatDashboardQuery,
+    ),
+    responses(
+        (status = 200, description = "Chat dashboard analytics", body = ChatDashboardData),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(
+        ("session_id" = [])
+    )
+)]
+pub async fn get_channel_chat_dashboard(
+    auth: AuthorizedChannel,
+    State(state): State<Arc<AppState>>,
+    QueryArg(query): QueryArg<ChatDashboardQuery>,
+) -> Result<Json<ChatDashboardData>, ApiError> {
+    let bucket_hours = query.bucket_hours.unwrap_or(1).clamp(1, 168);
+
+    let since = query.time_window_hours
+        .filter(|&h| h > 0)
+        .map(|h| Utc::now() - Duration::hours(h as i64));
+
+    let dashboard = state.db.get_channel_chat_dashboard(
+        &auth.channel_id,
+        since,
+        bucket_hours,
+    ).await?;
+
+    Ok(Json(dashboard))
 }
 
 #[derive(Deserialize, ToSchema, utoipa::IntoParams)]
