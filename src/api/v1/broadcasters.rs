@@ -266,7 +266,7 @@ pub async fn update_broadcaster_settings(
     State(state): State<Arc<AppState>>,
     JsonArg(body): JsonArg<UpdateBroadcasterSettingsBody>,
 ) -> Result<Json<BroadcasterSettingsResponse>, ApiError> {
-    let _setting = state.db.get_or_create_broadcaster_setting(&auth.channel_id).await?;
+    let existing_setting = state.db.get_or_create_broadcaster_setting(&auth.channel_id).await?;
 
     if let Some(ref msgs) = body.chat_messages {
         state.update_chat_messages_cache(&auth.channel_id, msgs.clone());
@@ -307,24 +307,124 @@ pub async fn update_broadcaster_settings(
         }
     }
 
-    let mut changed_settings = Vec::new();
-    if patch.is_active.is_some() { changed_settings.push("is_active".to_string()); }
-    if patch.market_api_key.is_some() { changed_settings.push("market_api_key".to_string()); }
-    if patch.base_price_multiplier.is_some() { changed_settings.push("base_price_multiplier".to_string()); }
-    if patch.update_prices_period.is_some() { changed_settings.push("update_prices_period".to_string()); }
-    if patch.refund_on_buyer_fail.is_some() { changed_settings.push("refund_on_buyer_fail".to_string()); }
-    if patch.refund_if_no_money.is_some() { changed_settings.push("refund_if_no_money".to_string()); }
-    if patch.pause_reward_if_no_money.is_some() { changed_settings.push("pause_reward_if_no_money".to_string()); }
-    if patch.market_chance_to_transfer.is_some() { changed_settings.push("market_chance_to_transfer".to_string()); }
-    if patch.add_bot_badge.is_some() { changed_settings.push("add_bot_badge".to_string()); }
-    if patch.chat_messages.is_some() { changed_settings.push("chat_messages".to_string()); }
+    let mut setting_changes: Vec<crate::channel_log::FieldChange> = Vec::new();
 
-    if !changed_settings.is_empty() {
+    if let Some(is_active) = patch.is_active {
+        if is_active != existing_setting.is_active {
+            setting_changes.push(crate::channel_log::FieldChange {
+                field: "is_active".to_string(),
+                old_value: serde_json::json!(existing_setting.is_active),
+                new_value: serde_json::json!(is_active),
+                summary: format!("is_active: {} -> {}", existing_setting.is_active, is_active),
+            });
+        }
+    }
+
+    if let Some(ref api_key) = patch.market_api_key {
+        if api_key != &existing_setting.market_api_key {
+            setting_changes.push(crate::channel_log::FieldChange {
+                field: "market_api_key".to_string(),
+                old_value: serde_json::json!("***"),
+                new_value: serde_json::json!("***"),
+                summary: "market_api_key updated".to_string(),
+            });
+        }
+    }
+
+    if let Some(mult) = patch.base_price_multiplier {
+        if mult != existing_setting.base_price_multiplier {
+            setting_changes.push(crate::channel_log::FieldChange {
+                field: "base_price_multiplier".to_string(),
+                old_value: serde_json::json!(existing_setting.base_price_multiplier),
+                new_value: serde_json::json!(mult),
+                summary: format!("base_price_multiplier: {} -> {}", existing_setting.base_price_multiplier, mult),
+            });
+        }
+    }
+
+    if let Some(period) = patch.update_prices_period {
+        if period != existing_setting.update_prices_period {
+            setting_changes.push(crate::channel_log::FieldChange {
+                field: "update_prices_period".to_string(),
+                old_value: serde_json::json!(existing_setting.update_prices_period),
+                new_value: serde_json::json!(period),
+                summary: format!("update_prices_period: {}s -> {}s", existing_setting.update_prices_period, period),
+            });
+        }
+    }
+
+    if let Some(ref_buyer) = patch.refund_on_buyer_fail {
+        if ref_buyer != existing_setting.refund_on_buyer_fail {
+            setting_changes.push(crate::channel_log::FieldChange {
+                field: "refund_on_buyer_fail".to_string(),
+                old_value: serde_json::json!(existing_setting.refund_on_buyer_fail),
+                new_value: serde_json::json!(ref_buyer),
+                summary: format!("refund_on_buyer_fail: {} -> {}", existing_setting.refund_on_buyer_fail, ref_buyer),
+            });
+        }
+    }
+
+    if let Some(ref_money) = patch.refund_if_no_money {
+        if ref_money != existing_setting.refund_if_no_money {
+            setting_changes.push(crate::channel_log::FieldChange {
+                field: "refund_if_no_money".to_string(),
+                old_value: serde_json::json!(existing_setting.refund_if_no_money),
+                new_value: serde_json::json!(ref_money),
+                summary: format!("refund_if_no_money: {} -> {}", existing_setting.refund_if_no_money, ref_money),
+            });
+        }
+    }
+
+    if let Some(pause_money) = patch.pause_reward_if_no_money {
+        if pause_money != existing_setting.pause_reward_if_no_money {
+            setting_changes.push(crate::channel_log::FieldChange {
+                field: "pause_reward_if_no_money".to_string(),
+                old_value: serde_json::json!(existing_setting.pause_reward_if_no_money),
+                new_value: serde_json::json!(pause_money),
+                summary: format!("pause_reward_if_no_money: {} -> {}", existing_setting.pause_reward_if_no_money, pause_money),
+            });
+        }
+    }
+
+    if let Some(chance) = patch.market_chance_to_transfer {
+        if chance != existing_setting.market_chance_to_transfer {
+            setting_changes.push(crate::channel_log::FieldChange {
+                field: "market_chance_to_transfer".to_string(),
+                old_value: serde_json::json!(existing_setting.market_chance_to_transfer),
+                new_value: serde_json::json!(chance),
+                summary: format!("market_chance_to_transfer: {}% -> {}%", existing_setting.market_chance_to_transfer, chance),
+            });
+        }
+    }
+
+    if let Some(badge) = patch.add_bot_badge {
+        if badge != existing_setting.add_bot_badge {
+            setting_changes.push(crate::channel_log::FieldChange {
+                field: "add_bot_badge".to_string(),
+                old_value: serde_json::json!(existing_setting.add_bot_badge),
+                new_value: serde_json::json!(badge),
+                summary: format!("add_bot_badge: {} -> {}", existing_setting.add_bot_badge, badge),
+            });
+        }
+    }
+
+    if let Some(ref msgs) = patch.chat_messages {
+        if msgs != &existing_setting.parsed_chat_messages() {
+            setting_changes.push(crate::channel_log::FieldChange {
+                field: "chat_messages".to_string(),
+                old_value: serde_json::json!("(previous templates)"),
+                new_value: serde_json::json!("(updated templates)"),
+                summary: "chat_messages updated".to_string(),
+            });
+        }
+    }
+
+    if !setting_changes.is_empty() {
         state.channel_logger.log_settings_manually_updated(
             &auth.channel_id,
             &auth.user_id,
             &auth.user_login,
-            changed_settings,
+            setting_changes,
         );
     }
 

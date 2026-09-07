@@ -6,6 +6,14 @@ use crate::db::channel_logs::{ChannelLogCategory, ChannelLogLevel, NewChannelLog
 use crate::db::Db;
 use crate::steam::market;
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FieldChange {
+    pub field: String,
+    pub old_value: serde_json::Value,
+    pub new_value: serde_json::Value,
+    pub summary: String,
+}
+
 /// Service for asynchronous, non-blocking recording of channel logs to PostgreSQL.
 pub struct ChannelLogger {
     tx: mpsc::Sender<NewChannelLog>,
@@ -497,23 +505,39 @@ impl ChannelLogger {
         reward_title: &str,
         actor_user_id: &str,
         actor_user_login: &str,
-        updated_fields: Vec<String>,
+        changes: Vec<FieldChange>,
     ) {
-        let fields_str = if updated_fields.is_empty() {
-            "settings".to_string()
+        if changes.is_empty() {
+            return;
+        }
+
+        let updated_fields: Vec<String> = changes.iter().map(|c| c.field.clone()).collect();
+        let message_detail = if changes.len() <= 3 {
+            changes.iter().map(|c| c.summary.as_str()).collect::<Vec<_>>().join(", ")
         } else {
-            updated_fields.join(", ")
+            let sample = changes.iter().take(3).map(|c| c.summary.as_str()).collect::<Vec<_>>().join(", ");
+            format!("{}, and {} more fields", sample, changes.len() - 3)
         };
+
+        let mut changes_map = serde_json::Map::new();
+        for c in changes {
+            changes_map.insert(c.field, serde_json::json!({
+                "old": c.old_value,
+                "new": c.new_value,
+            }));
+        }
+
         self.log(
             broadcaster_id,
             ChannelLogLevel::Info,
             ChannelLogCategory::Reward,
             "REWARD_MANUALLY_UPDATED",
-            format!("Reward \"{}\" settings ({}) were updated by @{} (ID: {})", reward_title, fields_str, actor_user_login, actor_user_id),
+            format!("Reward \"{}\" settings ({}) were updated by @{} (ID: {})", reward_title, message_detail, actor_user_login, actor_user_id),
             Some(serde_json::json!({
                 "reward_id": reward_id,
                 "reward_title": reward_title,
                 "updated_fields": updated_fields,
+                "changes": changes_map,
                 "actor_user_id": actor_user_id,
                 "actor_user_login": actor_user_login,
             })),
@@ -550,21 +574,38 @@ impl ChannelLogger {
         broadcaster_id: &str,
         actor_user_id: &str,
         actor_user_login: &str,
-        changed_settings: Vec<String>,
+        changes: Vec<FieldChange>,
     ) {
-        let changes_str = if changed_settings.is_empty() {
-            "settings".to_string()
+        if changes.is_empty() {
+            return;
+        }
+
+        let updated_fields: Vec<String> = changes.iter().map(|c| c.field.clone()).collect();
+        let message_detail = if changes.len() <= 3 {
+            changes.iter().map(|c| c.summary.as_str()).collect::<Vec<_>>().join(", ")
         } else {
-            changed_settings.join(", ")
+            let sample = changes.iter().take(3).map(|c| c.summary.as_str()).collect::<Vec<_>>().join(", ");
+            format!("{}, and {} more fields", sample, changes.len() - 3)
         };
+
+        let mut changes_map = serde_json::Map::new();
+        for c in changes {
+            changes_map.insert(c.field, serde_json::json!({
+                "old": c.old_value,
+                "new": c.new_value,
+            }));
+        }
+
         self.log(
             broadcaster_id,
             ChannelLogLevel::Info,
             ChannelLogCategory::System,
             "SETTINGS_MANUALLY_UPDATED",
-            format!("Channel settings ({}) were updated by @{} (ID: {})", changes_str, actor_user_login, actor_user_id),
+            format!("Channel settings ({}) were updated by @{} (ID: {})", message_detail, actor_user_login, actor_user_id),
             Some(serde_json::json!({
-                "changed_settings": changed_settings,
+                "changed_settings": updated_fields.clone(),
+                "updated_fields": updated_fields,
+                "changes": changes_map,
                 "actor_user_id": actor_user_id,
                 "actor_user_login": actor_user_login,
             })),

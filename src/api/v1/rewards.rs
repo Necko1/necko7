@@ -819,6 +819,280 @@ pub struct UpdateRewardBody {
     pub purchase_limits: Option<crate::db::rewards::RewardPurchaseLimitsConfig>,
 }
 
+fn detect_reward_changes(
+    body: &UpdateRewardBody,
+    existing: &crate::db::rewards::Reward,
+) -> Vec<crate::channel_log::FieldChange> {
+    let mut changes = Vec::new();
+
+    if let Some(ref new_title) = body.twitch_title {
+        if new_title != &existing.twitch_title {
+            changes.push(crate::channel_log::FieldChange {
+                field: "title".to_string(),
+                old_value: serde_json::json!(existing.twitch_title),
+                new_value: serde_json::json!(new_title),
+                summary: format!("title: \"{}\" -> \"{}\"", existing.twitch_title, new_title),
+            });
+        }
+    }
+
+    if let Some(ref new_desc) = body.twitch_description {
+        if new_desc != &existing.twitch_description {
+            changes.push(crate::channel_log::FieldChange {
+                field: "description".to_string(),
+                old_value: serde_json::json!(existing.twitch_description),
+                new_value: serde_json::json!(new_desc),
+                summary: "description updated".to_string(),
+            });
+        }
+    }
+
+    if let Some(new_points) = body.manual_twitch_points {
+        let new_points_i32 = new_points as i32;
+        if existing.manual_twitch_points != Some(new_points_i32) {
+            changes.push(crate::channel_log::FieldChange {
+                field: "points_cost".to_string(),
+                old_value: serde_json::json!(existing.manual_twitch_points),
+                new_value: serde_json::json!(new_points),
+                summary: format!("points_cost: {:?} -> {}", existing.manual_twitch_points, new_points),
+            });
+        }
+    }
+
+    if let Some(new_pricing) = body.pricing_mode {
+        if new_pricing != existing.pricing_mode {
+            changes.push(crate::channel_log::FieldChange {
+                field: "pricing_mode".to_string(),
+                old_value: serde_json::json!(format!("{:?}", existing.pricing_mode)),
+                new_value: serde_json::json!(format!("{:?}", new_pricing)),
+                summary: format!("pricing_mode: {:?} -> {:?}", existing.pricing_mode, new_pricing),
+            });
+        }
+    }
+
+    if let Some(new_type) = body.reward_type {
+        if new_type != existing.reward_type {
+            changes.push(crate::channel_log::FieldChange {
+                field: "reward_type".to_string(),
+                old_value: serde_json::json!(format!("{:?}", existing.reward_type)),
+                new_value: serde_json::json!(format!("{:?}", new_type)),
+                summary: format!("reward_type: {:?} -> {:?}", existing.reward_type, new_type),
+            });
+        }
+    }
+
+    if let Some(new_strategy) = body.price_strategy {
+        if existing.price_strategy != Some(new_strategy) {
+            changes.push(crate::channel_log::FieldChange {
+                field: "price_strategy".to_string(),
+                old_value: serde_json::json!(existing.price_strategy.map(|s| format!("{:?}", s))),
+                new_value: serde_json::json!(format!("{:?}", new_strategy)),
+                summary: format!("price_strategy: {:?} -> {:?}", existing.price_strategy, new_strategy),
+            });
+        }
+    }
+
+    if let Some(ref new_item) = body.market_item_name {
+        if existing.market_item_name.as_deref() != Some(new_item.as_str()) {
+            changes.push(crate::channel_log::FieldChange {
+                field: "market_item_name".to_string(),
+                old_value: serde_json::json!(existing.market_item_name),
+                new_value: serde_json::json!(new_item),
+                summary: format!("market_item: {:?} -> \"{}\"", existing.market_item_name, new_item),
+            });
+        }
+    }
+
+    if let Some(new_cur_price) = body.current_market_price {
+        if new_cur_price != existing.current_market_price {
+            let curr = &existing.currency;
+            let old_major = crate::steam::market::minor_to_major(existing.current_market_price as i64, curr);
+            let new_major = crate::steam::market::minor_to_major(new_cur_price as i64, curr);
+            changes.push(crate::channel_log::FieldChange {
+                field: "current_market_price".to_string(),
+                old_value: serde_json::json!(old_major),
+                new_value: serde_json::json!(new_major),
+                summary: format!("market_price: {:.2} {} -> {:.2} {}", old_major, curr, new_major, curr),
+            });
+        }
+    }
+
+    if let Some(new_dev) = body.permissible_market_price_deviation {
+        if new_dev != existing.permissible_market_price_deviation {
+            changes.push(crate::channel_log::FieldChange {
+                field: "permissible_market_price_deviation".to_string(),
+                old_value: serde_json::json!(existing.permissible_market_price_deviation),
+                new_value: serde_json::json!(new_dev),
+                summary: format!("price_deviation: {}% -> {}%", existing.permissible_market_price_deviation, new_dev),
+            });
+        }
+    }
+
+    if let Some(new_markup) = body.twitch_price_markup_percentage {
+        if new_markup != existing.twitch_price_markup_percentage {
+            changes.push(crate::channel_log::FieldChange {
+                field: "twitch_price_markup_percentage".to_string(),
+                old_value: serde_json::json!(existing.twitch_price_markup_percentage),
+                new_value: serde_json::json!(new_markup),
+                summary: format!("markup: {}% -> {}%", existing.twitch_price_markup_percentage, new_markup),
+            });
+        }
+    }
+
+    if let Some(new_cd) = body.global_cooldown_seconds {
+        if new_cd != existing.global_cooldown_seconds {
+            changes.push(crate::channel_log::FieldChange {
+                field: "global_cooldown_seconds".to_string(),
+                old_value: serde_json::json!(existing.global_cooldown_seconds),
+                new_value: serde_json::json!(new_cd),
+                summary: format!("cooldown: {}s -> {}s", existing.global_cooldown_seconds, new_cd),
+            });
+        }
+    }
+
+    if let Some(new_rps) = body.max_redemptions_per_stream {
+        if new_rps != existing.max_redemptions_per_stream {
+            changes.push(crate::channel_log::FieldChange {
+                field: "max_redemptions_per_stream".to_string(),
+                old_value: serde_json::json!(existing.max_redemptions_per_stream),
+                new_value: serde_json::json!(new_rps),
+                summary: format!("max_per_stream: {} -> {}", existing.max_redemptions_per_stream, new_rps),
+            });
+        }
+    }
+
+    if let Some(new_rpu) = body.max_redemptions_per_user_per_stream {
+        if new_rpu != existing.max_redemptions_per_user_per_stream {
+            changes.push(crate::channel_log::FieldChange {
+                field: "max_redemptions_per_user_per_stream".to_string(),
+                old_value: serde_json::json!(existing.max_redemptions_per_user_per_stream),
+                new_value: serde_json::json!(new_rpu),
+                summary: format!("max_per_user_per_stream: {} -> {}", existing.max_redemptions_per_user_per_stream, new_rpu),
+            });
+        }
+    }
+
+    if let Some(new_autobuy) = body.market_autobuy {
+        if new_autobuy != existing.market_autobuy {
+            changes.push(crate::channel_log::FieldChange {
+                field: "market_autobuy".to_string(),
+                old_value: serde_json::json!(existing.market_autobuy),
+                new_value: serde_json::json!(new_autobuy),
+                summary: format!("market_autobuy: {} -> {}", existing.market_autobuy, new_autobuy),
+            });
+        }
+    }
+
+    if body.min_market_price.is_some() && body.min_market_price != existing.min_market_price {
+        let curr = &existing.currency;
+        let old_str = existing.min_market_price.map(|p| format!("{:.2} {}", crate::steam::market::minor_to_major(p as i64, curr), curr)).unwrap_or_else(|| "none".to_string());
+        let new_str = body.min_market_price.map(|p| format!("{:.2} {}", crate::steam::market::minor_to_major(p as i64, curr), curr)).unwrap_or_else(|| "none".to_string());
+        changes.push(crate::channel_log::FieldChange {
+            field: "min_market_price".to_string(),
+            old_value: serde_json::json!(existing.min_market_price),
+            new_value: serde_json::json!(body.min_market_price),
+            summary: format!("min_price: {} -> {}", old_str, new_str),
+        });
+    }
+
+    if body.max_market_price.is_some() && body.max_market_price != existing.max_market_price {
+        let curr = &existing.currency;
+        let old_str = existing.max_market_price.map(|p| format!("{:.2} {}", crate::steam::market::minor_to_major(p as i64, curr), curr)).unwrap_or_else(|| "none".to_string());
+        let new_str = body.max_market_price.map(|p| format!("{:.2} {}", crate::steam::market::minor_to_major(p as i64, curr), curr)).unwrap_or_else(|| "none".to_string());
+        changes.push(crate::channel_log::FieldChange {
+            field: "max_market_price".to_string(),
+            old_value: serde_json::json!(existing.max_market_price),
+            new_value: serde_json::json!(body.max_market_price),
+            summary: format!("max_price: {} -> {}", old_str, new_str),
+        });
+    }
+
+    if let Some(ref new_limits) = body.purchase_limits {
+        let old_limits = existing.purchase_limits.as_ref().map(|j| &j.0);
+        if old_limits != Some(new_limits) {
+            changes.push(crate::channel_log::FieldChange {
+                field: "purchase_limits".to_string(),
+                old_value: serde_json::json!(old_limits),
+                new_value: serde_json::json!(new_limits),
+                summary: "purchase_limits updated".to_string(),
+            });
+        }
+    }
+
+    if let Some(ref new_filter) = body.filter_config {
+        let old_filter = existing.filter_config.as_ref().map(|j| &j.0);
+        if old_filter != Some(new_filter) {
+            changes.push(crate::channel_log::FieldChange {
+                field: "filter_config".to_string(),
+                old_value: serde_json::json!(old_filter),
+                new_value: serde_json::json!(new_filter),
+                summary: "filter_config updated".to_string(),
+            });
+        }
+    }
+
+    if let Some(ref new_pool) = body.pool_items {
+        let old_pool = existing.pool_items.as_ref().map(|j| &j.0);
+        if old_pool != Some(new_pool) {
+            changes.push(crate::channel_log::FieldChange {
+                field: "pool_items".to_string(),
+                old_value: serde_json::json!(old_pool),
+                new_value: serde_json::json!(new_pool),
+                summary: format!("pool_items updated ({} items)", new_pool.len()),
+            });
+        }
+    }
+
+    if body.chat_min_messages.is_some() && body.chat_min_messages != existing.chat_min_messages {
+        changes.push(crate::channel_log::FieldChange {
+            field: "chat_min_messages".to_string(),
+            old_value: serde_json::json!(existing.chat_min_messages),
+            new_value: serde_json::json!(body.chat_min_messages),
+            summary: format!("chat_min_messages: {:?} -> {:?}", existing.chat_min_messages, body.chat_min_messages),
+        });
+    }
+
+    if body.chat_min_characters.is_some() && body.chat_min_characters != existing.chat_min_characters {
+        changes.push(crate::channel_log::FieldChange {
+            field: "chat_min_characters".to_string(),
+            old_value: serde_json::json!(existing.chat_min_characters),
+            new_value: serde_json::json!(body.chat_min_characters),
+            summary: format!("chat_min_characters: {:?} -> {:?}", existing.chat_min_characters, body.chat_min_characters),
+        });
+    }
+
+    if body.chat_time_window_hours.is_some() && body.chat_time_window_hours != existing.chat_time_window_hours {
+        changes.push(crate::channel_log::FieldChange {
+            field: "chat_time_window_hours".to_string(),
+            old_value: serde_json::json!(existing.chat_time_window_hours),
+            new_value: serde_json::json!(body.chat_time_window_hours),
+            summary: format!("chat_time_window: {:?}h -> {:?}h", existing.chat_time_window_hours, body.chat_time_window_hours),
+        });
+    }
+
+    if body.chat_logical_operator.is_some() && body.chat_logical_operator != existing.chat_logical_operator {
+        changes.push(crate::channel_log::FieldChange {
+            field: "chat_logical_operator".to_string(),
+            old_value: serde_json::json!(existing.chat_logical_operator.map(|op| format!("{:?}", op))),
+            new_value: serde_json::json!(body.chat_logical_operator.map(|op| format!("{:?}", op))),
+            summary: format!("chat_logical_operator: {:?} -> {:?}", existing.chat_logical_operator, body.chat_logical_operator),
+        });
+    }
+
+    if let Some(new_refund) = body.refund_if_chat_req_failed {
+        if new_refund != existing.refund_if_chat_req_failed {
+            changes.push(crate::channel_log::FieldChange {
+                field: "refund_if_chat_req_failed".to_string(),
+                old_value: serde_json::json!(existing.refund_if_chat_req_failed),
+                new_value: serde_json::json!(new_refund),
+                summary: format!("refund_if_chat_req_failed: {} -> {}", existing.refund_if_chat_req_failed, new_refund),
+            });
+        }
+    }
+
+    changes
+}
+
 #[utoipa::path(
     put,
     path = "/api/v1/broadcasters/{channel_id}/rewards/{reward_id}",
@@ -1043,20 +1317,10 @@ pub async fn update_reward(
         }
     };
 
-    let mut updated_fields = Vec::new();
-    if body.twitch_title.is_some() { updated_fields.push("title".to_string()); }
-    if body.twitch_description.is_some() { updated_fields.push("description".to_string()); }
-    if body.manual_twitch_points.is_some() { updated_fields.push("points_cost".to_string()); }
-    if body.pricing_mode.is_some() { updated_fields.push("pricing_mode".to_string()); }
-    if body.reward_type.is_some() { updated_fields.push("reward_type".to_string()); }
-    if body.market_item_name.is_some() { updated_fields.push("market_item".to_string()); }
-    if body.min_market_price.is_some() || body.max_market_price.is_some() { updated_fields.push("price_limits".to_string()); }
-    if body.purchase_limits.is_some() { updated_fields.push("purchase_limits".to_string()); }
-    if body.filter_config.is_some() { updated_fields.push("filter_config".to_string()); }
-    if body.pool_items.is_some() { updated_fields.push("pool_items".to_string()); }
-    if body.chat_min_messages.is_some() || body.chat_min_characters.is_some() { updated_fields.push("chat_requirements".to_string()); }
-
-    let has_price_change = body.min_market_price.is_some() || body.max_market_price.is_some() || body.current_market_price.is_some();
+    let changes = detect_reward_changes(&body, &existing);
+    let has_price_change = changes.iter().any(|c| {
+        c.field == "min_market_price" || c.field == "max_market_price" || c.field == "current_market_price"
+    });
 
     let patch = crate::db::rewards::UpdateReward {
         is_paused: target_paused,
@@ -1129,14 +1393,14 @@ pub async fn update_reward(
         }
     }
 
-    if !updated_fields.is_empty() {
+    if !changes.is_empty() {
         state.channel_logger.log_reward_manually_updated(
             &auth.channel_id,
             &reward_id.to_string(),
             &updated.twitch_title,
             &auth.user_id,
             &auth.user_login,
-            updated_fields,
+            changes,
         );
     }
 
@@ -2029,6 +2293,61 @@ mod tests {
         assert_eq!(upd_limits.global[0].window_hours, Some(72));
         assert_eq!(upd_limits.global[0].max_redemptions, 10);
         assert!(upd_limits.user.is_empty());
+    }
+
+    #[test]
+    fn test_detect_reward_changes_isolates_actual_modifications() {
+        let reward = crate::db::rewards::Reward {
+            twitch_id: uuid::Uuid::new_v4(),
+            is_paused: false,
+            pause_reason: None,
+            is_deleted: false,
+            streamer_id: "12345".to_string(),
+            reward_type: crate::db::rewards::RewardType::Filter,
+            pricing_mode: crate::db::rewards::PricingMode::Manual,
+            price_strategy: None,
+            market_item_name: None,
+            filter_config: None,
+            pool_items: None,
+            manual_twitch_points: Some(310),
+            twitch_title: "🎁 • Рандомный скин до 1р.".to_string(),
+            twitch_description: "Description".to_string(),
+            current_market_price: 100,
+            permissible_market_price_deviation: 10,
+            twitch_price_markup_percentage: 0,
+            global_cooldown_seconds: 0,
+            max_redemptions_per_stream: 0,
+            max_redemptions_per_user_per_stream: 0,
+            market_autobuy: true,
+            currency: "RUB".to_string(),
+            min_market_price: None,
+            max_market_price: None,
+            chat_min_messages: None,
+            chat_min_characters: None,
+            chat_time_window_hours: None,
+            chat_logical_operator: None,
+            refund_if_chat_req_failed: true,
+            purchase_limits: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        let json_body = r#"{
+            "twitch_title": "🎁 • Рандомный скин до 1р.",
+            "twitch_description": "Description",
+            "manual_twitch_points": 310,
+            "pricing_mode": "MANUAL",
+            "reward_type": "FILTER",
+            "max_redemptions_per_user_per_stream": 1
+        }"#;
+        let update: UpdateRewardBody = serde_json::from_str(json_body).unwrap();
+        let changes = detect_reward_changes(&update, &reward);
+
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].field, "max_redemptions_per_user_per_stream");
+        assert_eq!(changes[0].old_value, serde_json::json!(0));
+        assert_eq!(changes[0].new_value, serde_json::json!(1));
+        assert_eq!(changes[0].summary, "max_per_user_per_stream: 0 -> 1");
     }
 }
 
