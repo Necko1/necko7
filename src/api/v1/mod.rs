@@ -7,6 +7,8 @@ pub mod stats;
 pub mod users;
 pub mod chat_stats;
 pub mod channel_logs;
+pub mod public_broadcasters;
+pub mod viewer_profile;
 
 use axum::Router;
 use axum::routing::{get, post, delete, put};
@@ -29,6 +31,8 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         broadcasters::get_broadcaster_chat_messages,
         broadcasters::update_broadcaster_chat_messages,
         broadcasters::get_broadcaster_balance,
+        broadcasters::pin_broadcaster,
+        broadcasters::unpin_broadcaster,
         permissions::list_permissions,
         permissions::grant_permission,
         permissions::revoke_permission,
@@ -54,6 +58,13 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         chat_stats::get_user_redemptions,
         channel_logs::list_channel_logs,
         channel_logs::get_channel_logs_summary,
+        public_broadcasters::get_public_broadcaster_info,
+        public_broadcasters::get_public_rewards,
+        public_broadcasters::get_public_reward_by_id,
+        viewer_profile::get_viewer_channel_profile,
+        viewer_profile::get_viewer_channel_redemptions,
+        viewer_profile::get_viewer_global_profile,
+        viewer_profile::get_viewer_global_redemptions,
     ),
     components(schemas(
         crate::api::auth::LogoutResponse,
@@ -64,6 +75,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         broadcasters::ChatMessagesResponse,
         broadcasters::UpdateChatMessagesBody,
         broadcasters::MarketBalanceResponse,
+        broadcasters::PinBroadcasterResponse,
         permissions::PermissionResponse,
         permissions::GrantPermissionBody,
         rewards::RewardResponse,
@@ -97,6 +109,20 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         crate::db::chat_messages::UserChatSummary,
         crate::db::chat_messages::ChatMessage,
         crate::db::rewards::ChatLogicalOperator,
+        crate::db::broadcaster_settings::PublicRewardsConfig,
+        public_broadcasters::PublicBroadcasterInfo,
+        public_broadcasters::PublicRewardResponse,
+        public_broadcasters::PublicPoolItem,
+        public_broadcasters::PublicFilterDetails,
+        public_broadcasters::PublicChatRequirements,
+        viewer_profile::ViewerChannelProfileResponse,
+        viewer_profile::ViewerChannelChatStats,
+        viewer_profile::ViewerRewardLimitStatus,
+        viewer_profile::ViewerGlobalProfileResponse,
+        viewer_profile::ViewerGlobalChannelSummary,
+        crate::db::redemptions::ViewerChannelRedemption,
+        crate::db::redemptions::ViewerGlobalRedemption,
+        crate::db::redemptions::ViewerRedemptionStats,
         ErrorBody,
         ErrorDetail,
         crate::db::channel_permissions::ChannelRole,
@@ -127,6 +153,8 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         (name = "Stats", description = "Redemption statistics and analytics"),
         (name = "Chat Analytics", description = "Channel chat message analytics, leaderboards, and user activity"),
         (name = "Channel Logs", description = "Broadcaster channel event and error logs with solution recommendations"),
+        (name = "Public", description = "Public endpoints for unauthenticated broadcaster info and reward catalog"),
+        (name = "Viewer Profile", description = "Personal statistics, chat analytics, and redemption history for viewers"),
         (name = "Proxy", description = "Image proxy and caching to bypass CORS restrictions"),
     ),
     modifiers(&SecurityAddon),
@@ -159,6 +187,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/broadcasters/{channel_id}/settings", put(broadcasters::update_broadcaster_settings))
         .route("/broadcasters/{channel_id}/messages", get(broadcasters::get_broadcaster_chat_messages).put(broadcasters::update_broadcaster_chat_messages))
         .route("/broadcasters/{channel_id}/market/balance", get(broadcasters::get_broadcaster_balance))
+        .route("/broadcasters/{channel_id}/pin", post(broadcasters::pin_broadcaster).delete(broadcasters::unpin_broadcaster))
         .route("/broadcasters/{channel_id}/permissions", get(permissions::list_permissions).post(permissions::grant_permission))
         .route("/broadcasters/{channel_id}/permissions/{user_id}", delete(permissions::revoke_permission))
         .route("/broadcasters/{channel_id}/rewards", get(rewards::list_rewards).post(rewards::create_reward))
@@ -180,6 +209,13 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/broadcasters/{channel_id}/chat/users/{user_id}/redemptions", get(chat_stats::get_user_redemptions))
         .route("/broadcasters/{channel_id}/logs", get(channel_logs::list_channel_logs))
         .route("/broadcasters/{channel_id}/logs/summary", get(channel_logs::get_channel_logs_summary))
+        .route("/broadcasters/{channel_id}/me/profile", get(viewer_profile::get_viewer_channel_profile))
+        .route("/broadcasters/{channel_id}/me/redemptions", get(viewer_profile::get_viewer_channel_redemptions))
+        .route("/me/profile", get(viewer_profile::get_viewer_global_profile))
+        .route("/me/redemptions", get(viewer_profile::get_viewer_global_redemptions))
+        .route("/public/broadcasters/{identifier}", get(public_broadcasters::get_public_broadcaster_info))
+        .route("/public/broadcasters/{identifier}/rewards", get(public_broadcasters::get_public_rewards))
+        .route("/public/broadcasters/{identifier}/rewards/{reward_id}", get(public_broadcasters::get_public_reward_by_id))
         .route("/proxy/image", get(proxy::image_proxy))
 }
 
@@ -244,4 +280,18 @@ mod tests {
         assert!(json.contains("ChannelLogLevel"), "OpenAPI schema must contain ChannelLogLevel");
         assert!(json.contains("ChannelLogCategory"), "OpenAPI schema must contain ChannelLogCategory");
     }
+
+    #[test]
+    fn test_openapi_schema_contains_public_and_viewer_endpoints() {
+        let doc = ApiDoc::openapi();
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(json.contains("/api/v1/public/broadcasters/{identifier}"), "OpenAPI schema must contain public broadcaster route");
+        assert!(json.contains("/api/v1/public/broadcasters/{identifier}/rewards"), "OpenAPI schema must contain public rewards route");
+        assert!(json.contains("/api/v1/broadcasters/{channel_id}/me/profile"), "OpenAPI schema must contain viewer channel profile route");
+        assert!(json.contains("/api/v1/me/profile"), "OpenAPI schema must contain global viewer profile route");
+        assert!(json.contains("/api/v1/me/redemptions"), "OpenAPI schema must contain global viewer redemptions route");
+        assert!(json.contains("PublicRewardsConfig"), "OpenAPI schema must contain PublicRewardsConfig");
+        assert!(json.contains("ViewerGlobalRedemption"), "OpenAPI schema must contain ViewerGlobalRedemption");
+    }
 }
+

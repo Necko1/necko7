@@ -9,6 +9,7 @@ pub mod sessions;
 pub mod channel_permissions;
 pub mod chat_messages;
 pub mod channel_logs;
+pub mod viewer_channels;
 
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use tracing::info;

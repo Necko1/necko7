@@ -56,15 +56,26 @@ pub async fn list_broadcasters(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<BroadcasterListItem>>, ApiError> {
     let permissions = state.db.get_permissions_by_user(&user_id).await?;
+    let mut channel_map = HashMap::new();
+
+    for perm in permissions {
+        channel_map.insert(perm.channel_id, perm.role);
+    }
+
+    if let Ok(viewer_channels) = state.db.get_viewer_accessible_channels(&user_id).await {
+        for ch_id in viewer_channels {
+            channel_map.entry(ch_id).or_insert(ChannelRole::Viewer);
+        }
+    }
 
     let mut result = Vec::new();
-    for perm in permissions {
+    for (ch_id, role) in channel_map {
         result.push(BroadcasterListItem {
-            channel_id: perm.channel_id,
+            channel_id: ch_id,
             channel_login: String::new(),
             display_name: None,
             profile_image_url: None,
-            role: perm.role,
+            role,
         });
     }
 
@@ -80,6 +91,17 @@ pub async fn list_broadcasters(
             item.profile_image_url = Some(user_info.profile_image_url.clone());
         }
     }
+
+    result.sort_by(|a, b| {
+        let role_order = |r: &ChannelRole| match r {
+            ChannelRole::Owner => 0,
+            ChannelRole::Editor => 1,
+            ChannelRole::Viewer => 2,
+        };
+        role_order(&a.role)
+            .cmp(&role_order(&b.role))
+            .then_with(|| a.channel_login.to_lowercase().cmp(&b.channel_login.to_lowercase()))
+    });
 
     Ok(Json(result))
 }
@@ -112,6 +134,8 @@ pub struct BroadcasterSettingsResponse {
     pub market_chance_to_transfer: i16,
     /// Whether to add the Twitch chat bot badge to messages (true: send via App Access Token with bot badge, false: send via Bot User Access Token keeping normal user badge)
     pub add_bot_badge: bool,
+    /// Public rewards visibility settings for viewers
+    pub public_rewards_config: crate::db::broadcaster_settings::PublicRewardsConfig,
     /// Effective Twitch chat message templates for this broadcaster
     pub chat_messages: crate::messages::CategorizedChatMessages,
 }
@@ -179,6 +203,7 @@ pub async fn get_broadcaster_settings(
         (None, None)
     };
 
+    let public_rewards_config = setting.public_rewards_config();
     Ok(Json(BroadcasterSettingsResponse {
         channel_id: setting.channel_id,
         channel_login,
@@ -193,6 +218,7 @@ pub async fn get_broadcaster_settings(
         pause_reward_if_no_money: setting.pause_reward_if_no_money,
         market_chance_to_transfer: setting.market_chance_to_transfer,
         add_bot_badge: setting.add_bot_badge,
+        public_rewards_config,
         chat_messages,
     }))
 }
@@ -217,6 +243,8 @@ pub struct UpdateBroadcasterSettingsBody {
     pub market_chance_to_transfer: Option<i16>,
     /// Whether to add the Twitch chat bot badge to messages (true: send via App Access Token with bot badge, false: send via Bot User Access Token keeping normal user badge)
     pub add_bot_badge: Option<bool>,
+    /// Public rewards visibility configuration for viewers
+    pub public_rewards_config: Option<crate::db::broadcaster_settings::PublicRewardsConfig>,
     /// Twitch chat message templates to customize (category -> message_key -> template_text)
     pub chat_messages: Option<HashMap<String, HashMap<String, String>>>,
 }
@@ -283,6 +311,7 @@ pub async fn update_broadcaster_settings(
         market_chance_to_transfer: body.market_chance_to_transfer,
         chat_messages: body.chat_messages,
         add_bot_badge: body.add_bot_badge,
+        public_rewards_config: body.public_rewards_config,
     };
 
     state.db.update_broadcaster_setting(&auth.channel_id, &patch).await?;
@@ -408,6 +437,17 @@ pub async fn update_broadcaster_settings(
         }
     }
 
+    if let Some(ref prc) = patch.public_rewards_config {
+        if prc != &existing_setting.public_rewards_config() {
+            setting_changes.push(crate::channel_log::FieldChange {
+                field: "public_rewards_config".to_string(),
+                old_value: serde_json::to_value(&existing_setting.public_rewards_config()).unwrap_or_default(),
+                new_value: serde_json::to_value(prc).unwrap_or_default(),
+                summary: format!("public_rewards_config: enabled={}", prc.enabled),
+            });
+        }
+    }
+
     if let Some(ref msgs) = patch.chat_messages {
         if msgs != &existing_setting.parsed_chat_messages() {
             setting_changes.push(crate::channel_log::FieldChange {
@@ -448,6 +488,7 @@ pub async fn update_broadcaster_settings(
         (None, None)
     };
 
+    let public_rewards_config = setting.public_rewards_config();
     Ok(Json(BroadcasterSettingsResponse {
         channel_id: setting.channel_id,
         channel_login,
@@ -462,6 +503,7 @@ pub async fn update_broadcaster_settings(
         pause_reward_if_no_money: setting.pause_reward_if_no_money,
         market_chance_to_transfer: setting.market_chance_to_transfer,
         add_bot_badge: setting.add_bot_badge,
+        public_rewards_config,
         chat_messages,
     }))
 }
@@ -637,5 +679,76 @@ pub async fn get_broadcaster_balance(
         money_settlement: balance.money_settlement,
         currency: balance.currency,
         updated_at: balance.updated_at,
+    }))
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct PinBroadcasterResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/broadcasters/{channel_id}/pin",
+    tag = "Broadcasters",
+    summary = "Pin broadcaster to user list",
+    description = "Pins/saves a broadcaster to the authenticated viewer's channel list.",
+    params(
+        ("channel_id" = String, Path, description = "Twitch channel ID of the broadcaster to pin"),
+    ),
+    responses(
+        (status = 200, description = "Broadcaster pinned successfully", body = PinBroadcasterResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Broadcaster not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("session_id" = []))
+)]
+pub async fn pin_broadcaster(
+    CallerUser { user_id }: CallerUser,
+    axum::extract::Path(channel_id): axum::extract::Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<PinBroadcasterResponse>, ApiError> {
+    let broadcaster = state.db.resolve_broadcaster(&channel_id).await?
+        .ok_or_else(|| ApiError::NotFound {
+            message: format!("Broadcaster '{}' not found", channel_id),
+        })?;
+    state.db.pin_viewer_channel(&user_id, &broadcaster.channel_id).await?;
+    Ok(Json(PinBroadcasterResponse {
+        success: true,
+        message: "Channel pinned successfully".to_string(),
+    }))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/broadcasters/{channel_id}/pin",
+    tag = "Broadcasters",
+    summary = "Unpin/hide broadcaster from user list",
+    description = "Removes/hides a broadcaster from the authenticated viewer's channel list.",
+    params(
+        ("channel_id" = String, Path, description = "Twitch channel ID of the broadcaster to unpin"),
+    ),
+    responses(
+        (status = 200, description = "Broadcaster unpinned successfully", body = PinBroadcasterResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("session_id" = []))
+)]
+pub async fn unpin_broadcaster(
+    CallerUser { user_id }: CallerUser,
+    axum::extract::Path(channel_id): axum::extract::Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<PinBroadcasterResponse>, ApiError> {
+    let broadcaster = state.db.resolve_broadcaster(&channel_id).await?
+        .ok_or_else(|| ApiError::NotFound {
+            message: format!("Broadcaster '{}' not found", channel_id),
+        })?;
+    state.db.unpin_viewer_channel(&user_id, &broadcaster.channel_id).await?;
+    Ok(Json(PinBroadcasterResponse {
+        success: true,
+        message: "Channel unpinned/hidden successfully".to_string(),
     }))
 }

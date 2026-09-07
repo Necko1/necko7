@@ -34,12 +34,21 @@ impl Db {
 
     pub async fn get_broadcaster_by_login(&self, channel_login: &str) -> DbResult<Option<Broadcaster>> {
         let broadcaster = sqlx::query_as::<_, Broadcaster>(
-            "SELECT channel_id, channel_login, user_access_token, refresh_token, created_at, updated_at FROM broadcasters WHERE channel_login = $1"
+            "SELECT channel_id, channel_login, user_access_token, refresh_token, created_at, updated_at FROM broadcasters WHERE LOWER(channel_login) = LOWER($1)"
         )
         .bind(channel_login)
         .fetch_optional(&self.pool)
         .await?;
         Ok(broadcaster)
+    }
+
+    pub async fn resolve_broadcaster(&self, identifier: &str) -> DbResult<Option<Broadcaster>> {
+        if identifier.chars().all(|c| c.is_ascii_digit()) {
+            if let Some(b) = self.get_broadcaster_by_id(identifier).await? {
+                return Ok(Some(b));
+            }
+        }
+        self.get_broadcaster_by_login(identifier).await
     }
 
     pub async fn get_all_broadcasters(&self) -> DbResult<Vec<Broadcaster>> {

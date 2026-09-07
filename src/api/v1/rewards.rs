@@ -83,6 +83,8 @@ pub struct RewardResponse {
     pub refund_if_chat_req_failed: bool,
     /// Configured purchase limits (global and per-user limits by time window)
     pub purchase_limits: Option<crate::db::rewards::RewardPurchaseLimitsConfig>,
+    /// Whether this reward is publicly visible in viewer catalog
+    pub is_public: bool,
     /// Reward creation timestamp
     pub created_at: chrono::DateTime<Utc>,
     /// Reward last update timestamp
@@ -122,6 +124,7 @@ impl From<Reward> for RewardResponse {
             chat_logical_operator: r.chat_logical_operator,
             refund_if_chat_req_failed: r.refund_if_chat_req_failed,
             purchase_limits: r.purchase_limits.map(|j| j.0),
+            is_public: r.is_public,
             created_at: r.created_at,
             updated_at: r.updated_at,
         }
@@ -249,6 +252,9 @@ pub struct CreateRewardBody {
     pub refund_if_chat_req_failed: bool,
     /// Optional purchase limits configuration (global and per-user limits by time window)
     pub purchase_limits: Option<crate::db::rewards::RewardPurchaseLimitsConfig>,
+    /// Whether this reward is publicly visible in viewer catalog
+    #[serde(default = "default_true")]
+    pub is_public: bool,
 }
 
 fn default_true() -> bool {
@@ -735,6 +741,7 @@ pub async fn create_reward(
         chat_logical_operator: body.chat_logical_operator,
         refund_if_chat_req_failed: body.refund_if_chat_req_failed,
         purchase_limits: body.purchase_limits.map(sqlx::types::Json),
+        is_public: body.is_public,
     };
 
     let reward = state.db.create_reward(&new_reward).await?;
@@ -817,6 +824,8 @@ pub struct UpdateRewardBody {
     pub refund_if_chat_req_failed: Option<bool>,
     /// Optional purchase limits configuration (global and per-user limits by time window)
     pub purchase_limits: Option<crate::db::rewards::RewardPurchaseLimitsConfig>,
+    /// Whether this reward is publicly visible in viewer catalog
+    pub is_public: Option<bool>,
 }
 
 fn detect_reward_changes(
@@ -1090,6 +1099,17 @@ fn detect_reward_changes(
         }
     }
 
+    if let Some(new_public) = body.is_public {
+        if new_public != existing.is_public {
+            changes.push(crate::channel_log::FieldChange {
+                field: "is_public".to_string(),
+                old_value: serde_json::json!(existing.is_public),
+                new_value: serde_json::json!(new_public),
+                summary: format!("is_public: {} -> {}", existing.is_public, new_public),
+            });
+        }
+    }
+
     changes
 }
 
@@ -1351,6 +1371,7 @@ pub async fn update_reward(
         chat_logical_operator: body.chat_logical_operator,
         refund_if_chat_req_failed: body.refund_if_chat_req_failed,
         purchase_limits: body.purchase_limits.map(sqlx::types::Json),
+        is_public: body.is_public,
     };
 
     state.db.update_reward(reward_id, &patch).await?;
@@ -2223,6 +2244,7 @@ mod tests {
                     },
                 ],
             })),
+            is_public: true,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -2328,6 +2350,7 @@ mod tests {
             chat_logical_operator: None,
             refund_if_chat_req_failed: true,
             purchase_limits: None,
+            is_public: true,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };

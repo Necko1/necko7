@@ -4,6 +4,63 @@ use chrono::{DateTime, Utc};
 use crate::db::error::DbResult;
 use super::Db;
 
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+pub struct PublicRewardsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub show_description: bool,
+    #[serde(default = "default_true")]
+    pub show_cost_points: bool,
+    #[serde(default = "default_true")]
+    pub show_cooldown_and_limits: bool,
+    #[serde(default = "default_true")]
+    pub show_paused_rewards: bool,
+    #[serde(default = "default_true")]
+    pub show_pause_reason: bool,
+    #[serde(default = "default_true")]
+    pub show_market_price: bool,
+    #[serde(default = "default_true")]
+    pub show_price_deviation: bool,
+    #[serde(default = "default_true")]
+    pub show_pool_items: bool,
+    #[serde(default = "default_true")]
+    pub show_pool_chances: bool,
+    #[serde(default = "default_true")]
+    pub show_pool_item_prices: bool,
+    #[serde(default = "default_true")]
+    pub show_filter_details: bool,
+    #[serde(default = "default_true")]
+    pub show_chat_requirements: bool,
+    #[serde(default = "default_true")]
+    pub show_purchase_limits: bool,
+}
+
+impl Default for PublicRewardsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            show_description: true,
+            show_cost_points: true,
+            show_cooldown_and_limits: true,
+            show_paused_rewards: true,
+            show_pause_reason: true,
+            show_market_price: true,
+            show_price_deviation: true,
+            show_pool_items: true,
+            show_pool_chances: true,
+            show_pool_item_prices: true,
+            show_filter_details: true,
+            show_chat_requirements: true,
+            show_purchase_limits: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, FromRow)]
 pub struct BroadcasterSetting {
     pub channel_id: String,
@@ -17,12 +74,17 @@ pub struct BroadcasterSetting {
     pub market_chance_to_transfer: i16,
     pub chat_messages: sqlx::types::Json<serde_json::Value>,
     pub add_bot_badge: bool,
+    pub public_rewards_config: sqlx::types::Json<PublicRewardsConfig>,
     pub updated_at: DateTime<Utc>,
 }
 
 impl BroadcasterSetting {
     pub fn parsed_chat_messages(&self) -> HashMap<String, HashMap<String, String>> {
         crate::messages::parse_custom_messages(self.chat_messages.0.clone())
+    }
+
+    pub fn public_rewards_config(&self) -> PublicRewardsConfig {
+        self.public_rewards_config.0.clone()
     }
 }
 
@@ -39,6 +101,7 @@ pub struct NewBroadcasterSetting {
     pub market_chance_to_transfer: i16,
     pub chat_messages: HashMap<String, HashMap<String, String>>,
     pub add_bot_badge: bool,
+    pub public_rewards_config: PublicRewardsConfig,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -53,12 +116,13 @@ pub struct UpdateBroadcasterSetting {
     pub market_chance_to_transfer: Option<i16>,
     pub chat_messages: Option<HashMap<String, HashMap<String, String>>>,
     pub add_bot_badge: Option<bool>,
+    pub public_rewards_config: Option<PublicRewardsConfig>,
 }
 
 impl Db {
     pub async fn get_broadcaster_setting(&self, channel_id: &str) -> DbResult<Option<BroadcasterSetting>> {
         let setting = sqlx::query_as::<_, BroadcasterSetting>(
-            "SELECT channel_id, is_active, market_api_key, base_price_multiplier, update_prices_period, refund_on_buyer_fail, refund_if_no_money, pause_reward_if_no_money, market_chance_to_transfer, chat_messages, add_bot_badge, updated_at FROM broadcaster_settings WHERE channel_id = $1"
+            "SELECT channel_id, is_active, market_api_key, base_price_multiplier, update_prices_period, refund_on_buyer_fail, refund_if_no_money, pause_reward_if_no_money, market_chance_to_transfer, chat_messages, add_bot_badge, public_rewards_config, updated_at FROM broadcaster_settings WHERE channel_id = $1"
         )
         .bind(channel_id)
         .fetch_optional(&self.pool)
@@ -68,7 +132,7 @@ impl Db {
 
     pub async fn create_broadcaster_setting(&self, new: &NewBroadcasterSetting) -> DbResult<BroadcasterSetting> {
         let setting = sqlx::query_as::<_, BroadcasterSetting>(
-            "INSERT INTO broadcaster_settings (channel_id, is_active, market_api_key, base_price_multiplier, update_prices_period, refund_on_buyer_fail, refund_if_no_money, pause_reward_if_no_money, market_chance_to_transfer, chat_messages, add_bot_badge, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW()) RETURNING channel_id, is_active, market_api_key, base_price_multiplier, update_prices_period, refund_on_buyer_fail, refund_if_no_money, pause_reward_if_no_money, market_chance_to_transfer, chat_messages, add_bot_badge, updated_at"
+            "INSERT INTO broadcaster_settings (channel_id, is_active, market_api_key, base_price_multiplier, update_prices_period, refund_on_buyer_fail, refund_if_no_money, pause_reward_if_no_money, market_chance_to_transfer, chat_messages, add_bot_badge, public_rewards_config, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW()) RETURNING channel_id, is_active, market_api_key, base_price_multiplier, update_prices_period, refund_on_buyer_fail, refund_if_no_money, pause_reward_if_no_money, market_chance_to_transfer, chat_messages, add_bot_badge, public_rewards_config, updated_at"
         )
         .bind(&new.channel_id)
         .bind(new.is_active)
@@ -81,6 +145,7 @@ impl Db {
         .bind(new.market_chance_to_transfer)
         .bind(sqlx::types::Json(&new.chat_messages))
         .bind(new.add_bot_badge)
+        .bind(sqlx::types::Json(&new.public_rewards_config))
         .fetch_one(&self.pool)
         .await?;
         Ok(setting)
@@ -88,7 +153,7 @@ impl Db {
 
     pub async fn upsert_broadcaster_setting(&self, new: &NewBroadcasterSetting) -> DbResult<BroadcasterSetting> {
         let setting = sqlx::query_as::<_, BroadcasterSetting>(
-            "INSERT INTO broadcaster_settings (channel_id, is_active, market_api_key, base_price_multiplier, update_prices_period, refund_on_buyer_fail, refund_if_no_money, pause_reward_if_no_money, market_chance_to_transfer, chat_messages, add_bot_badge, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW()) ON CONFLICT (channel_id) DO UPDATE SET is_active = EXCLUDED.is_active, market_api_key = EXCLUDED.market_api_key, base_price_multiplier = EXCLUDED.base_price_multiplier, update_prices_period = EXCLUDED.update_prices_period, refund_on_buyer_fail = EXCLUDED.refund_on_buyer_fail, refund_if_no_money = EXCLUDED.refund_if_no_money, pause_reward_if_no_money = EXCLUDED.pause_reward_if_no_money, market_chance_to_transfer = EXCLUDED.market_chance_to_transfer, add_bot_badge = EXCLUDED.add_bot_badge, updated_at = NOW() RETURNING channel_id, is_active, market_api_key, base_price_multiplier, update_prices_period, refund_on_buyer_fail, refund_if_no_money, pause_reward_if_no_money, market_chance_to_transfer, chat_messages, add_bot_badge, updated_at"
+            "INSERT INTO broadcaster_settings (channel_id, is_active, market_api_key, base_price_multiplier, update_prices_period, refund_on_buyer_fail, refund_if_no_money, pause_reward_if_no_money, market_chance_to_transfer, chat_messages, add_bot_badge, public_rewards_config, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW()) ON CONFLICT (channel_id) DO UPDATE SET is_active = EXCLUDED.is_active, market_api_key = EXCLUDED.market_api_key, base_price_multiplier = EXCLUDED.base_price_multiplier, update_prices_period = EXCLUDED.update_prices_period, refund_on_buyer_fail = EXCLUDED.refund_on_buyer_fail, refund_if_no_money = EXCLUDED.refund_if_no_money, pause_reward_if_no_money = EXCLUDED.pause_reward_if_no_money, market_chance_to_transfer = EXCLUDED.market_chance_to_transfer, add_bot_badge = EXCLUDED.add_bot_badge, public_rewards_config = EXCLUDED.public_rewards_config, updated_at = NOW() RETURNING channel_id, is_active, market_api_key, base_price_multiplier, update_prices_period, refund_on_buyer_fail, refund_if_no_money, pause_reward_if_no_money, market_chance_to_transfer, chat_messages, add_bot_badge, public_rewards_config, updated_at"
         )
         .bind(&new.channel_id)
         .bind(new.is_active)
@@ -101,6 +166,7 @@ impl Db {
         .bind(new.market_chance_to_transfer)
         .bind(sqlx::types::Json(&new.chat_messages))
         .bind(new.add_bot_badge)
+        .bind(sqlx::types::Json(&new.public_rewards_config))
         .fetch_one(&self.pool)
         .await?;
         Ok(setting)
@@ -108,8 +174,9 @@ impl Db {
 
     pub async fn update_broadcaster_setting(&self, channel_id: &str, patch: &UpdateBroadcasterSetting) -> DbResult<()> {
         let json_messages = patch.chat_messages.as_ref().map(sqlx::types::Json);
+        let json_public_rewards = patch.public_rewards_config.as_ref().map(sqlx::types::Json);
         sqlx::query(
-            "UPDATE broadcaster_settings SET is_active = COALESCE($2, is_active), market_api_key = COALESCE($3, market_api_key), base_price_multiplier = COALESCE($4, base_price_multiplier), update_prices_period = COALESCE($5, update_prices_period), refund_on_buyer_fail = COALESCE($6, refund_on_buyer_fail), refund_if_no_money = COALESCE($7, refund_if_no_money), pause_reward_if_no_money = COALESCE($8, pause_reward_if_no_money), market_chance_to_transfer = COALESCE($9, market_chance_to_transfer), chat_messages = COALESCE($10, chat_messages), add_bot_badge = COALESCE($11, add_bot_badge), updated_at = NOW() WHERE channel_id = $1"
+            "UPDATE broadcaster_settings SET is_active = COALESCE($2, is_active), market_api_key = COALESCE($3, market_api_key), base_price_multiplier = COALESCE($4, base_price_multiplier), update_prices_period = COALESCE($5, update_prices_period), refund_on_buyer_fail = COALESCE($6, refund_on_buyer_fail), refund_if_no_money = COALESCE($7, refund_if_no_money), pause_reward_if_no_money = COALESCE($8, pause_reward_if_no_money), market_chance_to_transfer = COALESCE($9, market_chance_to_transfer), chat_messages = COALESCE($10, chat_messages), add_bot_badge = COALESCE($11, add_bot_badge), public_rewards_config = COALESCE($12, public_rewards_config), updated_at = NOW() WHERE channel_id = $1"
         )
         .bind(channel_id)
         .bind(patch.is_active)
@@ -122,6 +189,7 @@ impl Db {
         .bind(patch.market_chance_to_transfer)
         .bind(json_messages)
         .bind(patch.add_bot_badge)
+        .bind(json_public_rewards)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -152,6 +220,7 @@ impl Db {
             market_chance_to_transfer: 0,
             chat_messages: HashMap::new(),
             add_bot_badge: false,
+            public_rewards_config: PublicRewardsConfig::default(),
         };
 
         self.create_broadcaster_setting(&new).await

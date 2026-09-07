@@ -93,6 +93,54 @@ impl Db {
         Ok(row)
     }
 
+    /// Calculate a user's rank on the chat leaderboard for a channel (1-based rank).
+    pub async fn get_user_chat_leaderboard_rank(
+        &self,
+        broadcaster_id: &str,
+        user_id: &str,
+    ) -> DbResult<Option<i64>> {
+        let rank = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT 1 + COUNT(DISTINCT chatter_user_id)::BIGINT
+            FROM (
+                SELECT chatter_user_id
+                FROM chat_messages
+                WHERE broadcaster_id = $1
+                GROUP BY chatter_user_id
+                HAVING COUNT(*) > (
+                    SELECT COUNT(*)
+                    FROM chat_messages
+                    WHERE broadcaster_id = $1 AND chatter_user_id = $2
+                )
+            ) sub
+            "#
+        )
+        .bind(broadcaster_id)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(rank)
+    }
+
+    /// Retrieve global chat message and character totals for a user across all channels.
+    pub async fn get_user_global_chat_stats(&self, user_id: &str) -> DbResult<(i64, i64)> {
+        let stats = sqlx::query_as::<_, (i64, i64)>(
+            r#"
+            SELECT
+                COUNT(*)::BIGINT AS msg_count,
+                COALESCE(SUM(char_count), 0)::BIGINT AS char_count
+            FROM chat_messages
+            WHERE chatter_user_id = $1
+            "#
+        )
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(stats)
+    }
+
     /// Get leaderboard of top chatters in a channel with sorting, pagination, and optional login search.
     pub async fn get_leaderboard(
         &self,

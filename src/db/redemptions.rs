@@ -364,6 +364,128 @@ impl Db {
 
         Ok(count)
     }
+
+    pub async fn get_viewer_redemptions_on_channel(
+        &self,
+        channel_id: &str,
+        user_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> DbResult<Vec<ViewerChannelRedemption>> {
+        let redemptions = sqlx::query_as::<_, ViewerChannelRedemption>(
+            "SELECT
+                r.twitch_redemption_id,
+                r.twitch_reward_id,
+                rew.twitch_title AS reward_title,
+                r.twitch_points_cost,
+                r.market_paid_price,
+                r.currency,
+                r.status,
+                r.fail_cause,
+                r.fail_description,
+                r.market_item_name,
+                r.created_at,
+                r.updated_at
+             FROM redemptions r
+             JOIN rewards rew ON rew.twitch_id = r.twitch_reward_id
+             WHERE rew.streamer_id = $1 AND r.user_id = $2
+             ORDER BY r.created_at DESC
+             LIMIT $3 OFFSET $4"
+        )
+        .bind(channel_id)
+        .bind(user_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(redemptions)
+    }
+
+    pub async fn get_viewer_redemptions_global(
+        &self,
+        user_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> DbResult<Vec<ViewerGlobalRedemption>> {
+        let redemptions = sqlx::query_as::<_, ViewerGlobalRedemption>(
+            "SELECT
+                r.twitch_redemption_id,
+                r.twitch_reward_id,
+                rew.streamer_id AS channel_id,
+                b.channel_login AS channel_login,
+                rew.twitch_title AS reward_title,
+                r.twitch_points_cost,
+                r.market_paid_price,
+                r.currency,
+                r.status,
+                r.fail_cause,
+                r.fail_description,
+                r.market_item_name,
+                r.created_at,
+                r.updated_at
+             FROM redemptions r
+             JOIN rewards rew ON rew.twitch_id = r.twitch_reward_id
+             JOIN broadcasters b ON b.channel_id = rew.streamer_id
+             WHERE r.user_id = $1
+             ORDER BY r.created_at DESC
+             LIMIT $2 OFFSET $3"
+        )
+        .bind(user_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(redemptions)
+    }
+
+    pub async fn get_viewer_redemption_stats_on_channel(
+        &self,
+        channel_id: &str,
+        user_id: &str,
+    ) -> DbResult<ViewerRedemptionStats> {
+        let stats = sqlx::query_as::<_, ViewerRedemptionStats>(
+            "SELECT
+                COUNT(*)::BIGINT AS total_redemptions,
+                COUNT(CASE WHEN r.status = 'COMPLETED' THEN 1 END)::BIGINT AS completed,
+                COUNT(CASE WHEN r.status IN ('FAILED_REFUND', 'FAILED_PENALTY') THEN 1 END)::BIGINT AS failed,
+                COUNT(CASE WHEN r.status IN ('PENDING', 'ORDER_CREATED') THEN 1 END)::BIGINT AS pending,
+                COALESCE(SUM(r.twitch_points_cost), 0)::BIGINT AS total_points_spent,
+                COALESCE(SUM(CASE WHEN r.status = 'COMPLETED' THEN r.market_paid_price ELSE 0 END), 0)::BIGINT AS total_market_value
+             FROM redemptions r
+             JOIN rewards rew ON rew.twitch_id = r.twitch_reward_id
+             WHERE rew.streamer_id = $1 AND r.user_id = $2"
+        )
+        .bind(channel_id)
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(stats)
+    }
+
+    pub async fn get_viewer_redemption_stats_global(
+        &self,
+        user_id: &str,
+    ) -> DbResult<ViewerRedemptionStats> {
+        let stats = sqlx::query_as::<_, ViewerRedemptionStats>(
+            "SELECT
+                COUNT(*)::BIGINT AS total_redemptions,
+                COUNT(CASE WHEN r.status = 'COMPLETED' THEN 1 END)::BIGINT AS completed,
+                COUNT(CASE WHEN r.status IN ('FAILED_REFUND', 'FAILED_PENALTY') THEN 1 END)::BIGINT AS failed,
+                COUNT(CASE WHEN r.status IN ('PENDING', 'ORDER_CREATED') THEN 1 END)::BIGINT AS pending,
+                COALESCE(SUM(r.twitch_points_cost), 0)::BIGINT AS total_points_spent,
+                COALESCE(SUM(CASE WHEN r.status = 'COMPLETED' THEN r.market_paid_price ELSE 0 END), 0)::BIGINT AS total_market_value
+             FROM redemptions r
+             WHERE r.user_id = $1"
+        )
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(stats)
+    }
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -373,5 +495,49 @@ pub struct RedemptionStats {
     pub failed: i64,
     pub total_spent: i64,
     pub total_points_earned: i64,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, utoipa::ToSchema)]
+pub struct ViewerChannelRedemption {
+    pub twitch_redemption_id: Uuid,
+    pub twitch_reward_id: Uuid,
+    pub reward_title: String,
+    pub twitch_points_cost: i64,
+    pub market_paid_price: Option<i64>,
+    pub currency: String,
+    pub status: RedemptionStatus,
+    pub fail_cause: Option<String>,
+    pub fail_description: Option<String>,
+    pub market_item_name: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, utoipa::ToSchema)]
+pub struct ViewerGlobalRedemption {
+    pub twitch_redemption_id: Uuid,
+    pub twitch_reward_id: Uuid,
+    pub channel_id: String,
+    pub channel_login: String,
+    pub reward_title: String,
+    pub twitch_points_cost: i64,
+    pub market_paid_price: Option<i64>,
+    pub currency: String,
+    pub status: RedemptionStatus,
+    pub fail_cause: Option<String>,
+    pub fail_description: Option<String>,
+    pub market_item_name: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, utoipa::ToSchema, Default)]
+pub struct ViewerRedemptionStats {
+    pub total_redemptions: i64,
+    pub completed: i64,
+    pub failed: i64,
+    pub pending: i64,
+    pub total_points_spent: i64,
+    pub total_market_value: i64,
 }
 
