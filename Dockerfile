@@ -40,8 +40,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /app/target/release/necko7 /usr/local/bin/necko7
 
-# Create non-root user for security
-RUN groupadd -g 1000 necko && useradd -u 1000 -g necko -s /bin/false necko
+# Create non-root user and log directory with proper permissions
+RUN groupadd -g 1000 necko && \
+    useradd -u 1000 -g necko -d /app -s /bin/false necko && \
+    mkdir -p /app/logs && \
+    chown -R necko:necko /app
 USER necko
 
 EXPOSE 8080

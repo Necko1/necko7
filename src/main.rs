@@ -72,8 +72,25 @@ async fn main() -> AppResult<()> {
     let log_dir = env::var("LOG_DIR").unwrap_or_else(|_| "logs".to_string());
     std::fs::create_dir_all(&log_dir).ok();
 
-    let file_appender = tracing_appender::rolling::daily(&log_dir, "necko7.log");
-    let (non_blocking_file, _file_guard) = tracing_appender::non_blocking(file_appender);
+    let (file_layer, _file_guard) = match tracing_appender::rolling::RollingFileAppender::builder()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix("necko7.log")
+        .build(&log_dir)
+    {
+        Ok(file_appender) => {
+            let (non_blocking_file, guard) = tracing_appender::non_blocking(file_appender);
+            let layer = tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_line_number(true)
+                .with_ansi(false)
+                .with_writer(non_blocking_file);
+            (Some(layer), Some(guard))
+        }
+        Err(e) => {
+            eprintln!("WARNING: Failed to initialize file appender in '{log_dir}': {e}. Proceeding with stdout logging only.");
+            (None, None)
+        }
+    };
 
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("necko7=debug,info"));
@@ -85,13 +102,7 @@ async fn main() -> AppResult<()> {
                 .with_target(true)
                 .with_line_number(true),
         )
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_target(true)
-                .with_line_number(true)
-                .with_ansi(false)
-                .with_writer(non_blocking_file),
-        )
+        .with(file_layer)
         .init();
 
     info!("Starting necko7 bot service...");

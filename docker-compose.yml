@@ -23,6 +23,8 @@ services:
     env_file: .env
     environment:
       - DATABASE_URL=postgres://${DATABASE_USER}:${DATABASE_PASSWORD}@db:5432/${DATABASE_DB}
+    volumes:
+      - ./logs:/app/logs
     ports:
       - "8080:8080"
     depends_on:
