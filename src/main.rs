@@ -6,6 +6,7 @@ pub mod steam;
 pub mod processor;
 pub mod datetime;
 pub mod messages;
+pub mod channel_log;
 
 use std::env;
 use std::time::Duration;
@@ -15,6 +16,8 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use state::AppState;
 use crate::db::Db;
@@ -66,13 +69,29 @@ async fn shutdown_signal(shutdown_token: CancellationToken) {
 async fn main() -> AppResult<()> {
     dotenv().ok();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("necko7=debug,info")),
+    let log_dir = env::var("LOG_DIR").unwrap_or_else(|_| "logs".to_string());
+    std::fs::create_dir_all(&log_dir).ok();
+
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "necko7.log");
+    let (non_blocking_file, _file_guard) = tracing_appender::non_blocking(file_appender);
+
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("necko7=debug,info"));
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_line_number(true),
         )
-        .with_target(true)
-        .with_line_number(true)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_line_number(true)
+                .with_ansi(false)
+                .with_writer(non_blocking_file),
+        )
         .init();
 
     info!("Starting necko7 bot service...");

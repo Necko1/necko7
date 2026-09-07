@@ -48,6 +48,15 @@ impl BalanceUpdater {
             if setting.is_active && !setting.market_api_key.trim().is_empty() {
                 if let Err(e) = self.state.refresh_broadcaster_balance(&self.broadcaster_id).await {
                     warn!(error = %e, broadcaster_id = %self.broadcaster_id, "Periodic balance refresh failed");
+                    self.state.channel_logger.log(
+                        &self.broadcaster_id,
+                        crate::db::channel_logs::ChannelLogLevel::Warn,
+                        crate::db::channel_logs::ChannelLogCategory::Market,
+                        "BALANCE_REFRESH_FAILED",
+                        format!("Failed to refresh CSGO Market balance: {}", e),
+                        Some(serde_json::json!({ "error": e.to_string() })),
+                        Some("Check CSGO Market availability and verify that Market API Key is valid in channel settings.".to_string()),
+                    );
                 }
             }
         }

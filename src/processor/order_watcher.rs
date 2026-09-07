@@ -198,6 +198,13 @@ impl OrderWatcher {
             "Steam trade accepted by user! Transitioning to Claimed stage"
         );
 
+        self.state.channel_logger.log_redemption_completed(
+            &self.broadcaster_id,
+            &self.redemption.redemption_id.to_string(),
+            Some(&current_trade.market_hash_name),
+            &self.redemption.user_login,
+        );
+
         let msg = self.state.render_chat_message(
             &self.broadcaster_id,
             MSG_TRADE_ACCEPTED,
@@ -281,6 +288,28 @@ impl OrderWatcher {
             "Trade was not claimed / timed out on market"
         );
 
+        let hint = if buyer_fault {
+            "Viewer did not accept the trade offer on Steam in time or declined it. Points were refunded or penalized according to channel settings. You can retry the redemption manually if needed."
+        } else {
+            "CSGO Market seller did not deliver the item in time. Order was cancelled by market, points were refunded to the viewer and funds returned to market balance."
+        };
+
+        self.state.channel_logger.log(
+            &self.broadcaster_id,
+            crate::db::channel_logs::ChannelLogLevel::Warn,
+            crate::db::channel_logs::ChannelLogCategory::Redemption,
+            "TRADE_NOT_CLAIMED",
+            format!("Trade offer for item \"{}\" to @{} was not completed (fault: {})", current_trade.market_hash_name, self.redemption.user_login, if buyer_fault { "viewer" } else { "market seller" }),
+            Some(serde_json::json!({
+                "redemption_id": self.redemption.redemption_id,
+                "user_login": self.redemption.user_login,
+                "item_name": current_trade.market_hash_name,
+                "buyer_fault": buyer_fault,
+                "refunded": should_refund,
+            })),
+            Some(hint.to_string()),
+        );
+
         let msg_id = if refund_on_buyer_fail && buyer_fault {
             MSG_TRADE_FAILED_BUYER_REFUND
         } else if !refund_on_buyer_fail && buyer_fault {
@@ -340,6 +369,19 @@ impl OrderWatcher {
 
     async fn process_timed_out(&mut self) {
         self.stage = OrderStage::Exit;
+
+        self.state.channel_logger.log(
+            &self.broadcaster_id,
+            crate::db::channel_logs::ChannelLogLevel::Warn,
+            crate::db::channel_logs::ChannelLogCategory::Redemption,
+            "TRADE_WATCHER_TIMEOUT",
+            format!("Trade offer delivery timed out (30 minutes) for viewer @{}", self.redemption.user_login),
+            Some(serde_json::json!({
+                "redemption_id": self.redemption.redemption_id,
+                "user_login": self.redemption.user_login,
+            })),
+            Some("Check trade transfer status in Steam trade history or CSGO Market orders.".to_string()),
+        );
 
         let msg = self.state.render_chat_message(
             &self.broadcaster_id,

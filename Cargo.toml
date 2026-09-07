@@ -1,6 +1,6 @@
 [package]
 name = "necko7"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2024"
 
 [dependencies]
@@ -21,6 +21,7 @@ hex = "0.4"
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 
 reqwest = { version = "0.13", features = ["json", "form", "query"] }
 url = "2.5"

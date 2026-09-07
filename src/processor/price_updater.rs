@@ -363,11 +363,22 @@ async fn apply_twitch_and_db_cost_update(
 
     let update_patch = crate::db::rewards::UpdateReward {
         current_market_price: Some(new_market_price),
-        currency,
+        currency: currency.clone(),
         pool_items,
         ..Default::default()
     };
     state.db.update_reward(reward.twitch_id, &update_patch).await?;
+
+    let curr_str = currency.as_deref().unwrap_or(&reward.currency);
+    state.channel_logger.log_reward_price_updated(
+        &reward.streamer_id,
+        &reward.twitch_id.to_string(),
+        &reward.twitch_title,
+        reward.current_market_price as i64,
+        new_twitch_points_cost as i64,
+        new_market_price as i64,
+        curr_str,
+    );
 
     check_and_sync_price_limits(state, reward, new_market_price).await?;
     check_and_sync_purchase_limits(state, reward).await?;
@@ -429,6 +440,18 @@ pub async fn check_and_sync_price_limits(
                 true,
                 Some(crate::db::rewards::PauseReason::PriceLimit),
             ).await?;
+
+            state.channel_logger.log_reward_paused(
+                &reward.streamer_id,
+                &reward.twitch_id.to_string(),
+                &reward.twitch_title,
+                "PRICE_LIMIT",
+                Some(serde_json::json!({
+                    "current_price": current_price,
+                    "min_market_price": reward.min_market_price,
+                    "max_market_price": reward.max_market_price,
+                })),
+            );
         }
     } else {
         // Price is within bounds! If it was paused due to PriceLimit, auto-unpause it!
@@ -498,6 +521,14 @@ pub async fn check_and_sync_price_limits(
                     true,
                     Some(crate::db::rewards::PauseReason::NoMoney),
                 ).await?;
+
+                state.channel_logger.log_reward_paused(
+                    &reward.streamer_id,
+                    &reward.twitch_id.to_string(),
+                    &reward.twitch_title,
+                    "NO_MONEY",
+                    None,
+                );
             }
         }
     }

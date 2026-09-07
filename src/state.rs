@@ -52,6 +52,7 @@ pub struct AppState {
     pub twitch_user_cache: RwLock<HashMap<String, (std::time::Instant, Arc<crate::helix::api::users::UserInfo>)>>,
 
     pub db: Db,
+    pub channel_logger: Arc<crate::channel_log::ChannelLogger>,
 
     pub app_initialized: AtomicBool,
 
@@ -79,6 +80,9 @@ impl AppState {
             chat_messages_map.insert(channel_id, messages);
         }
 
+        let shutdown_token = CancellationToken::new();
+        let channel_logger = crate::channel_log::ChannelLogger::new(db.clone(), shutdown_token.clone());
+
         Ok(Arc::new(Self {
             helix_client: HelixClient::new(client_id.clone(), client_secret.clone()),
             market_client: MarketClient::new(),
@@ -97,8 +101,9 @@ impl AppState {
             active_broadcaster_tasks: Mutex::new(HashMap::new()),
             twitch_user_cache: RwLock::new(HashMap::new()),
             db,
+            channel_logger,
             app_initialized: AtomicBool::new(app_initialized),
-            shutdown_token: CancellationToken::new(),
+            shutdown_token,
             tasks: TaskTracker::new(),
         }))
     }
@@ -368,7 +373,7 @@ impl AppState {
         let message = message.to_string();
         let reply_id = reply_parent_message_id.map(|s| s.to_string());
 
-        if add_bot_badge {
+        let res = if add_bot_badge {
             self.with_app_token(|token| {
                 let broadcaster_id = broadcaster_id.clone();
                 let bot_channel_id = bot_channel_id.clone();
@@ -402,7 +407,32 @@ impl AppState {
                     ).await
                 }
             }).await
+        };
+
+        match &res {
+            Ok(sent_msg) => {
+                if !sent_msg.is_sent {
+                    let code = sent_msg.drop_reason.as_ref().map(|d| d.code.as_str());
+                    let msg = sent_msg.drop_reason.as_ref().map(|d| d.message.as_str());
+                    self.channel_logger.log_chat_send_error(
+                        &broadcaster_id,
+                        "Chat message dropped by Twitch",
+                        code,
+                        msg,
+                    );
+                }
+            }
+            Err(e) => {
+                self.channel_logger.log_chat_send_error(
+                    &broadcaster_id,
+                    &e.to_string(),
+                    None,
+                    None,
+                );
+            }
         }
+
+        res
     }
 
     pub async fn get_cached_or_fetch_balance(&self, channel_id: &str) -> AppResult<CachedMarketBalance> {

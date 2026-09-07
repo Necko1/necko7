@@ -6,6 +6,7 @@ pub mod redemptions;
 pub mod stats;
 pub mod users;
 pub mod chat_stats;
+pub mod channel_logs;
 
 use axum::Router;
 use axum::routing::{get, post, delete, put};
@@ -51,6 +52,8 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         chat_stats::get_user_chat_summary,
         chat_stats::get_user_chat_messages,
         chat_stats::get_user_redemptions,
+        channel_logs::list_channel_logs,
+        channel_logs::get_channel_logs_summary,
     ),
     components(schemas(
         crate::api::auth::LogoutResponse,
@@ -107,6 +110,12 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         crate::db::rewards::RewardPurchaseLimitsConfig,
         crate::db::rewards::PurchaseLimitRule,
         crate::steam::market::prices::MarketPriceItem,
+        channel_logs::ChannelLogResponse,
+        channel_logs::PaginatedChannelLogsResponse,
+        channel_logs::ChannelLogsSummaryResponse,
+        crate::db::channel_logs::ListChannelLogsQuery,
+        crate::db::channel_logs::ChannelLogLevel,
+        crate::db::channel_logs::ChannelLogCategory,
     )),
     tags(
         (name = "Auth", description = "Twitch OAuth 2.0 authentication flows and session management"),
@@ -117,6 +126,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         (name = "Redemptions", description = "Redemption tracking and actions (retry, refund, penalty)"),
         (name = "Stats", description = "Redemption statistics and analytics"),
         (name = "Chat Analytics", description = "Channel chat message analytics, leaderboards, and user activity"),
+        (name = "Channel Logs", description = "Broadcaster channel event and error logs with solution recommendations"),
         (name = "Proxy", description = "Image proxy and caching to bypass CORS restrictions"),
     ),
     modifiers(&SecurityAddon),
@@ -168,6 +178,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/broadcasters/{channel_id}/chat/users/{user_id}/summary", get(chat_stats::get_user_chat_summary))
         .route("/broadcasters/{channel_id}/chat/users/{user_id}/messages", get(chat_stats::get_user_chat_messages))
         .route("/broadcasters/{channel_id}/chat/users/{user_id}/redemptions", get(chat_stats::get_user_redemptions))
+        .route("/broadcasters/{channel_id}/logs", get(channel_logs::list_channel_logs))
+        .route("/broadcasters/{channel_id}/logs/summary", get(channel_logs::get_channel_logs_summary))
         .route("/proxy/image", get(proxy::image_proxy))
 }
 
@@ -218,5 +230,18 @@ mod tests {
         assert!(json.contains("/api/v1/broadcasters/{channel_id}/chat/messages"), "OpenAPI schema must contain messages route");
         assert!(json.contains("ChatDashboardData"), "OpenAPI schema must contain ChatDashboardData");
         assert!(json.contains("PaginatedChannelMessagesResponse"), "OpenAPI schema must contain PaginatedChannelMessagesResponse");
+    }
+
+    #[test]
+    fn test_openapi_schema_contains_channel_logs() {
+        let doc = ApiDoc::openapi();
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(json.contains("/api/v1/broadcasters/{channel_id}/logs"), "OpenAPI schema must contain logs route");
+        assert!(json.contains("/api/v1/broadcasters/{channel_id}/logs/summary"), "OpenAPI schema must contain logs summary route");
+        assert!(json.contains("ChannelLogResponse"), "OpenAPI schema must contain ChannelLogResponse");
+        assert!(json.contains("PaginatedChannelLogsResponse"), "OpenAPI schema must contain PaginatedChannelLogsResponse");
+        assert!(json.contains("ChannelLogsSummaryResponse"), "OpenAPI schema must contain ChannelLogsSummaryResponse");
+        assert!(json.contains("ChannelLogLevel"), "OpenAPI schema must contain ChannelLogLevel");
+        assert!(json.contains("ChannelLogCategory"), "OpenAPI schema must contain ChannelLogCategory");
     }
 }

@@ -79,6 +79,63 @@ pub async fn start_background_tasks(state: Arc<AppState>) {
         }
     });
 
+    let state_logs = state.clone();
+    let logs_token = state.shutdown_token.clone();
+    state.spawn_task(async move {
+        // Run cleanup periodically every 6 hours
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(6 * 3600));
+        tokio::select! {
+            _ = logs_token.cancelled() => return,
+            _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {}
+        }
+
+        loop {
+            // 1. Clean up database logs: 7 days for DEBUG/INFO, 30 days for WARN/ERROR
+            match state_logs.db.cleanup_old_channel_logs(7, 30).await {
+                Ok(count) => {
+                    if count > 0 {
+                        info!(deleted_rows = count, "Cleaned up expired channel logs from database");
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to clean up old channel logs from DB");
+                }
+            }
+
+            // 2. Clean up server file logs older than 14 days in logs/ directory
+            let log_dir = std::env::var("LOG_DIR").unwrap_or_else(|_| "logs".to_string());
+            if let Ok(entries) = std::fs::read_dir(&log_dir) {
+                let retention_limit = std::time::SystemTime::now()
+                    .checked_sub(std::time::Duration::from_secs(14 * 86400))
+                    .unwrap_or_else(std::time::SystemTime::now);
+                for entry in entries.flatten() {
+                    if let Ok(metadata) = entry.metadata() {
+                        if metadata.is_file() {
+                            if let Ok(modified) = metadata.modified() {
+                                if modified < retention_limit {
+                                    let path = entry.path();
+                                    if let Err(e) = std::fs::remove_file(&path) {
+                                        warn!(error = %e, path = %path.display(), "Failed to remove old log file");
+                                    } else {
+                                        info!(path = %path.display(), "Removed old log file past retention period");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            tokio::select! {
+                _ = logs_token.cancelled() => {
+                    debug!("Logs cleanup task received stop signal");
+                    break;
+                }
+                _ = interval.tick() => {}
+            }
+        }
+    });
+
     match state.db.get_all_broadcasters().await {
         Ok(broadcasters) => {
             for b in broadcasters {

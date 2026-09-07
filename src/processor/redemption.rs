@@ -133,6 +133,12 @@ pub async fn process_redemption(
                 user_input = %event.user_input,
                 "Failed to parse Steam trade link from redemption user input"
             );
+            state.channel_logger.log_trade_link_invalid(
+                &broadcaster_user_id,
+                &redemption_id.to_string(),
+                &event.user_login,
+                &event.user_input,
+            );
             update_redemption_status_failed(
                 state.clone(),
                 &broadcaster_user_id,
@@ -207,15 +213,6 @@ pub async fn process_redemption(
             );
 
             let refund = reward_data.refund_if_chat_req_failed;
-            update_redemption_status_failed(
-                state.clone(),
-                &broadcaster_user_id,
-                reward_id,
-                redemption_id,
-                refund,
-                Some("User did not meet chat activity requirements")
-            ).await;
-
             let (hours_str, period_str) = match reward_data.chat_time_window_hours {
                 Some(h) if h > 0 => (h.to_string(), format!("{}h", h)),
                 _ => ("all-time".to_string(), "all-time".to_string()),
@@ -224,6 +221,23 @@ pub async fn process_redemption(
             let user_chars_str = user_chars.to_string();
             let min_msgs_str = reward_data.chat_min_messages.map(|m| m.to_string()).unwrap_or_default();
             let min_chars_str = reward_data.chat_min_characters.map(|c| c.to_string()).unwrap_or_default();
+            let reason_summary = format!("messages: {}/{}, characters: {}/{}", user_msgs, min_msgs_str, user_chars, min_chars_str);
+            state.channel_logger.log_chat_requirement_failed(
+                &broadcaster_user_id,
+                &redemption_id.to_string(),
+                &event.user_login,
+                &reason_summary,
+                refund,
+            );
+
+            update_redemption_status_failed(
+                state.clone(),
+                &broadcaster_user_id,
+                reward_id,
+                redemption_id,
+                refund,
+                Some("User did not meet chat activity requirements")
+            ).await;
             let op_str = match operator {
                 crate::db::rewards::ChatLogicalOperator::And => "and",
                 crate::db::rewards::ChatLogicalOperator::Or => "or",
@@ -314,6 +328,13 @@ pub async fn process_redemption(
                                 PauseReason::LimitReached,
                             ).await;
 
+                            state.channel_logger.log_purchase_limit_reached(
+                                &broadcaster_user_id,
+                                &redemption_id.to_string(),
+                                &event.user_login,
+                                "global reward limit",
+                            );
+
                             update_redemption_status_failed(
                                 state.clone(),
                                 &broadcaster_user_id,
@@ -362,6 +383,13 @@ pub async fn process_redemption(
                                 max_redemptions = rule.max_redemptions,
                                 current_count = count,
                                 "User purchase limit reached for reward; refunding"
+                            );
+
+                            state.channel_logger.log_purchase_limit_reached(
+                                &broadcaster_user_id,
+                                &redemption_id.to_string(),
+                                &event.user_login,
+                                "user redemption limit",
                             );
 
                             update_redemption_status_failed(
@@ -888,6 +916,14 @@ async fn buy_item_once(
 
             let paid_price = res.price.unwrap_or(max_price as i64);
 
+            state.channel_logger.log_redemption_order_created(
+                broadcaster_user_id,
+                &redemption_id.to_string(),
+                item_name,
+                paid_price,
+                user_login,
+            );
+
             if let Err(e) = state.db.set_redemption_order_created(
                 redemption_id,
                 paid_price,
@@ -936,8 +972,25 @@ async fn buy_item_once(
                 "Market rejected buy-for"
             );
 
-
             let kind = classify_market_buy_for_error(code, &error_msg);
+
+            let error_kind_str = match kind {
+                MarketBuyForErrorKind::NotEnoughFunds => "no_money",
+                MarketBuyForErrorKind::PriceOrChanceDeviation => "temporary_out_of_stock",
+                MarketBuyForErrorKind::SteamBanned | MarketBuyForErrorKind::NoMobileAuth | MarketBuyForErrorKind::OfflineTradesDisabled => "buyer_banned",
+                MarketBuyForErrorKind::InvalidTradeLink | MarketBuyForErrorKind::TradeLinkCheckFailed => "invalid_trade_url",
+                MarketBuyForErrorKind::InventoryHidden => "inventory_hidden",
+                MarketBuyForErrorKind::InventoryFull => "inventory_full",
+                _ => "other",
+            };
+
+            state.channel_logger.log_market_buy_error(
+                broadcaster_user_id,
+                &redemption_id.to_string(),
+                item_name,
+                error_kind_str,
+                &error_msg,
+            );
 
             let not_enough_funds = kind == MarketBuyForErrorKind::NotEnoughFunds;
             let mut return_channel_points = true;
@@ -1002,6 +1055,13 @@ async fn buy_item_once(
                 item = %item_name,
                 "Failed to send HTTP request to Market"
             );
+            state.channel_logger.log_market_buy_error(
+                broadcaster_user_id,
+                &redemption_id.to_string(),
+                item_name,
+                "network_error",
+                &e.to_string(),
+            );
             update_redemption_status_failed(
                 state.clone(),
                 broadcaster_user_id,
@@ -1047,6 +1107,7 @@ async fn update_redemption_status_failed(
             return_points = return_channel_points,
             "Failed to update redemption status on Twitch Helix"
         );
+        state.channel_logger.log_broadcaster_token_error(broadcaster_user_id, &e.to_string());
         return;
     }
 
