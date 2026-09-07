@@ -328,6 +328,19 @@ pub async fn process_redemption(
                                 PauseReason::LimitReached,
                             ).await;
 
+                            state.channel_logger.log_reward_paused(
+                                &broadcaster_user_id,
+                                &reward_id.to_string(),
+                                &event.reward.title,
+                                "LIMIT_REACHED",
+                                Some(serde_json::json!({
+                                    "limit_type": "global",
+                                    "window_hours": rule.window_hours,
+                                    "max_redemptions": rule.max_redemptions,
+                                    "current_count": count,
+                                })),
+                            );
+
                             state.channel_logger.log_purchase_limit_reached(
                                 &broadcaster_user_id,
                                 &redemption_id.to_string(),
@@ -444,23 +457,33 @@ pub async fn process_redemption(
                         "Redemption cancelled: current market price is below configured min_market_price"
                     );
 
-                    let state_c = state.clone();
-                    let bc_id = broadcaster_user_id.clone();
-                    let r_id = reward_id;
-                    state.spawn_task(async move {
-                        let r_str = r_id.to_string();
-                        let s_for_token = state_c.clone();
-                        let b_for_closure = bc_id.clone();
-                        let _ = state_c.with_broadcaster_token(&bc_id, move |token| {
-                            let b = b_for_closure.clone();
-                            let r = r_str.clone();
-                            let s = s_for_token.clone();
-                            async move {
-                                s.helix_client.update_custom_reward(&b, &r, UpdateCustomReward { is_paused: Some(true), ..Default::default() }, &token).await
-                            }
-                        }).await;
-                        let _ = state_c.db.set_reward_paused(r_id, true, Some(PauseReason::PriceLimit)).await;
-                    });
+                    pause_reward_on_twitch_and_db(
+                        &state,
+                        &broadcaster_user_id,
+                        reward_id,
+                        PauseReason::PriceLimit,
+                    ).await;
+
+                    let curr_str = &reward_data.currency;
+                    let current_price_major = crate::steam::market::minor_to_major(reward_data.current_market_price as i64, curr_str);
+                    let min_price_major = Some(crate::steam::market::minor_to_major(min_p as i64, curr_str));
+                    let max_price_major = reward_data.max_market_price.map(|p| crate::steam::market::minor_to_major(p as i64, curr_str));
+
+                    state.channel_logger.log_reward_paused(
+                        &broadcaster_user_id,
+                        &reward_id.to_string(),
+                        &event.reward.title,
+                        "PRICE_LIMIT",
+                        Some(serde_json::json!({
+                            "current_price": current_price_major,
+                            "min_market_price": min_price_major,
+                            "max_market_price": max_price_major,
+                            "current_price_minor": reward_data.current_market_price,
+                            "min_market_price_minor": min_p,
+                            "max_market_price_minor": reward_data.max_market_price,
+                            "currency": curr_str,
+                        })),
+                    );
 
                     update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("Market price below minimum limit")).await;
                     let msg = state.render_chat_message(
@@ -483,23 +506,33 @@ pub async fn process_redemption(
                         "Redemption cancelled: market price exceeds configured max_market_price"
                     );
 
-                    let state_c = state.clone();
-                    let bc_id = broadcaster_user_id.clone();
-                    let r_id = reward_id;
-                    state.spawn_task(async move {
-                        let r_str = r_id.to_string();
-                        let s_for_token = state_c.clone();
-                        let b_for_closure = bc_id.clone();
-                        let _ = state_c.with_broadcaster_token(&bc_id, move |token| {
-                            let b = b_for_closure.clone();
-                            let r = r_str.clone();
-                            let s = s_for_token.clone();
-                            async move {
-                                s.helix_client.update_custom_reward(&b, &r, UpdateCustomReward { is_paused: Some(true), ..Default::default() }, &token).await
-                            }
-                        }).await;
-                        let _ = state_c.db.set_reward_paused(r_id, true, Some(PauseReason::PriceLimit)).await;
-                    });
+                    pause_reward_on_twitch_and_db(
+                        &state,
+                        &broadcaster_user_id,
+                        reward_id,
+                        PauseReason::PriceLimit,
+                    ).await;
+
+                    let curr_str = &reward_data.currency;
+                    let current_price_major = crate::steam::market::minor_to_major(reward_data.current_market_price as i64, curr_str);
+                    let min_price_major = reward_data.min_market_price.map(|p| crate::steam::market::minor_to_major(p as i64, curr_str));
+                    let max_price_major = Some(crate::steam::market::minor_to_major(max_p as i64, curr_str));
+
+                    state.channel_logger.log_reward_paused(
+                        &broadcaster_user_id,
+                        &reward_id.to_string(),
+                        &event.reward.title,
+                        "PRICE_LIMIT",
+                        Some(serde_json::json!({
+                            "current_price": current_price_major,
+                            "min_market_price": min_price_major,
+                            "max_market_price": max_price_major,
+                            "current_price_minor": reward_data.current_market_price,
+                            "min_market_price_minor": reward_data.min_market_price,
+                            "max_market_price_minor": max_p,
+                            "currency": curr_str,
+                        })),
+                    );
 
                     update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("Market price exceeds maximum limit")).await;
                     let msg = state.render_chat_message(
@@ -523,6 +556,7 @@ pub async fn process_redemption(
                 &event.user_login,
                 &item_name,
                 max_price,
+                &reward_data.currency,
                 trade_link,
                 &redemption_custom_id,
                 0,
@@ -534,6 +568,13 @@ pub async fn process_redemption(
                 Some(items) if !items.is_empty() => items,
                 _ => {
                     warn!(redemption_id = %redemption_id, "Pool reward has empty pool items");
+                    state.channel_logger.log_reward_misconfigured(
+                        &broadcaster_user_id,
+                        &reward_id.to_string(),
+                        Some(&reward_data.twitch_title),
+                        "EMPTY_POOL",
+                        None,
+                    );
                     update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("Pool items list is empty")).await;
                     return;
                 }
@@ -563,6 +604,7 @@ pub async fn process_redemption(
                 &event.user_login,
                 &item_name,
                 max_price,
+                &reward_data.currency,
                 trade_link,
                 &redemption_custom_id,
                 0,
@@ -574,6 +616,13 @@ pub async fn process_redemption(
                 Some(f) => f,
                 None => {
                     warn!(redemption_id = %redemption_id, "Filter reward has no filter_config");
+                    state.channel_logger.log_reward_misconfigured(
+                        &broadcaster_user_id,
+                        &reward_id.to_string(),
+                        Some(&reward_data.twitch_title),
+                        "FILTER_MISSING_CONFIG",
+                        None,
+                    );
                     update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("Filter config is missing")).await;
                     return;
                 }
@@ -591,6 +640,17 @@ pub async fn process_redemption(
             let matching = crate::steam::market::prices::filter_prices(&all_prices, filter);
             if matching.is_empty() {
                 warn!(redemption_id = %redemption_id, "No items match filter criteria for redemption");
+                state.channel_logger.log_reward_misconfigured(
+                    &broadcaster_user_id,
+                    &reward_id.to_string(),
+                    Some(&reward_data.twitch_title),
+                    "FILTER_NO_MATCH",
+                    Some(serde_json::json!({
+                        "min_price": filter.min_price,
+                        "max_price": filter.max_price,
+                        "currency": &reward_data.currency,
+                    })),
+                );
                 update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("No items match filter criteria")).await;
                 let msg = state.render_chat_message(&broadcaster_user_id, MSG_ORDER_FAILED_FILTER_EXHAUSTED, &[("buyer", &event.user_login), ("attempts", "0")]);
                 let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await;
@@ -657,6 +717,16 @@ pub async fn process_redemption(
                         });
 
                         let paid_price = res.price.unwrap_or(max_price as i64);
+
+                        state.channel_logger.log_redemption_order_created(
+                            &broadcaster_user_id,
+                            &redemption_id.to_string(),
+                            &item.market_hash_name,
+                            paid_price,
+                            &reward_data.currency,
+                            &event.user_login,
+                        );
+
                         if let Err(e) = state.db.set_redemption_order_created(
                             redemption_id,
                             paid_price,
@@ -839,6 +909,19 @@ async fn check_and_pause_if_global_limit_reached(
                         reward_id,
                         PauseReason::LimitReached,
                     ).await;
+
+                    state.channel_logger.log_reward_paused(
+                        broadcaster_user_id,
+                        &reward_id.to_string(),
+                        &reward.twitch_title,
+                        "LIMIT_REACHED",
+                        Some(serde_json::json!({
+                            "limit_type": "global",
+                            "window_hours": rule.window_hours,
+                            "max_redemptions": rule.max_redemptions,
+                            "current_count": count,
+                        })),
+                    );
                     break;
                 }
             }
@@ -886,6 +969,7 @@ async fn buy_item_once(
     user_login: &str,
     item_name: &str,
     max_price: i32,
+    currency: &str,
     trade_link: TradeLink,
     redemption_custom_id: &str,
     retry_count: i32,
@@ -921,6 +1005,7 @@ async fn buy_item_once(
                 &redemption_id.to_string(),
                 item_name,
                 paid_price,
+                currency,
                 user_login,
             );
 

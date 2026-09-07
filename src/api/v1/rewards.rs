@@ -1078,6 +1078,28 @@ pub async fn update_reward(
             message: "Failed to fetch updated reward".to_string(),
         })?;
 
+    if let Some(target_pause) = body.is_paused {
+        if existing.is_paused != target_pause {
+            if target_pause {
+                state.channel_logger.log_reward_paused(
+                    &auth.channel_id,
+                    &reward_id.to_string(),
+                    &updated.twitch_title,
+                    "MANUAL",
+                    None,
+                );
+            } else {
+                state.channel_logger.log_reward_unpaused(
+                    &auth.channel_id,
+                    &reward_id.to_string(),
+                    &updated.twitch_title,
+                    "MANUAL",
+                    None,
+                );
+            }
+        }
+    }
+
     if body.min_market_price.is_some() || body.max_market_price.is_some() || body.current_market_price.is_some() {
         let state_clone = state.clone();
         let updated_clone = updated.clone();
@@ -1418,6 +1440,23 @@ pub async fn batch_rewards(
                     };
 
                     state.db.set_reward_paused(*reward_id, target_pause, reason).await?;
+                    if target_pause {
+                        state.channel_logger.log_reward_paused(
+                            &broadcaster_id,
+                            &reward_id.to_string(),
+                            &existing.twitch_title,
+                            "MANUAL",
+                            None,
+                        );
+                    } else {
+                        state.channel_logger.log_reward_unpaused(
+                            &broadcaster_id,
+                            &reward_id.to_string(),
+                            &existing.twitch_title,
+                            "MANUAL",
+                            None,
+                        );
+                    }
                     affected += 1;
                 }
             }

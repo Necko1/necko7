@@ -182,7 +182,7 @@ async fn update_fixed_reward_price(
     let raw_cost = price_decimal * markup_factor * setting.base_price_multiplier as f64;
     let new_twitch_points_cost = (raw_cost.ceil() as u32).max(1);
 
-    apply_twitch_and_db_cost_update(state, reward, new_twitch_points_cost, cheapest.price as i32, items_res.currency.clone(), None).await?;
+    apply_twitch_and_db_cost_update(state, setting, reward, new_twitch_points_cost, cheapest.price as i32, items_res.currency.clone(), None).await?;
 
     info!(
         reward_id = %reward.twitch_id,
@@ -253,6 +253,7 @@ async fn update_pool_reward_price(
 
     apply_twitch_and_db_cost_update(
         state,
+        setting,
         reward,
         new_twitch_points_cost,
         new_market_price,
@@ -310,7 +311,7 @@ async fn update_filter_reward_price(
     let new_twitch_points_cost = (raw_cost.ceil() as u32).max(1);
     let new_market_price = market::major_to_minor(effective_price_major, &reward.currency) as i32;
 
-    apply_twitch_and_db_cost_update(state, reward, new_twitch_points_cost, new_market_price, None, None).await?;
+    apply_twitch_and_db_cost_update(state, setting, reward, new_twitch_points_cost, new_market_price, None, None).await?;
 
     info!(
         reward_id = %reward.twitch_id,
@@ -325,6 +326,7 @@ async fn update_filter_reward_price(
 
 async fn apply_twitch_and_db_cost_update(
     state: &Arc<AppState>,
+    setting: &BroadcasterSetting,
     reward: &Reward,
     new_twitch_points_cost: u32,
     new_market_price: i32,
@@ -370,14 +372,31 @@ async fn apply_twitch_and_db_cost_update(
     state.db.update_reward(reward.twitch_id, &update_patch).await?;
 
     let curr_str = currency.as_deref().unwrap_or(&reward.currency);
+
+    let old_channel_points = if reward.pricing_mode == crate::db::rewards::PricingMode::Auto {
+        if reward.current_market_price > 0 {
+            let old_price_major = market::minor_to_major(reward.current_market_price as i64, curr_str);
+            let markup_factor = 1.0 + (reward.twitch_price_markup_percentage as f64 / 100.0).max(0.0);
+            let old_cost = (old_price_major * markup_factor * setting.base_price_multiplier as f64).ceil() as u32;
+            Some(old_cost.max(1))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     state.channel_logger.log_reward_price_updated(
         &reward.streamer_id,
         &reward.twitch_id.to_string(),
         &reward.twitch_title,
-        reward.current_market_price as i64,
-        new_twitch_points_cost as i64,
-        new_market_price as i64,
+        reward.pricing_mode,
         curr_str,
+        reward.current_market_price,
+        new_market_price,
+        old_channel_points,
+        if reward.pricing_mode == crate::db::rewards::PricingMode::Auto { Some(new_twitch_points_cost) } else { None },
+        reward.manual_twitch_points,
     );
 
     check_and_sync_price_limits(state, reward, new_market_price).await?;
@@ -399,17 +418,17 @@ pub async fn check_and_sync_price_limits(
 
     let is_below_min = reward.min_market_price.is_some_and(|min_p| current_price < min_p);
     let is_above_max = reward.max_market_price.is_some_and(|max_p| current_price > max_p);
-    let is_out_of_bounds = is_below_min || is_above_max;
 
-    if is_out_of_bounds {
+    if is_below_min || is_above_max {
+        // Price is out of bounds! Pause the reward if it isn't already paused!
         if !reward.is_paused {
             warn!(
                 reward_id = %reward.twitch_id,
                 title = %reward.twitch_title,
-                price = current_price,
-                min = ?reward.min_market_price,
-                max = ?reward.max_market_price,
-                "Reward market price is outside configured limits; pausing on Twitch and DB with PRICE_LIMIT"
+                current_price = current_price,
+                min_limit = ?reward.min_market_price,
+                max_limit = ?reward.max_market_price,
+                "Reward market price is outside configured limits; auto-pausing reward"
             );
 
             let bc_id = reward.streamer_id.clone();
@@ -441,15 +460,24 @@ pub async fn check_and_sync_price_limits(
                 Some(crate::db::rewards::PauseReason::PriceLimit),
             ).await?;
 
+            let curr_str = &reward.currency;
+            let current_price_major = market::minor_to_major(current_price as i64, curr_str);
+            let min_price_major = reward.min_market_price.map(|p| market::minor_to_major(p as i64, curr_str));
+            let max_price_major = reward.max_market_price.map(|p| market::minor_to_major(p as i64, curr_str));
+
             state.channel_logger.log_reward_paused(
                 &reward.streamer_id,
                 &reward.twitch_id.to_string(),
                 &reward.twitch_title,
                 "PRICE_LIMIT",
                 Some(serde_json::json!({
-                    "current_price": current_price,
-                    "min_market_price": reward.min_market_price,
-                    "max_market_price": reward.max_market_price,
+                    "current_price": current_price_major,
+                    "min_market_price": min_price_major,
+                    "max_market_price": max_price_major,
+                    "current_price_minor": current_price,
+                    "min_market_price_minor": reward.min_market_price,
+                    "max_market_price_minor": reward.max_market_price,
+                    "currency": curr_str,
                 })),
             );
         }
@@ -510,6 +538,19 @@ pub async fn check_and_sync_price_limits(
                     false,
                     None,
                 ).await?;
+
+                let curr_str = &reward.currency;
+                let current_price_major = market::minor_to_major(current_price as i64, curr_str);
+                state.channel_logger.log_reward_unpaused(
+                    &reward.streamer_id,
+                    &reward.twitch_id.to_string(),
+                    &reward.twitch_title,
+                    "PRICE_LIMIT",
+                    Some(serde_json::json!({
+                        "current_price": current_price_major,
+                        "currency": curr_str,
+                    })),
+                );
             } else {
                 warn!(
                     reward_id = %reward.twitch_id,
@@ -595,6 +636,14 @@ pub async fn check_and_sync_purchase_limits(
                 true,
                 Some(crate::db::rewards::PauseReason::LimitReached),
             ).await?;
+
+            state.channel_logger.log_reward_paused(
+                &reward.streamer_id,
+                &reward.twitch_id.to_string(),
+                &reward.twitch_title,
+                "LIMIT_REACHED",
+                None,
+            );
         }
     } else {
         // Purchases are within limits! If it was paused due to LimitReached, auto-unpause it!
@@ -614,6 +663,27 @@ pub async fn check_and_sync_purchase_limits(
                     true,
                     Some(crate::db::rewards::PauseReason::PriceLimit),
                 ).await?;
+
+                let curr_str = &reward.currency;
+                let current_price_major = market::minor_to_major(reward.current_market_price as i64, curr_str);
+                let min_price_major = reward.min_market_price.map(|p| market::minor_to_major(p as i64, curr_str));
+                let max_price_major = reward.max_market_price.map(|p| market::minor_to_major(p as i64, curr_str));
+
+                state.channel_logger.log_reward_paused(
+                    &reward.streamer_id,
+                    &reward.twitch_id.to_string(),
+                    &reward.twitch_title,
+                    "PRICE_LIMIT",
+                    Some(serde_json::json!({
+                        "current_price": current_price_major,
+                        "min_market_price": min_price_major,
+                        "max_market_price": max_price_major,
+                        "current_price_minor": reward.current_market_price,
+                        "min_market_price_minor": reward.min_market_price,
+                        "max_market_price_minor": reward.max_market_price,
+                        "currency": curr_str,
+                    })),
+                );
                 return Ok(());
             }
 
@@ -670,6 +740,14 @@ pub async fn check_and_sync_purchase_limits(
                     false,
                     None,
                 ).await?;
+
+                state.channel_logger.log_reward_unpaused(
+                    &reward.streamer_id,
+                    &reward.twitch_id.to_string(),
+                    &reward.twitch_title,
+                    "LIMIT_REACHED",
+                    None,
+                );
             } else {
                 warn!(
                     reward_id = %reward.twitch_id,
@@ -681,6 +759,14 @@ pub async fn check_and_sync_purchase_limits(
                     true,
                     Some(crate::db::rewards::PauseReason::NoMoney),
                 ).await?;
+
+                state.channel_logger.log_reward_paused(
+                    &reward.streamer_id,
+                    &reward.twitch_id.to_string(),
+                    &reward.twitch_title,
+                    "NO_MONEY",
+                    None,
+                );
             }
         }
     }

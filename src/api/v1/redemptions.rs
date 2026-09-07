@@ -293,6 +293,24 @@ pub async fn retry_redemption(
                 order_watcher.track_redemption(token).await;
             });
 
+            state.channel_logger.log_redemption_manual_action(
+                &auth.channel_id,
+                &redemption_id.to_string(),
+                &redemption.user_login,
+                Some(item_name),
+                "RETRY",
+                &auth.user_id,
+            );
+
+            state.channel_logger.log_redemption_order_created(
+                &auth.channel_id,
+                &redemption_id.to_string(),
+                item_name,
+                paid_price,
+                &reward.currency,
+                &redemption.user_login,
+            );
+
             tracing::info!(
                 redemption_id = %redemption_id,
                 channel_id = %auth.channel_id,
@@ -314,6 +332,14 @@ pub async fn retry_redemption(
                 "Manual redemption retry rejected by market"
             );
 
+            state.channel_logger.log_market_buy_error(
+                &auth.channel_id,
+                &redemption_id.to_string(),
+                item_name,
+                "market_retry_failed",
+                &error_msg,
+            );
+
             state.db.update_redemption_status(
                 redemption_id,
                 RedemptionStatus::FailedPenalty, // doesn't change
@@ -332,6 +358,13 @@ pub async fn retry_redemption(
                 redemption_id = %redemption_id,
                 channel_id = %auth.channel_id,
                 "Manual redemption retry failed due to market HTTP error"
+            );
+            state.channel_logger.log_market_buy_error(
+                &auth.channel_id,
+                &redemption_id.to_string(),
+                item_name,
+                "network_error",
+                &e.to_string(),
             );
             Err(ApiError::Internal {
                 message: format!("Market API request failed: {}", e),
@@ -426,6 +459,15 @@ pub async fn refund_redemption(
         Some("manual_refund"),
         Some("Manually refunded by channel owner/editor"),
     ).await?;
+
+    state.channel_logger.log_redemption_manual_action(
+        &auth.channel_id,
+        &redemption_id.to_string(),
+        &redemption.user_login,
+        redemption.market_item_name.as_deref().or(reward.market_item_name.as_deref()),
+        "REFUND",
+        &auth.user_id,
+    );
 
     tracing::info!(
         redemption_id = %redemption_id,
@@ -529,6 +571,15 @@ pub async fn penalty_redemption(
         Some("manual_penalty"),
         Some("Manually penalized by channel owner/editor"),
     ).await?;
+
+    state.channel_logger.log_redemption_manual_action(
+        &auth.channel_id,
+        &redemption_id.to_string(),
+        &redemption.user_login,
+        redemption.market_item_name.as_deref().or(reward.market_item_name.as_deref()),
+        "PENALTY",
+        &auth.user_id,
+    );
 
     tracing::info!(
         redemption_id = %redemption_id,

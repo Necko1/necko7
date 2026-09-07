@@ -169,8 +169,13 @@ impl AppState {
                         reason = %msg,
                         "Broadcaster token received 401 Unauthorized; refreshing via refresh_token..."
                     );
-                    let token_res = self.helix_client
-                        .refresh_user_token(&broadcaster.refresh_token).await?;
+                    let token_res = match self.helix_client.refresh_user_token(&broadcaster.refresh_token).await {
+                        Ok(res) => res,
+                        Err(e) => {
+                            self.channel_logger.log_broadcaster_token_error(broadcaster_id, &e.to_string());
+                            return Err(e.into());
+                        }
+                    };
 
                     self.db.update_broadcaster_tokens(
                         broadcaster_id,
@@ -180,7 +185,12 @@ impl AppState {
                     token = token_res.access_token;
                     continue;
                 }
-                Err(err) => return Err(err.into()),
+                Err(err) => {
+                    if let HelixError::Unauthorized(ref msg) = err {
+                        self.channel_logger.log_broadcaster_token_error(broadcaster_id, msg);
+                    }
+                    return Err(err.into());
+                }
             }
         }
 
@@ -595,6 +605,32 @@ impl AppState {
                             balance = current_balance,
                             "Auto-updated reward pause status due to balance check"
                         );
+
+                        if target_paused {
+                            self.channel_logger.log_reward_paused(
+                                channel_id,
+                                &reward.twitch_id.to_string(),
+                                &reward.twitch_title,
+                                "NO_MONEY",
+                                Some(serde_json::json!({
+                                    "cost": cost,
+                                    "balance": current_balance,
+                                    "currency": &reward.currency,
+                                })),
+                            );
+                        } else {
+                            self.channel_logger.log_reward_unpaused(
+                                channel_id,
+                                &reward.twitch_id.to_string(),
+                                &reward.twitch_title,
+                                "NO_MONEY",
+                                Some(serde_json::json!({
+                                    "cost": cost,
+                                    "balance": current_balance,
+                                    "currency": &reward.currency,
+                                })),
+                            );
+                        }
                     }
                 }
                 Err(e) => {

@@ -4,6 +4,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use crate::db::channel_logs::{ChannelLogCategory, ChannelLogLevel, NewChannelLog};
 use crate::db::Db;
+use crate::steam::market;
 
 /// Service for asynchronous, non-blocking recording of channel logs to PostgreSQL.
 pub struct ChannelLogger {
@@ -110,19 +111,23 @@ impl ChannelLogger {
         broadcaster_id: &str,
         redemption_id: &str,
         item_name: &str,
-        cost: i64,
+        paid_price_minor: i64,
+        currency: &str,
         user_login: &str,
     ) {
+        let paid_price_major = market::minor_to_major(paid_price_minor, currency);
         self.log(
             broadcaster_id,
             ChannelLogLevel::Info,
             ChannelLogCategory::Redemption,
             "REDEMPTION_ORDER_CREATED",
-            format!("Created market purchase order for skin \"{}\" for viewer @{}", item_name, user_login),
+            format!("Created market purchase order for skin \"{}\" for viewer @{} (price: {:.2} {})", item_name, user_login, paid_price_major, currency),
             Some(serde_json::json!({
                 "redemption_id": redemption_id,
                 "item_name": item_name,
-                "points_cost": cost,
+                "market_price": paid_price_major,
+                "market_price_minor": paid_price_minor,
+                "currency": currency,
                 "user_login": user_login,
             })),
             None,
@@ -177,18 +182,26 @@ impl ChannelLogger {
     pub fn log_market_balance_insufficient(
         &self,
         broadcaster_id: &str,
-        required_price: Option<i64>,
-        current_balance: Option<i64>,
+        required_price_minor: Option<i64>,
+        current_balance: Option<f64>,
         currency: &str,
     ) {
+        let req_major = required_price_minor.map(|p| market::minor_to_major(p, currency));
+        let price_msg = match (req_major, current_balance) {
+            (Some(req), Some(bal)) => format!(" (required: {:.2} {}, balance: {:.2} {})", req, currency, bal, currency),
+            (Some(req), None) => format!(" (required: {:.2} {})", req, currency),
+            _ => String::new(),
+        };
+
         self.log(
             broadcaster_id,
             ChannelLogLevel::Error,
             ChannelLogCategory::Market,
             "MARKET_INSUFFICIENT_BALANCE",
-            "Insufficient CSGO Market balance to purchase the requested skin",
+            format!("Insufficient CSGO Market balance to purchase the requested skin{}", price_msg),
             Some(serde_json::json!({
-                "required_price": required_price,
+                "required_price": req_major,
+                "required_price_minor": required_price_minor,
                 "current_balance": current_balance,
                 "currency": currency,
             })),
@@ -220,6 +233,22 @@ impl ChannelLogger {
             "invalid_trade_url" => (
                 ChannelLogLevel::Warn,
                 "Viewer's Steam trade link is invalid or expired. Ask the viewer to update their Trade URL and retry."
+            ),
+            "inventory_hidden" => (
+                ChannelLogLevel::Warn,
+                "Viewer's Steam inventory or profile is private. Ask the viewer to set their inventory to Public in Steam Privacy Settings before retrying."
+            ),
+            "inventory_full" => (
+                ChannelLogLevel::Warn,
+                "Viewer's Steam inventory is full (reached 1000 items limit). The viewer needs to free up inventory space before retrying."
+            ),
+            "network_error" => (
+                ChannelLogLevel::Error,
+                "CSGO Market API is currently unreachable. Check your server internet connection or CSGO Market service status."
+            ),
+            "market_retry_failed" => (
+                ChannelLogLevel::Warn,
+                "Manual purchase retry was rejected by CSGO Market. Verify item availability or check error message details."
             ),
             _ => (
                 ChannelLogLevel::Error,
@@ -256,9 +285,25 @@ impl ChannelLogger {
                 format!("Reward \"{}\" was automatically paused: insufficient balance on CSGO Market", reward_title),
                 "Deposit funds into your CSGO Market account. The reward will resume automatically during the next price update cycle, or you can unpause it manually."
             ),
-            "PRICE_LIMIT" => (
-                format!("Reward \"{}\" was automatically paused: market price exceeded configured limits", reward_title),
-                "Check the current market price of the skin on CSGO Market and adjust maximum price limits in reward settings if desired."
+            "PRICE_LIMIT" => {
+                let curr = details.as_ref().and_then(|d| d.get("currency")).and_then(|v| v.as_str()).unwrap_or("");
+                let price_text = if let Some(p) = details.as_ref().and_then(|d| d.get("current_price")).and_then(|v| v.as_f64()) {
+                    format!(" ({:.2} {})", p, curr)
+                } else {
+                    String::new()
+                };
+                (
+                    format!("Reward \"{}\" was automatically paused: market price{} exceeded configured limits", reward_title, price_text),
+                    "Check the current market price of the skin on CSGO Market and adjust maximum price limits in reward settings if desired."
+                )
+            },
+            "LIMIT_REACHED" => (
+                format!("Reward \"{}\" was automatically paused: global purchase limit reached", reward_title),
+                "The reward will automatically resume when the time window passes, or you can adjust/remove purchase limits in reward settings."
+            ),
+            "MANUAL" => (
+                format!("Reward \"{}\" was paused manually by channel editor", reward_title),
+                "The reward is currently hidden from viewers. You can unpause it at any time in reward settings."
             ),
             "TEMPORARY_OUT_OF_STOCK" => (
                 format!("Reward \"{}\" was temporarily paused: item is not available on market within target price range", reward_title),
@@ -288,32 +333,248 @@ impl ChannelLogger {
         );
     }
 
+    pub fn log_reward_unpaused(
+        &self,
+        broadcaster_id: &str,
+        reward_id: &str,
+        reward_title: &str,
+        reason: &str,
+        details: Option<serde_json::Value>,
+    ) {
+        let (message, hint) = match reason {
+            "NO_MONEY" => (
+                format!("Reward \"{}\" was automatically unpaused: CSGO Market balance restored", reward_title),
+                "Market balance is now sufficient. Viewers can redeem this reward again."
+            ),
+            "PRICE_LIMIT" => (
+                format!("Reward \"{}\" was automatically unpaused: market price returned within configured limits", reward_title),
+                "Skin price on the market is back within your configured min/max range."
+            ),
+            "LIMIT_REACHED" => (
+                format!("Reward \"{}\" was automatically unpaused: purchase limit time window has passed", reward_title),
+                "Purchase count is back below the limit. Viewers can redeem this reward again."
+            ),
+            "MANUAL" => (
+                format!("Reward \"{}\" was unpaused manually by channel editor", reward_title),
+                "The reward is now active and available to viewers in chat."
+            ),
+            _ => (
+                format!("Reward \"{}\" was unpaused (reason: {})", reward_title, reason),
+                "The reward is now active on your channel."
+            ),
+        };
+
+        let mut log_details = details.unwrap_or_else(|| serde_json::json!({}));
+        if let Some(obj) = log_details.as_object_mut() {
+            obj.insert("reward_id".to_string(), serde_json::Value::String(reward_id.to_string()));
+            obj.insert("reward_title".to_string(), serde_json::Value::String(reward_title.to_string()));
+            obj.insert("reason".to_string(), serde_json::Value::String(reason.to_string()));
+        }
+
+        self.log(
+            broadcaster_id,
+            ChannelLogLevel::Info,
+            ChannelLogCategory::Reward,
+            "REWARD_AUTO_UNPAUSED",
+            message,
+            Some(log_details),
+            Some(hint.to_string()),
+        );
+    }
+
+    pub fn log_redemption_manual_action(
+        &self,
+        broadcaster_id: &str,
+        redemption_id: &str,
+        user_login: &str,
+        item_name: Option<&str>,
+        action: &str,
+        actor_user_id: &str,
+    ) {
+        let item_title = item_name.unwrap_or("skin");
+        let (event_type, message) = match action {
+            "REFUND" => (
+                "REDEMPTION_MANUALLY_REFUNDED",
+                format!("Redemption for @{} (\"{}\") was manually refunded by channel editor", user_login, item_title),
+            ),
+            "PENALTY" => (
+                "REDEMPTION_MANUALLY_PENALIZED",
+                format!("Redemption for @{} (\"{}\") was manually penalized by channel editor", user_login, item_title),
+            ),
+            "RETRY" => (
+                "REDEMPTION_MANUALLY_RETRIED",
+                format!("Redemption for @{} (\"{}\") purchase was manually retried on market", user_login, item_title),
+            ),
+            _ => (
+                "REDEMPTION_MANUAL_ACTION",
+                format!("Redemption for @{} (\"{}\") was modified ({}) by channel editor", user_login, item_title, action),
+            ),
+        };
+
+        self.log(
+            broadcaster_id,
+            ChannelLogLevel::Info,
+            ChannelLogCategory::Redemption,
+            event_type,
+            message,
+            Some(serde_json::json!({
+                "redemption_id": redemption_id,
+                "user_login": user_login,
+                "item_name": item_name,
+                "action": action,
+                "editor_user_id": actor_user_id,
+            })),
+            None,
+        );
+    }
+
+    pub fn log_reward_misconfigured(
+        &self,
+        broadcaster_id: &str,
+        reward_id: &str,
+        reward_title: Option<&str>,
+        error_type: &str,
+        details: Option<serde_json::Value>,
+    ) {
+        let title = reward_title.unwrap_or("Reward");
+        let (message, hint) = match error_type {
+            "EMPTY_POOL" => (
+                format!("{} pool item list is empty; redemptions cannot be fulfilled", title),
+                "Add items to the pool in reward settings, or switch the reward type to Fixed skin or Price Filter."
+            ),
+            "FILTER_NO_MATCH" => (
+                format!("{} price filter did not match any available skins on CSGO Market", title),
+                "Check prices.json availability or broaden your min/max price range and name criteria in reward settings."
+            ),
+            "FILTER_MISSING_CONFIG" => (
+                format!("{} is configured as Filter reward but has no filter configuration", title),
+                "Configure price and name criteria in reward settings."
+            ),
+            _ => (
+                format!("{} configuration error: {}", title, error_type),
+                "Check reward settings in channel management dashboard."
+            ),
+        };
+
+        let mut log_details = details.unwrap_or_else(|| serde_json::json!({}));
+        if let Some(obj) = log_details.as_object_mut() {
+            obj.insert("reward_id".to_string(), serde_json::Value::String(reward_id.to_string()));
+            if let Some(t) = reward_title {
+                obj.insert("reward_title".to_string(), serde_json::Value::String(t.to_string()));
+            }
+            obj.insert("error_type".to_string(), serde_json::Value::String(error_type.to_string()));
+        }
+
+        self.log(
+            broadcaster_id,
+            ChannelLogLevel::Error,
+            ChannelLogCategory::Reward,
+            "REWARD_CONFIG_ERROR",
+            message,
+            Some(log_details),
+            Some(hint.to_string()),
+        );
+    }
+
     pub fn log_reward_price_updated(
         &self,
         broadcaster_id: &str,
         reward_id: &str,
         reward_title: &str,
-        old_cost: i64,
-        new_cost: i64,
-        market_price: i64,
+        pricing_mode: crate::db::rewards::PricingMode,
         currency: &str,
+        old_market_price_minor: i32,
+        new_market_price_minor: i32,
+        old_channel_points: Option<u32>,
+        new_channel_points: Option<u32>,
+        manual_channel_points: Option<i32>,
     ) {
-        self.log(
-            broadcaster_id,
-            ChannelLogLevel::Debug,
-            ChannelLogCategory::Reward,
-            "REWARD_PRICE_UPDATED",
-            format!("Updated reward cost for \"{}\": {} -> {} Channel Points (market price: {} {})", reward_title, old_cost, new_cost, market_price, currency),
-            Some(serde_json::json!({
-                "reward_id": reward_id,
-                "reward_title": reward_title,
-                "old_cost": old_cost,
-                "new_cost": new_cost,
-                "market_price": market_price,
-                "currency": currency,
-            })),
-            None,
-        );
+        let old_market_price_major = market::minor_to_major(old_market_price_minor as i64, currency);
+        let new_market_price_major = market::minor_to_major(new_market_price_minor as i64, currency);
+
+        match pricing_mode {
+            crate::db::rewards::PricingMode::Manual => {
+                let pts = manual_channel_points.unwrap_or(0);
+                let message = if old_market_price_minor != new_market_price_minor {
+                    format!(
+                        "Updated internal market price for \"{}\": {:.2} -> {:.2} {} (Channel Points: {})",
+                        reward_title, old_market_price_major, new_market_price_major, currency, pts
+                    )
+                } else {
+                    format!(
+                        "Internal market price for \"{}\" is {:.2} {} (Channel Points: {})",
+                        reward_title, new_market_price_major, currency, pts
+                    )
+                };
+
+                self.log(
+                    broadcaster_id,
+                    ChannelLogLevel::Debug,
+                    ChannelLogCategory::Reward,
+                    "REWARD_PRICE_UPDATED",
+                    message,
+                    Some(serde_json::json!({
+                        "reward_id": reward_id,
+                        "reward_title": reward_title,
+                        "pricing_mode": "MANUAL",
+                        "currency": currency,
+                        "old_market_price": old_market_price_major,
+                        "new_market_price": new_market_price_major,
+                        "old_market_price_minor": old_market_price_minor,
+                        "new_market_price_minor": new_market_price_minor,
+                        "manual_channel_points": pts,
+                    })),
+                    None,
+                );
+            }
+            crate::db::rewards::PricingMode::Auto => {
+                let new_pts = new_channel_points.unwrap_or(0);
+                let message = if let Some(old_pts) = old_channel_points {
+                    if old_pts != new_pts {
+                        format!(
+                            "Updated reward cost for \"{}\": {} -> {} Channel Points (market price: {:.2} -> {:.2} {})",
+                            reward_title, old_pts, new_pts, old_market_price_major, new_market_price_major, currency
+                        )
+                    } else if old_market_price_minor != new_market_price_minor {
+                        format!(
+                            "Updated reward market price for \"{}\": {:.2} -> {:.2} {} (Channel Points: {})",
+                            reward_title, old_market_price_major, new_market_price_major, currency, new_pts
+                        )
+                    } else {
+                        format!(
+                            "Reward cost for \"{}\" is {} Channel Points (market price: {:.2} {})",
+                            reward_title, new_pts, new_market_price_major, currency
+                        )
+                    }
+                } else {
+                    format!(
+                        "Updated reward cost for \"{}\": {} Channel Points (market price: {:.2} {})",
+                        reward_title, new_pts, new_market_price_major, currency
+                    )
+                };
+
+                self.log(
+                    broadcaster_id,
+                    ChannelLogLevel::Debug,
+                    ChannelLogCategory::Reward,
+                    "REWARD_PRICE_UPDATED",
+                    message,
+                    Some(serde_json::json!({
+                        "reward_id": reward_id,
+                        "reward_title": reward_title,
+                        "pricing_mode": "AUTO",
+                        "currency": currency,
+                        "old_market_price": old_market_price_major,
+                        "new_market_price": new_market_price_major,
+                        "old_market_price_minor": old_market_price_minor,
+                        "new_market_price_minor": new_market_price_minor,
+                        "old_channel_points": old_channel_points,
+                        "new_channel_points": new_pts,
+                    })),
+                    None,
+                );
+            }
+        }
     }
 
     pub fn log_chat_send_error(
