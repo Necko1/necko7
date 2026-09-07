@@ -359,26 +359,50 @@ impl AppState {
                 .ok_or("The bot is not initialized")?
         };
 
+        let add_bot_badge = match self.db.get_broadcaster_setting(broadcaster_id).await {
+            Ok(Some(s)) => s.add_bot_badge,
+            _ => false,
+        };
+
         let broadcaster_id = broadcaster_id.to_string();
         let message = message.to_string();
         let reply_id = reply_parent_message_id.map(|s| s.to_string());
 
-        self.with_app_token(|token| {
-            let broadcaster_id = broadcaster_id.clone();
-            let bot_channel_id = bot_channel_id.clone();
-            let message = message.clone();
-            let reply_id = reply_id.clone();
-            async move {
-                self.helix_client.send_chat_message(
-                    &broadcaster_id,
-                    &bot_channel_id,
-                    &message,
-                    reply_id.as_deref(),
-                    None,
-                    &token,
-                ).await
-            }
-        }).await
+        if add_bot_badge {
+            self.with_app_token(|token| {
+                let broadcaster_id = broadcaster_id.clone();
+                let bot_channel_id = bot_channel_id.clone();
+                let message = message.clone();
+                let reply_id = reply_id.clone();
+                async move {
+                    self.helix_client.send_chat_message(
+                        &broadcaster_id,
+                        &bot_channel_id,
+                        &message,
+                        reply_id.as_deref(),
+                        None,
+                        &token,
+                    ).await
+                }
+            }).await
+        } else {
+            self.with_bot_user_token(|token| {
+                let broadcaster_id = broadcaster_id.clone();
+                let bot_channel_id = bot_channel_id.clone();
+                let message = message.clone();
+                let reply_id = reply_id.clone();
+                async move {
+                    self.helix_client.send_chat_message(
+                        &broadcaster_id,
+                        &bot_channel_id,
+                        &message,
+                        reply_id.as_deref(),
+                        None,
+                        &token,
+                    ).await
+                }
+            }).await
+        }
     }
 
     pub async fn get_cached_or_fetch_balance(&self, channel_id: &str) -> AppResult<CachedMarketBalance> {

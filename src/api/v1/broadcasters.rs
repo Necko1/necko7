@@ -110,6 +110,8 @@ pub struct BroadcasterSettingsResponse {
     pub pause_reward_if_no_money: bool,
     /// Market chance percentage to transfer item
     pub market_chance_to_transfer: i16,
+    /// Whether to add the Twitch chat bot badge to messages (true: send via App Access Token with bot badge, false: send via Bot User Access Token keeping normal user badge)
+    pub add_bot_badge: bool,
     /// Effective Twitch chat message templates for this broadcaster
     pub chat_messages: crate::messages::CategorizedChatMessages,
 }
@@ -138,6 +140,7 @@ pub struct BroadcasterSettingsResponse {
                 "refund_if_no_money": false,
                 "pause_reward_if_no_money": true,
                 "market_chance_to_transfer": 80,
+                "add_bot_badge": false,
                 "chat_messages": {
                     "trade_created": "@{buyer}, трейд был создан, у тебя есть {remaining} чтобы его принять - {tradeoffer}"
                 }
@@ -189,6 +192,7 @@ pub async fn get_broadcaster_settings(
         refund_if_no_money: setting.refund_if_no_money,
         pause_reward_if_no_money: setting.pause_reward_if_no_money,
         market_chance_to_transfer: setting.market_chance_to_transfer,
+        add_bot_badge: setting.add_bot_badge,
         chat_messages,
     }))
 }
@@ -211,6 +215,8 @@ pub struct UpdateBroadcasterSettingsBody {
     pub pause_reward_if_no_money: Option<bool>,
     /// Market chance percentage to transfer item
     pub market_chance_to_transfer: Option<i16>,
+    /// Whether to add the Twitch chat bot badge to messages (true: send via App Access Token with bot badge, false: send via Bot User Access Token keeping normal user badge)
+    pub add_bot_badge: Option<bool>,
     /// Twitch chat message templates to customize (category -> message_key -> template_text)
     pub chat_messages: Option<HashMap<String, HashMap<String, String>>>,
 }
@@ -238,6 +244,7 @@ pub struct UpdateBroadcasterSettingsBody {
                 "refund_if_no_money": false,
                 "pause_reward_if_no_money": true,
                 "market_chance_to_transfer": 80,
+                "add_bot_badge": false,
                 "chat_messages": {
                     "trade_created": "@{buyer}, трейд был создан, у тебя есть {remaining} чтобы его принять - {tradeoffer}"
                 }
@@ -275,6 +282,7 @@ pub async fn update_broadcaster_settings(
         pause_reward_if_no_money: body.pause_reward_if_no_money,
         market_chance_to_transfer: body.market_chance_to_transfer,
         chat_messages: body.chat_messages,
+        add_bot_badge: body.add_bot_badge,
     };
 
     state.db.update_broadcaster_setting(&auth.channel_id, &patch).await?;
@@ -331,6 +339,7 @@ pub async fn update_broadcaster_settings(
         refund_if_no_money: setting.refund_if_no_money,
         pause_reward_if_no_money: setting.pause_reward_if_no_money,
         market_chance_to_transfer: setting.market_chance_to_transfer,
+        add_bot_badge: setting.add_bot_badge,
         chat_messages,
     }))
 }
