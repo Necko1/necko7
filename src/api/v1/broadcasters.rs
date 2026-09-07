@@ -307,9 +307,31 @@ pub async fn update_broadcaster_settings(
         }
     }
 
+    let mut changed_settings = Vec::new();
+    if patch.is_active.is_some() { changed_settings.push("is_active".to_string()); }
+    if patch.market_api_key.is_some() { changed_settings.push("market_api_key".to_string()); }
+    if patch.base_price_multiplier.is_some() { changed_settings.push("base_price_multiplier".to_string()); }
+    if patch.update_prices_period.is_some() { changed_settings.push("update_prices_period".to_string()); }
+    if patch.refund_on_buyer_fail.is_some() { changed_settings.push("refund_on_buyer_fail".to_string()); }
+    if patch.refund_if_no_money.is_some() { changed_settings.push("refund_if_no_money".to_string()); }
+    if patch.pause_reward_if_no_money.is_some() { changed_settings.push("pause_reward_if_no_money".to_string()); }
+    if patch.market_chance_to_transfer.is_some() { changed_settings.push("market_chance_to_transfer".to_string()); }
+    if patch.add_bot_badge.is_some() { changed_settings.push("add_bot_badge".to_string()); }
+    if patch.chat_messages.is_some() { changed_settings.push("chat_messages".to_string()); }
+
+    if !changed_settings.is_empty() {
+        state.channel_logger.log_settings_manually_updated(
+            &auth.channel_id,
+            &auth.user_id,
+            &auth.user_login,
+            changed_settings,
+        );
+    }
+
     tracing::info!(
         channel_id = %auth.channel_id,
         user_id = %auth.user_id,
+        user_login = %auth.user_login,
         is_active = ?patch.is_active,
         base_multiplier = ?patch.base_price_multiplier,
         "Broadcaster settings updated by authorized user"
@@ -430,9 +452,16 @@ pub async fn update_broadcaster_chat_messages(
     state.db.update_broadcaster_chat_messages(&auth.channel_id, &body.messages).await?;
     state.update_chat_messages_cache(&auth.channel_id, body.messages);
 
+    state.channel_logger.log_chat_messages_manually_updated(
+        &auth.channel_id,
+        &auth.user_id,
+        &auth.user_login,
+    );
+
     tracing::info!(
         channel_id = %auth.channel_id,
         user_id = %auth.user_id,
+        user_login = %auth.user_login,
         "Broadcaster chat messages updated by authorized user"
     );
 

@@ -739,6 +739,16 @@ pub async fn create_reward(
 
     let reward = state.db.create_reward(&new_reward).await?;
 
+    state.channel_logger.log_reward_manually_created(
+        &auth.channel_id,
+        &reward.twitch_id.to_string(),
+        &reward.twitch_title,
+        &format!("{:?}", reward.reward_type),
+        &format!("{:?}", reward.pricing_mode),
+        &auth.user_id,
+        &auth.user_login,
+    );
+
     tracing::info!(
         reward_id = %reward.twitch_id,
         reward_title = %reward.twitch_title,
@@ -1033,6 +1043,21 @@ pub async fn update_reward(
         }
     };
 
+    let mut updated_fields = Vec::new();
+    if body.twitch_title.is_some() { updated_fields.push("title".to_string()); }
+    if body.twitch_description.is_some() { updated_fields.push("description".to_string()); }
+    if body.manual_twitch_points.is_some() { updated_fields.push("points_cost".to_string()); }
+    if body.pricing_mode.is_some() { updated_fields.push("pricing_mode".to_string()); }
+    if body.reward_type.is_some() { updated_fields.push("reward_type".to_string()); }
+    if body.market_item_name.is_some() { updated_fields.push("market_item".to_string()); }
+    if body.min_market_price.is_some() || body.max_market_price.is_some() { updated_fields.push("price_limits".to_string()); }
+    if body.purchase_limits.is_some() { updated_fields.push("purchase_limits".to_string()); }
+    if body.filter_config.is_some() { updated_fields.push("filter_config".to_string()); }
+    if body.pool_items.is_some() { updated_fields.push("pool_items".to_string()); }
+    if body.chat_min_messages.is_some() || body.chat_min_characters.is_some() { updated_fields.push("chat_requirements".to_string()); }
+
+    let has_price_change = body.min_market_price.is_some() || body.max_market_price.is_some() || body.current_market_price.is_some();
+
     let patch = crate::db::rewards::UpdateReward {
         is_paused: target_paused,
         pause_reason: patch_pause_reason,
@@ -1080,13 +1105,17 @@ pub async fn update_reward(
 
     if let Some(target_pause) = body.is_paused {
         if existing.is_paused != target_pause {
+            let actor_details = Some(serde_json::json!({
+                "actor_user_id": auth.user_id,
+                "actor_user_login": auth.user_login,
+            }));
             if target_pause {
                 state.channel_logger.log_reward_paused(
                     &auth.channel_id,
                     &reward_id.to_string(),
                     &updated.twitch_title,
                     "MANUAL",
-                    None,
+                    actor_details,
                 );
             } else {
                 state.channel_logger.log_reward_unpaused(
@@ -1094,13 +1123,24 @@ pub async fn update_reward(
                     &reward_id.to_string(),
                     &updated.twitch_title,
                     "MANUAL",
-                    None,
+                    actor_details,
                 );
             }
         }
     }
 
-    if body.min_market_price.is_some() || body.max_market_price.is_some() || body.current_market_price.is_some() {
+    if !updated_fields.is_empty() {
+        state.channel_logger.log_reward_manually_updated(
+            &auth.channel_id,
+            &reward_id.to_string(),
+            &updated.twitch_title,
+            &auth.user_id,
+            &auth.user_login,
+            updated_fields,
+        );
+    }
+
+    if has_price_change {
         let state_clone = state.clone();
         let updated_clone = updated.clone();
         state.spawn_task(async move {
@@ -1180,6 +1220,14 @@ pub async fn delete_reward(
     }
 
     state.db.set_reward_deleted(reward_id).await?;
+
+    state.channel_logger.log_reward_manually_deleted(
+        &auth.channel_id,
+        &reward_id.to_string(),
+        &existing.twitch_title,
+        &auth.user_id,
+        &auth.user_login,
+    );
 
     tracing::info!(
         reward_id = %reward_id,
@@ -1440,13 +1488,17 @@ pub async fn batch_rewards(
                     };
 
                     state.db.set_reward_paused(*reward_id, target_pause, reason).await?;
+                    let actor_details = Some(serde_json::json!({
+                        "actor_user_id": auth.user_id,
+                        "actor_user_login": auth.user_login,
+                    }));
                     if target_pause {
                         state.channel_logger.log_reward_paused(
                             &broadcaster_id,
                             &reward_id.to_string(),
                             &existing.twitch_title,
                             "MANUAL",
-                            None,
+                            actor_details,
                         );
                     } else {
                         state.channel_logger.log_reward_unpaused(
@@ -1454,7 +1506,7 @@ pub async fn batch_rewards(
                             &reward_id.to_string(),
                             &existing.twitch_title,
                             "MANUAL",
-                            None,
+                            actor_details,
                         );
                     }
                     affected += 1;
@@ -1471,6 +1523,13 @@ pub async fn batch_rewards(
                 }).await?;
 
                 state.db.set_reward_deleted(*reward_id).await?;
+                state.channel_logger.log_reward_manually_deleted(
+                    &broadcaster_id,
+                    &reward_id.to_string(),
+                    &existing.twitch_title,
+                    &auth.user_id,
+                    &auth.user_login,
+                );
                 affected += 1;
             }
             _ => return Err(ApiError::BadRequest {

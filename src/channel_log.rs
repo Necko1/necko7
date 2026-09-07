@@ -301,10 +301,20 @@ impl ChannelLogger {
                 format!("Reward \"{}\" was automatically paused: global purchase limit reached", reward_title),
                 "The reward will automatically resume when the time window passes, or you can adjust/remove purchase limits in reward settings."
             ),
-            "MANUAL" => (
-                format!("Reward \"{}\" was paused manually by channel editor", reward_title),
-                "The reward is currently hidden from viewers. You can unpause it at any time in reward settings."
-            ),
+            "MANUAL" => {
+                let actor_info = if let (Some(login), Some(id)) = (
+                    details.as_ref().and_then(|d| d.get("actor_user_login")).and_then(|v| v.as_str()),
+                    details.as_ref().and_then(|d| d.get("actor_user_id")).and_then(|v| v.as_str()),
+                ) {
+                    format!(" by @{} (ID: {})", login, id)
+                } else {
+                    " by channel editor".to_string()
+                };
+                (
+                    format!("Reward \"{}\" was paused manually{}", reward_title, actor_info),
+                    "The reward is currently hidden from viewers. You can unpause it at any time in reward settings."
+                )
+            },
             "TEMPORARY_OUT_OF_STOCK" => (
                 format!("Reward \"{}\" was temporarily paused: item is not available on market within target price range", reward_title),
                 "Wait for new listings on the market or increase permissible price deviation percentage in reward settings."
@@ -322,11 +332,17 @@ impl ChannelLogger {
             obj.insert("reason".to_string(), serde_json::Value::String(reason.to_string()));
         }
 
+        let (event_type, level) = if reason == "MANUAL" {
+            ("REWARD_MANUALLY_PAUSED", ChannelLogLevel::Info)
+        } else {
+            ("REWARD_AUTO_PAUSED", ChannelLogLevel::Warn)
+        };
+
         self.log(
             broadcaster_id,
-            ChannelLogLevel::Warn,
+            level,
             ChannelLogCategory::Reward,
-            "REWARD_AUTO_PAUSED",
+            event_type,
             message,
             Some(log_details),
             Some(hint.to_string()),
@@ -354,10 +370,20 @@ impl ChannelLogger {
                 format!("Reward \"{}\" was automatically unpaused: purchase limit time window has passed", reward_title),
                 "Purchase count is back below the limit. Viewers can redeem this reward again."
             ),
-            "MANUAL" => (
-                format!("Reward \"{}\" was unpaused manually by channel editor", reward_title),
-                "The reward is now active and available to viewers in chat."
-            ),
+            "MANUAL" => {
+                let actor_info = if let (Some(login), Some(id)) = (
+                    details.as_ref().and_then(|d| d.get("actor_user_login")).and_then(|v| v.as_str()),
+                    details.as_ref().and_then(|d| d.get("actor_user_id")).and_then(|v| v.as_str()),
+                ) {
+                    format!(" by @{} (ID: {})", login, id)
+                } else {
+                    " by channel editor".to_string()
+                };
+                (
+                    format!("Reward \"{}\" was unpaused manually{}", reward_title, actor_info),
+                    "The reward is now active and available to viewers in chat."
+                )
+            },
             _ => (
                 format!("Reward \"{}\" was unpaused (reason: {})", reward_title, reason),
                 "The reward is now active on your channel."
@@ -371,11 +397,17 @@ impl ChannelLogger {
             obj.insert("reason".to_string(), serde_json::Value::String(reason.to_string()));
         }
 
+        let event_type = if reason == "MANUAL" {
+            "REWARD_MANUALLY_UNPAUSED"
+        } else {
+            "REWARD_AUTO_UNPAUSED"
+        };
+
         self.log(
             broadcaster_id,
             ChannelLogLevel::Info,
             ChannelLogCategory::Reward,
-            "REWARD_AUTO_UNPAUSED",
+            event_type,
             message,
             Some(log_details),
             Some(hint.to_string()),
@@ -390,24 +422,25 @@ impl ChannelLogger {
         item_name: Option<&str>,
         action: &str,
         actor_user_id: &str,
+        actor_user_login: &str,
     ) {
         let item_title = item_name.unwrap_or("skin");
         let (event_type, message) = match action {
             "REFUND" => (
                 "REDEMPTION_MANUALLY_REFUNDED",
-                format!("Redemption for @{} (\"{}\") was manually refunded by channel editor", user_login, item_title),
+                format!("Redemption for @{} (\"{}\") was manually refunded by @{} (ID: {})", user_login, item_title, actor_user_login, actor_user_id),
             ),
             "PENALTY" => (
                 "REDEMPTION_MANUALLY_PENALIZED",
-                format!("Redemption for @{} (\"{}\") was manually penalized by channel editor", user_login, item_title),
+                format!("Redemption for @{} (\"{}\") was manually penalized by @{} (ID: {})", user_login, item_title, actor_user_login, actor_user_id),
             ),
             "RETRY" => (
                 "REDEMPTION_MANUALLY_RETRIED",
-                format!("Redemption for @{} (\"{}\") purchase was manually retried on market", user_login, item_title),
+                format!("Redemption purchase for @{} (\"{}\") was manually retried on market by @{} (ID: {})", user_login, item_title, actor_user_login, actor_user_id),
             ),
             _ => (
                 "REDEMPTION_MANUAL_ACTION",
-                format!("Redemption for @{} (\"{}\") was modified ({}) by channel editor", user_login, item_title, action),
+                format!("Redemption for @{} (\"{}\") was modified ({}) by @{} (ID: {})", user_login, item_title, action, actor_user_login, actor_user_id),
             ),
         };
 
@@ -422,7 +455,179 @@ impl ChannelLogger {
                 "user_login": user_login,
                 "item_name": item_name,
                 "action": action,
-                "editor_user_id": actor_user_id,
+                "actor_user_id": actor_user_id,
+                "actor_user_login": actor_user_login,
+            })),
+            None,
+        );
+    }
+
+    pub fn log_reward_manually_created(
+        &self,
+        broadcaster_id: &str,
+        reward_id: &str,
+        reward_title: &str,
+        reward_type: &str,
+        pricing_mode: &str,
+        actor_user_id: &str,
+        actor_user_login: &str,
+    ) {
+        self.log(
+            broadcaster_id,
+            ChannelLogLevel::Info,
+            ChannelLogCategory::Reward,
+            "REWARD_MANUALLY_CREATED",
+            format!("Reward \"{}\" ({}, {}) was created by @{} (ID: {})", reward_title, reward_type, pricing_mode, actor_user_login, actor_user_id),
+            Some(serde_json::json!({
+                "reward_id": reward_id,
+                "reward_title": reward_title,
+                "reward_type": reward_type,
+                "pricing_mode": pricing_mode,
+                "actor_user_id": actor_user_id,
+                "actor_user_login": actor_user_login,
+            })),
+            None,
+        );
+    }
+
+    pub fn log_reward_manually_updated(
+        &self,
+        broadcaster_id: &str,
+        reward_id: &str,
+        reward_title: &str,
+        actor_user_id: &str,
+        actor_user_login: &str,
+        updated_fields: Vec<String>,
+    ) {
+        let fields_str = if updated_fields.is_empty() {
+            "settings".to_string()
+        } else {
+            updated_fields.join(", ")
+        };
+        self.log(
+            broadcaster_id,
+            ChannelLogLevel::Info,
+            ChannelLogCategory::Reward,
+            "REWARD_MANUALLY_UPDATED",
+            format!("Reward \"{}\" settings ({}) were updated by @{} (ID: {})", reward_title, fields_str, actor_user_login, actor_user_id),
+            Some(serde_json::json!({
+                "reward_id": reward_id,
+                "reward_title": reward_title,
+                "updated_fields": updated_fields,
+                "actor_user_id": actor_user_id,
+                "actor_user_login": actor_user_login,
+            })),
+            None,
+        );
+    }
+
+    pub fn log_reward_manually_deleted(
+        &self,
+        broadcaster_id: &str,
+        reward_id: &str,
+        reward_title: &str,
+        actor_user_id: &str,
+        actor_user_login: &str,
+    ) {
+        self.log(
+            broadcaster_id,
+            ChannelLogLevel::Info,
+            ChannelLogCategory::Reward,
+            "REWARD_MANUALLY_DELETED",
+            format!("Reward \"{}\" was deleted by @{} (ID: {})", reward_title, actor_user_login, actor_user_id),
+            Some(serde_json::json!({
+                "reward_id": reward_id,
+                "reward_title": reward_title,
+                "actor_user_id": actor_user_id,
+                "actor_user_login": actor_user_login,
+            })),
+            None,
+        );
+    }
+
+    pub fn log_settings_manually_updated(
+        &self,
+        broadcaster_id: &str,
+        actor_user_id: &str,
+        actor_user_login: &str,
+        changed_settings: Vec<String>,
+    ) {
+        let changes_str = if changed_settings.is_empty() {
+            "settings".to_string()
+        } else {
+            changed_settings.join(", ")
+        };
+        self.log(
+            broadcaster_id,
+            ChannelLogLevel::Info,
+            ChannelLogCategory::System,
+            "SETTINGS_MANUALLY_UPDATED",
+            format!("Channel settings ({}) were updated by @{} (ID: {})", changes_str, actor_user_login, actor_user_id),
+            Some(serde_json::json!({
+                "changed_settings": changed_settings,
+                "actor_user_id": actor_user_id,
+                "actor_user_login": actor_user_login,
+            })),
+            None,
+        );
+    }
+
+    pub fn log_chat_messages_manually_updated(
+        &self,
+        broadcaster_id: &str,
+        actor_user_id: &str,
+        actor_user_login: &str,
+    ) {
+        self.log(
+            broadcaster_id,
+            ChannelLogLevel::Info,
+            ChannelLogCategory::System,
+            "CHAT_TEMPLATES_MANUALLY_UPDATED",
+            format!("Chat message templates were updated by @{} (ID: {})", actor_user_login, actor_user_id),
+            Some(serde_json::json!({
+                "actor_user_id": actor_user_id,
+                "actor_user_login": actor_user_login,
+            })),
+            None,
+        );
+    }
+
+    pub fn log_permission_manually_changed(
+        &self,
+        broadcaster_id: &str,
+        action: &str,
+        target_user_id: &str,
+        target_user_login: &str,
+        actor_user_id: &str,
+        actor_user_login: &str,
+    ) {
+        let (event_type, msg) = match action {
+            "GRANT" => (
+                "PERMISSION_GRANTED",
+                format!("Editor permission was granted to @{} (ID: {}) by @{} (ID: {})", target_user_login, target_user_id, actor_user_login, actor_user_id),
+            ),
+            "REVOKE" => (
+                "PERMISSION_REVOKED",
+                format!("Editor permission was revoked from @{} (ID: {}) by @{} (ID: {})", target_user_login, target_user_id, actor_user_login, actor_user_id),
+            ),
+            _ => (
+                "PERMISSION_CHANGED",
+                format!("Permissions for @{} (ID: {}) were modified ({}) by @{} (ID: {})", target_user_login, target_user_id, action, actor_user_login, actor_user_id),
+            ),
+        };
+
+        self.log(
+            broadcaster_id,
+            ChannelLogLevel::Info,
+            ChannelLogCategory::Auth,
+            event_type,
+            msg,
+            Some(serde_json::json!({
+                "action": action,
+                "target_user_id": target_user_id,
+                "target_user_login": target_user_login,
+                "actor_user_id": actor_user_id,
+                "actor_user_login": actor_user_login,
             })),
             None,
         );

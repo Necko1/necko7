@@ -10,6 +10,7 @@ use crate::state::AppState;
 
 pub struct AuthorizedChannel {
     pub user_id: String,
+    pub user_login: String,
     pub channel_id: String,
     pub role: ChannelRole,
 }
@@ -110,8 +111,15 @@ impl FromRequestParts<Arc<AppState>> for AuthorizedChannel {
                 }
             })?;
 
+        let user_login = state.db.get_user_by_twitch_id(&user_id).await
+            .ok()
+            .flatten()
+            .map(|u| u.login)
+            .unwrap_or_else(|| user_id.clone());
+
         Ok(AuthorizedChannel {
             user_id,
+            user_login,
             channel_id,
             role: permission.role,
         })

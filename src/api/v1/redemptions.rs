@@ -300,6 +300,7 @@ pub async fn retry_redemption(
                 Some(item_name),
                 "RETRY",
                 &auth.user_id,
+                &auth.user_login,
             );
 
             state.channel_logger.log_redemption_order_created(
@@ -467,6 +468,7 @@ pub async fn refund_redemption(
         redemption.market_item_name.as_deref().or(reward.market_item_name.as_deref()),
         "REFUND",
         &auth.user_id,
+        &auth.user_login,
     );
 
     tracing::info!(
@@ -579,6 +581,7 @@ pub async fn penalty_redemption(
         redemption.market_item_name.as_deref().or(reward.market_item_name.as_deref()),
         "PENALTY",
         &auth.user_id,
+        &auth.user_login,
     );
 
     tracing::info!(

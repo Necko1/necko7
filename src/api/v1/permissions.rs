@@ -137,11 +137,21 @@ pub async fn grant_permission(
 
     let perm = state.db.upsert_permission(&new_perm).await?;
 
+    state.channel_logger.log_permission_manually_changed(
+        &auth.channel_id,
+        "GRANT",
+        &perm.user_id,
+        &user.login,
+        &auth.user_id,
+        &auth.user_login,
+    );
+
     tracing::info!(
         channel_id = %auth.channel_id,
         granted_to = %perm.user_id,
         granted_to_login = %user.login,
         granted_by = %auth.user_id,
+        granted_by_login = %auth.user_login,
         "Channel editor permission granted"
     );
 
@@ -197,12 +207,28 @@ pub async fn revoke_permission(
         });
     }
 
+    let target_login = state.db.get_user_by_twitch_id(&user_id).await
+        .ok()
+        .flatten()
+        .map(|u| u.login)
+        .unwrap_or_else(|| user_id.clone());
+
     state.db.delete_permission(&auth.channel_id, &user_id).await?;
+
+    state.channel_logger.log_permission_manually_changed(
+        &auth.channel_id,
+        "REVOKE",
+        &user_id,
+        &target_login,
+        &auth.user_id,
+        &auth.user_login,
+    );
 
     tracing::info!(
         channel_id = %auth.channel_id,
         revoked_from = %user_id,
         revoked_by = %auth.user_id,
+        revoked_by_login = %auth.user_login,
         "Channel editor permission revoked"
     );
 
