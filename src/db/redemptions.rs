@@ -12,6 +12,7 @@ pub enum RedemptionStatus {
     FailedRefund,
     FailedPenalty,
     Completed,
+    ManualHold,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -222,6 +223,23 @@ impl Db {
     ) -> DbResult<()> {
         sqlx::query(
             "UPDATE redemptions SET status = 'FAILED_REFUND', fail_cause = $1, fail_description = $2, updated_at = NOW() WHERE twitch_redemption_id = $3"
+        )
+        .bind(fail_cause)
+        .bind(fail_description)
+        .bind(twitch_redemption_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn set_redemption_manual_hold(
+        &self,
+        twitch_redemption_id: Uuid,
+        fail_cause: &str,
+        fail_description: Option<&str>,
+    ) -> DbResult<()> {
+        sqlx::query(
+            "UPDATE redemptions SET status = 'MANUAL_HOLD', fail_cause = $1, fail_description = $2, updated_at = NOW() WHERE twitch_redemption_id = $3"
         )
         .bind(fail_cause)
         .bind(fail_description)
@@ -450,7 +468,7 @@ impl Db {
                 COUNT(*)::BIGINT AS total_redemptions,
                 COUNT(CASE WHEN r.status = 'COMPLETED' THEN 1 END)::BIGINT AS completed,
                 COUNT(CASE WHEN r.status IN ('FAILED_REFUND', 'FAILED_PENALTY') THEN 1 END)::BIGINT AS failed,
-                COUNT(CASE WHEN r.status IN ('PENDING', 'ORDER_CREATED') THEN 1 END)::BIGINT AS pending,
+                COUNT(CASE WHEN r.status IN ('PENDING', 'ORDER_CREATED', 'MANUAL_HOLD') THEN 1 END)::BIGINT AS pending,
                 COALESCE(SUM(r.twitch_points_cost), 0)::BIGINT AS total_points_spent,
                 COALESCE(SUM(CASE WHEN r.status = 'COMPLETED' THEN r.market_paid_price ELSE 0 END), 0)::BIGINT AS total_market_value
              FROM redemptions r
@@ -474,7 +492,7 @@ impl Db {
                 COUNT(*)::BIGINT AS total_redemptions,
                 COUNT(CASE WHEN r.status = 'COMPLETED' THEN 1 END)::BIGINT AS completed,
                 COUNT(CASE WHEN r.status IN ('FAILED_REFUND', 'FAILED_PENALTY') THEN 1 END)::BIGINT AS failed,
-                COUNT(CASE WHEN r.status IN ('PENDING', 'ORDER_CREATED') THEN 1 END)::BIGINT AS pending,
+                COUNT(CASE WHEN r.status IN ('PENDING', 'ORDER_CREATED', 'MANUAL_HOLD') THEN 1 END)::BIGINT AS pending,
                 COALESCE(SUM(r.twitch_points_cost), 0)::BIGINT AS total_points_spent,
                 COALESCE(SUM(CASE WHEN r.status = 'COMPLETED' THEN r.market_paid_price ELSE 0 END), 0)::BIGINT AS total_market_value
              FROM redemptions r
@@ -541,3 +559,26 @@ pub struct ViewerRedemptionStats {
     pub total_market_value: i64,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_redemption_status_serde() {
+        let statuses = vec![
+            (RedemptionStatus::Pending, "\"Pending\""),
+            (RedemptionStatus::OrderCreated, "\"OrderCreated\""),
+            (RedemptionStatus::FailedRefund, "\"FailedRefund\""),
+            (RedemptionStatus::FailedPenalty, "\"FailedPenalty\""),
+            (RedemptionStatus::Completed, "\"Completed\""),
+            (RedemptionStatus::ManualHold, "\"ManualHold\""),
+        ];
+
+        for (status, expected_json) in statuses {
+            let serialized = serde_json::to_string(&status).unwrap();
+            assert_eq!(serialized, expected_json);
+            let deserialized: RedemptionStatus = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(deserialized, status);
+        }
+    }
+}

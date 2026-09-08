@@ -6,12 +6,16 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 use crate::datetime::DateTimeExt;
 use crate::db::redemptions::RedemptionStatus;
+use crate::db::rewards::RewardType;
 use crate::messages::{
     MSG_TRADE_ACCEPTED, MSG_TRADE_CREATED, MSG_TRADE_FAILED_BUYER_PENALTY,
-    MSG_TRADE_FAILED_BUYER_REFUND, MSG_TRADE_FAILED_SELLER_REFUND, MSG_TRADE_TIMEOUT,
+    MSG_TRADE_FAILED_BUYER_REFUND, MSG_TRADE_TIMEOUT,
+    MSG_ORDER_CREATED, MSG_ORDER_RETRYING, MSG_ORDER_MANUAL_HOLD,
 };
 use crate::state::AppState;
+use crate::steam::market::errors::{classify_market_buy_for_error, MarketBuyForErrorKind};
 use crate::steam::market::sell_buy::GetBuyInfoData;
+use crate::steam::trade_link::TradeLink;
 
 enum OrderStage {
     Pending,
@@ -263,8 +267,8 @@ impl OrderWatcher {
 
         self.stage = OrderStage::NotClaimed;
 
-        let refund_on_buyer_fail = match self.state.db.get_broadcaster_setting(&self.broadcaster_id).await {
-            Ok(Some(s)) => s.refund_on_buyer_fail,
+        let broadcaster_setting = match self.state.db.get_broadcaster_setting(&self.broadcaster_id).await {
+            Ok(Some(s)) => s,
             Ok(None) => {
                 error!(broadcaster_id = %self.broadcaster_id, redemption_id = %self.redemption.redemption_id, "Broadcaster settings not found in DB during unhandled trade failure");
                 self.stage = OrderStage::Exit;
@@ -275,96 +279,357 @@ impl OrderWatcher {
                 return;
             }
         };
+        let refund_on_buyer_fail = broadcaster_setting.refund_on_buyer_fail;
 
         let buyer_fault = current_trade.causer.is_some_and(|c| c.eq("buyer"));
-        let should_refund = !buyer_fault || refund_on_buyer_fail;
 
+        if buyer_fault {
+            let should_refund = refund_on_buyer_fail;
+            warn!(
+                redemption_id = %self.redemption.redemption_id,
+                user_login = %self.redemption.user_login,
+                buyer_fault = true,
+                refund_on_buyer_fail,
+                should_refund,
+                "Trade was not claimed by buyer / timed out on market"
+            );
+
+            let hint = "Viewer did not accept the trade offer on Steam in time or declined it. Points were refunded or penalized according to channel settings. You can retry the redemption manually if needed.";
+            self.state.channel_logger.log(
+                &self.broadcaster_id,
+                crate::db::channel_logs::ChannelLogLevel::Warn,
+                crate::db::channel_logs::ChannelLogCategory::Redemption,
+                "TRADE_NOT_CLAIMED",
+                format!("Trade offer for item \"{}\" to @{} was not completed (fault: viewer)", current_trade.market_hash_name, self.redemption.user_login),
+                Some(serde_json::json!({
+                    "redemption_id": self.redemption.redemption_id,
+                    "user_login": self.redemption.user_login,
+                    "item_name": current_trade.market_hash_name,
+                    "buyer_fault": true,
+                    "refunded": should_refund,
+                })),
+                Some(hint.to_string()),
+            );
+
+            let msg_id = if should_refund {
+                MSG_TRADE_FAILED_BUYER_REFUND
+            } else {
+                MSG_TRADE_FAILED_BUYER_PENALTY
+            };
+
+            let message = self.state.render_chat_message(
+                &self.broadcaster_id,
+                msg_id,
+                &[
+                    ("buyer", &self.redemption.user_login),
+                    ("item", &current_trade.market_hash_name),
+                ],
+            );
+
+            if let Err(e) = self.state.send_chat_message(&self.broadcaster_id, &message, None).await {
+                error!(error = %e, redemption_id = %self.redemption.redemption_id, broadcaster_id = %self.broadcaster_id, "Failed to send not-claimed chat message");
+            };
+
+            let redemption_status = if should_refund { RedemptionStatus::FailedRefund } else { RedemptionStatus::FailedPenalty };
+
+            if let Err(e) = self.state.db.update_redemption_status(
+                self.redemption.redemption_id,
+                redemption_status,
+                Some("buyer_not_claimed"), None
+            ).await {
+                error!(error = %e, redemption_id = %self.redemption.redemption_id, status = ?redemption_status, "Failed to update redemption status in DB");
+                return;
+            };
+
+            if let Err(e) = self.state.with_broadcaster_token(&self.broadcaster_id, async |token| {
+                self.state.helix_client.update_redemption_status(
+                    &self.broadcaster_id,
+                    &self.redemption.reward_id.to_string(),
+                    &self.redemption.redemption_id.to_string(),
+                    should_refund,
+                    &token).await
+            }).await {
+                warn!(
+                    error = %e,
+                    redemption_id = %self.redemption.redemption_id,
+                    reward_id = %self.redemption.reward_id,
+                    broadcaster_id = %self.broadcaster_id,
+                    "Failed to update redemption status on Twitch Helix (it may have already been fulfilled/canceled)"
+                );
+            };
+
+            let state_for_balance = self.state.clone();
+            let bc_id_for_balance = self.broadcaster_id.clone();
+            self.state.spawn_task(async move {
+                let _ = state_for_balance.refresh_broadcaster_balance(&bc_id_for_balance).await;
+            });
+            return;
+        }
+
+        // --- Seller fault (!buyer_fault) ---
         warn!(
             redemption_id = %self.redemption.redemption_id,
             user_login = %self.redemption.user_login,
-            buyer_fault,
-            refund_on_buyer_fail,
-            should_refund,
-            "Trade was not claimed / timed out on market"
+            "Market seller did not deliver trade offer in time"
         );
-
-        let hint = if buyer_fault {
-            "Viewer did not accept the trade offer on Steam in time or declined it. Points were refunded or penalized according to channel settings. You can retry the redemption manually if needed."
-        } else {
-            "CSGO Market seller did not deliver the item in time. Order was cancelled by market, points were refunded to the viewer and funds returned to market balance."
-        };
-
-        self.state.channel_logger.log(
-            &self.broadcaster_id,
-            crate::db::channel_logs::ChannelLogLevel::Warn,
-            crate::db::channel_logs::ChannelLogCategory::Redemption,
-            "TRADE_NOT_CLAIMED",
-            format!("Trade offer for item \"{}\" to @{} was not completed (fault: {})", current_trade.market_hash_name, self.redemption.user_login, if buyer_fault { "viewer" } else { "market seller" }),
-            Some(serde_json::json!({
-                "redemption_id": self.redemption.redemption_id,
-                "user_login": self.redemption.user_login,
-                "item_name": current_trade.market_hash_name,
-                "buyer_fault": buyer_fault,
-                "refunded": should_refund,
-            })),
-            Some(hint.to_string()),
-        );
-
-        let msg_id = if refund_on_buyer_fail && buyer_fault {
-            MSG_TRADE_FAILED_BUYER_REFUND
-        } else if !refund_on_buyer_fail && buyer_fault {
-            MSG_TRADE_FAILED_BUYER_PENALTY
-        } else {
-            MSG_TRADE_FAILED_SELLER_REFUND
-        };
-
-        let message = self.state.render_chat_message(
-            &self.broadcaster_id,
-            msg_id,
-            &[
-                ("buyer", &self.redemption.user_login),
-                ("item", &current_trade.market_hash_name),
-            ],
-        );
-
-        if let Err(e) = self.state.send_chat_message(&self.broadcaster_id, &message, None).await {
-            error!(error = %e, redemption_id = %self.redemption.redemption_id, broadcaster_id = %self.broadcaster_id, "Failed to send not-claimed chat message");
-        };
-
-        let redemption_status = if should_refund { RedemptionStatus::FailedRefund }
-        else { RedemptionStatus::FailedPenalty };
-
-        if let Err(e) = self.state.db.update_redemption_status(
-            self.redemption.redemption_id,
-            redemption_status,
-            None, None
-        ).await {
-            error!(error = %e, redemption_id = %self.redemption.redemption_id, status = ?redemption_status, "Failed to update redemption status in DB");
-            return;
-        };
-
-        if let Err(e) = self.state.with_broadcaster_token(&self.broadcaster_id, async |token| {
-            self.state.helix_client.update_redemption_status(
-                &self.broadcaster_id,
-                &self.redemption.reward_id.to_string(),
-                &self.redemption.redemption_id.to_string(),
-                should_refund,
-                &token).await
-        }).await {
-            warn!(
-                error = %e,
-                redemption_id = %self.redemption.redemption_id,
-                reward_id = %self.redemption.reward_id,
-                broadcaster_id = %self.broadcaster_id,
-                "Failed to update redemption status on Twitch Helix (it may have already been fulfilled/canceled)"
-            );
-        };
 
         let state_for_balance = self.state.clone();
         let bc_id_for_balance = self.broadcaster_id.clone();
         self.state.spawn_task(async move {
             let _ = state_for_balance.refresh_broadcaster_balance(&bc_id_for_balance).await;
         });
+
+        let reward = match self.state.db.get_reward_by_twitch_id(self.redemption.reward_id).await {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                error!(reward_id = %self.redemption.reward_id, "Reward not found in DB during seller retry");
+                self.stage = OrderStage::Exit;
+                return;
+            }
+            Err(e) => {
+                error!(error = %e, reward_id = %self.redemption.reward_id, "DB error fetching reward during seller retry");
+                self.stage = OrderStage::Exit;
+                return;
+            }
+        };
+
+        loop {
+            let redemption = match self.state.db.get_redemption(self.redemption.redemption_id).await {
+                Ok(Some(r)) => r,
+                Ok(None) => {
+                    error!(redemption_id = %self.redemption.redemption_id, "Redemption not found in DB during seller failure handling");
+                    self.stage = OrderStage::Exit;
+                    return;
+                }
+                Err(e) => {
+                    error!(error = %e, redemption_id = %self.redemption.redemption_id, "DB error fetching redemption during seller failure handling");
+                    self.stage = OrderStage::Exit;
+                    return;
+                }
+            };
+
+            let trade_link = match TradeLink::parse(&redemption.user_trade_link) {
+                Some(tl) => tl,
+                None => {
+                    error!(redemption_id = %self.redemption.redemption_id, "Invalid trade link stored during seller retry");
+                    self.stage = OrderStage::Exit;
+                    return;
+                }
+            };
+
+            if redemption.retry_count >= 2 {
+                warn!(redemption_id = %self.redemption.redemption_id, "Seller failed and retries already exhausted, placing on MANUAL_HOLD");
+                let _ = self.state.db.set_redemption_manual_hold(
+                    self.redemption.redemption_id,
+                    "seller_timeout_retries_exhausted",
+                    Some("Market seller did not deliver item and auto-retry limit reached"),
+                ).await;
+                self.state.channel_logger.log_redemption_manual_hold(
+                    &self.broadcaster_id,
+                    &self.redemption.redemption_id.to_string(),
+                    &self.redemption.user_login,
+                    &current_trade.market_hash_name,
+                    "Market seller did not deliver item and retry limit reached",
+                    None,
+                );
+                let message = self.state.render_chat_message(
+                    &self.broadcaster_id,
+                    MSG_ORDER_MANUAL_HOLD,
+                    &[
+                        ("buyer", &self.redemption.user_login),
+                        ("item", &current_trade.market_hash_name),
+                    ],
+                );
+                let _ = self.state.send_chat_message(&self.broadcaster_id, &message, None).await;
+                self.stage = OrderStage::Exit;
+                return;
+            }
+
+            let new_retry_count = match self.state.db.increment_retry_count(self.redemption.redemption_id).await {
+                Ok(c) => c,
+                Err(e) => {
+                    error!(error = %e, redemption_id = %self.redemption.redemption_id, "Failed to increment retry count in DB");
+                    self.stage = OrderStage::Exit;
+                    return;
+                }
+            };
+            let new_custom_id = format!("{}-{}", self.redemption.redemption_id, new_retry_count);
+
+            info!(
+                redemption_id = %self.redemption.redemption_id,
+                retry_count = new_retry_count,
+                item = %current_trade.market_hash_name,
+                "Seller failed; retrying market purchase automatically"
+            );
+
+            // Notify chat about retry
+            let retrying_msg = self.state.render_chat_message(
+                &self.broadcaster_id,
+                MSG_ORDER_RETRYING,
+                &[("buyer", &self.redemption.user_login), ("item", &current_trade.market_hash_name)],
+            );
+            let _ = self.state.send_chat_message(&self.broadcaster_id, &retrying_msg, None).await;
+
+            // Wait 5 seconds before retrying
+            tokio::time::sleep(Duration::from_secs(5)).await;
+
+            // Double check if order was already created on market
+            if let Ok(info) = self.state.market_client.get_buy_info(&self.api_key, &new_custom_id).await {
+                if info.success && info.data.as_ref().map_or(false, |d| !d.is_failed()) {
+                    let data = info.data.unwrap();
+                    let paid_price = (data.paid * 100.0) as i64;
+                    let _ = self.state.db.set_redemption_order_created(
+                        self.redemption.redemption_id,
+                        paid_price,
+                        Some(&current_trade.market_hash_name),
+                        new_retry_count,
+                    ).await;
+
+                    self.redemption.custom_id = new_custom_id;
+                    self.stage = OrderStage::Pending;
+                    self.started_at = std::time::Instant::now();
+                    return;
+                }
+            }
+
+            let (base_price, dev) = match reward.reward_type {
+                RewardType::Pool => {
+                    let pool_item = reward.pool_items.as_ref()
+                        .and_then(|j| j.0.iter().find(|i| i.market_hash_name == current_trade.market_hash_name));
+                    if let Some(pi) = pool_item {
+                        (pi.current_market_price as i64, pi.permissible_market_price_deviation as i64)
+                    } else {
+                        (reward.current_market_price as i64, reward.permissible_market_price_deviation as i64)
+                    }
+                }
+                _ => (reward.current_market_price as i64, reward.permissible_market_price_deviation as i64),
+            };
+            let max_price_i64 = base_price + (base_price * dev / 100);
+            let max_price = max_price_i64.clamp(0, i32::MAX as i64) as i32;
+
+            let buy_res = self.state.market_client.buy_for(
+                &self.api_key,
+                &current_trade.market_hash_name,
+                max_price,
+                broadcaster_setting.market_chance_to_transfer,
+                trade_link,
+                &new_custom_id,
+            ).await;
+
+            match buy_res {
+                Ok(res) if res.success => {
+                    let paid_price = res.price.unwrap_or(max_price as i64);
+                    let _ = self.state.db.set_redemption_order_created(
+                        self.redemption.redemption_id,
+                        paid_price,
+                        Some(&current_trade.market_hash_name),
+                        new_retry_count,
+                    ).await;
+
+                    self.state.channel_logger.log_redemption_order_created(
+                        &self.broadcaster_id,
+                        &self.redemption.redemption_id.to_string(),
+                        &current_trade.market_hash_name,
+                        paid_price,
+                        &reward.currency,
+                        &self.redemption.user_login,
+                    );
+
+                    let msg = self.state.render_chat_message(
+                        &self.broadcaster_id,
+                        MSG_ORDER_CREATED,
+                        &[("buyer", &self.redemption.user_login), ("item", &current_trade.market_hash_name)],
+                    );
+                    let _ = self.state.send_chat_message(&self.broadcaster_id, &msg, None).await;
+
+                    self.redemption.custom_id = new_custom_id;
+                    self.stage = OrderStage::Pending;
+                    self.started_at = std::time::Instant::now();
+                    return;
+                }
+                Ok(res) => {
+                    let error_msg = res.error.unwrap_or_else(|| "Unknown market error".to_string());
+                    let code = res.code.unwrap_or(0);
+                    let kind = classify_market_buy_for_error(code, &error_msg);
+
+                    if kind == MarketBuyForErrorKind::NotEnoughFunds {
+                        warn!(redemption_id = %self.redemption.redemption_id, "Market balance insufficient during seller retry, placing on MANUAL_HOLD");
+                        let _ = self.state.db.set_redemption_manual_hold(
+                            self.redemption.redemption_id,
+                            "no_money",
+                            Some(&error_msg),
+                        ).await;
+                        self.state.channel_logger.log_redemption_manual_hold(
+                            &self.broadcaster_id,
+                            &self.redemption.redemption_id.to_string(),
+                            &self.redemption.user_login,
+                            &current_trade.market_hash_name,
+                            "Insufficient bot balance on seller retry",
+                            Some(&error_msg),
+                        );
+                        let msg = self.state.render_chat_message(
+                            &self.broadcaster_id,
+                            MSG_ORDER_MANUAL_HOLD,
+                            &[("buyer", &self.redemption.user_login), ("item", &current_trade.market_hash_name)],
+                        );
+                        let _ = self.state.send_chat_message(&self.broadcaster_id, &msg, None).await;
+                        self.stage = OrderStage::Exit;
+                        return;
+                    }
+
+                    if new_retry_count >= 2 {
+                        warn!(redemption_id = %self.redemption.redemption_id, "Retries exhausted during seller failure, placing on MANUAL_HOLD");
+                        let _ = self.state.db.set_redemption_manual_hold(
+                            self.redemption.redemption_id,
+                            "seller_timeout_retries_exhausted",
+                            Some(&error_msg),
+                        ).await;
+                        self.state.channel_logger.log_redemption_manual_hold(
+                            &self.broadcaster_id,
+                            &self.redemption.redemption_id.to_string(),
+                            &self.redemption.user_login,
+                            &current_trade.market_hash_name,
+                            "Seller timeout and auto-retries exhausted",
+                            Some(&error_msg),
+                        );
+                        let msg = self.state.render_chat_message(
+                            &self.broadcaster_id,
+                            MSG_ORDER_MANUAL_HOLD,
+                            &[("buyer", &self.redemption.user_login), ("item", &current_trade.market_hash_name)],
+                        );
+                        let _ = self.state.send_chat_message(&self.broadcaster_id, &msg, None).await;
+                        self.stage = OrderStage::Exit;
+                        return;
+                    }
+                }
+                Err(e) => {
+                    error!(error = %e, redemption_id = %self.redemption.redemption_id, "Network error during seller retry");
+                    if new_retry_count >= 2 {
+                        let _ = self.state.db.set_redemption_manual_hold(
+                            self.redemption.redemption_id,
+                            "network_error_retries_exhausted",
+                            Some(&e.to_string()),
+                        ).await;
+                        self.state.channel_logger.log_redemption_manual_hold(
+                            &self.broadcaster_id,
+                            &self.redemption.redemption_id.to_string(),
+                            &self.redemption.user_login,
+                            &current_trade.market_hash_name,
+                            "Network error on seller retry, retries exhausted",
+                            Some(&e.to_string()),
+                        );
+                        let msg = self.state.render_chat_message(
+                            &self.broadcaster_id,
+                            MSG_ORDER_MANUAL_HOLD,
+                            &[("buyer", &self.redemption.user_login), ("item", &current_trade.market_hash_name)],
+                        );
+                        let _ = self.state.send_chat_message(&self.broadcaster_id, &msg, None).await;
+                        self.stage = OrderStage::Exit;
+                        return;
+                    }
+                }
+            }
+        }
     }
 
     async fn process_timed_out(&mut self) {

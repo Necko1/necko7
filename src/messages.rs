@@ -25,6 +25,8 @@ pub const MSG_ORDERS_FAILED_NO_MONEY_PENALTY: &str = "orders.failed_no_money_pen
 pub const MSG_ORDERS_FAILED_FILTER_EXHAUSTED: &str = "orders.failed_filter_exhausted";
 pub const MSG_ORDERS_MARKET_ERROR: &str = "orders.market_error";
 pub const MSG_ORDERS_TRADE_LINK_INVALID: &str = "orders.trade_link_invalid";
+pub const MSG_ORDERS_RETRYING: &str = "orders.retrying";
+pub const MSG_ORDERS_MANUAL_HOLD: &str = "orders.manual_hold";
 
 // ── Market Errors Message Keys (buy-for) ───────────────────────────────────
 pub const MSG_MARKET_ERR_UNKNOWN: &str = "market_errors.unknown";
@@ -64,6 +66,8 @@ pub const MSG_ORDER_FAILED: &str = MSG_ORDERS_FAILED;
 pub const MSG_ORDER_FAILED_NO_MONEY_REFUND: &str = MSG_ORDERS_FAILED_NO_MONEY_REFUND;
 pub const MSG_ORDER_FAILED_NO_MONEY_PENALTY: &str = MSG_ORDERS_FAILED_NO_MONEY_PENALTY;
 pub const MSG_ORDER_FAILED_FILTER_EXHAUSTED: &str = MSG_ORDERS_FAILED_FILTER_EXHAUSTED;
+pub const MSG_ORDER_RETRYING: &str = MSG_ORDERS_RETRYING;
+pub const MSG_ORDER_MANUAL_HOLD: &str = MSG_ORDERS_MANUAL_HOLD;
 pub const MSG_MARKET_ERROR: &str = MSG_ORDERS_MARKET_ERROR;
 pub const MSG_TRADE_CREATED: &str = MSG_TRADES_CREATED;
 pub const MSG_TRADE_ACCEPTED: &str = MSG_TRADES_ACCEPTED;
@@ -88,6 +92,8 @@ pub struct OrdersMessages {
     pub failed_filter_exhausted: String,
     pub market_error: String,
     pub trade_link_invalid: String,
+    pub retrying: String,
+    pub manual_hold: String,
 }
 
 impl Default for OrdersMessages {
@@ -100,6 +106,8 @@ impl Default for OrdersMessages {
             failed_filter_exhausted: "@{buyer} No items found matching the reward filters (attempts exhausted). Channel points refunded.".to_string(),
             market_error: "@{buyer} An internal market error occurred. Please check logs for details.".to_string(),
             trade_link_invalid: "@{buyer} Invalid Steam trade URL. Channel points refunded.".to_string(),
+            retrying: "@{buyer} Initial market order attempt failed, retrying automatically. This may take up to 30 minutes.".to_string(),
+            manual_hold: "@{buyer} Item purchase could not be completed automatically. Your request is on hold for manual streamer review. Channel points are preserved.".to_string(),
         }
     }
 }
@@ -226,6 +234,8 @@ impl From<serde_json::Value> for CategorizedChatMessages {
                 if let Some(v) = orders_val.get("failed_filter_exhausted").and_then(|s| s.as_str()) { result.orders.failed_filter_exhausted = v.to_string(); }
                 if let Some(v) = orders_val.get("market_error").and_then(|s| s.as_str()) { result.orders.market_error = v.to_string(); }
                 if let Some(v) = orders_val.get("trade_link_invalid").and_then(|s| s.as_str()) { result.orders.trade_link_invalid = v.to_string(); }
+                if let Some(v) = orders_val.get("retrying").and_then(|s| s.as_str()) { result.orders.retrying = v.to_string(); }
+                if let Some(v) = orders_val.get("manual_hold").and_then(|s| s.as_str()) { result.orders.manual_hold = v.to_string(); }
             }
             if let Some(m_val) = obj.get("market_errors").and_then(|v| v.as_object()) {
                 if let Some(v) = m_val.get("unknown").and_then(|s| s.as_str()) { result.market_errors.unknown = v.to_string(); }
@@ -276,6 +286,8 @@ impl From<serde_json::Value> for CategorizedChatMessages {
                     ("orders", "failed_filter_exhausted") => result.orders.failed_filter_exhausted = val_str,
                     ("orders", "market_error") => result.orders.market_error = val_str,
                     ("orders", "trade_link_invalid") => result.orders.trade_link_invalid = val_str,
+                    ("orders", "retrying") => result.orders.retrying = val_str,
+                    ("orders", "manual_hold") => result.orders.manual_hold = val_str,
 
                     ("market_errors", "unknown") => result.market_errors.unknown = val_str,
                     ("market_errors", "trade_link_check_failed") => result.market_errors.trade_link_check_failed = val_str,
@@ -336,6 +348,8 @@ impl CategorizedChatMessages {
                 "failed_filter_exhausted" => Some(&self.orders.failed_filter_exhausted),
                 "market_error" => Some(&self.orders.market_error),
                 "trade_link_invalid" => Some(&self.orders.trade_link_invalid),
+                "retrying" => Some(&self.orders.retrying),
+                "manual_hold" => Some(&self.orders.manual_hold),
                 _ => None,
             },
             "market_errors" => match key {
@@ -403,6 +417,8 @@ impl CategorizedChatMessages {
                     ("orders", "failed_filter_exhausted") => merged.orders.failed_filter_exhausted = trimmed.to_string(),
                     ("orders", "market_error") => merged.orders.market_error = trimmed.to_string(),
                     ("orders", "trade_link_invalid") => merged.orders.trade_link_invalid = trimmed.to_string(),
+                    ("orders", "retrying") => merged.orders.retrying = trimmed.to_string(),
+                    ("orders", "manual_hold") => merged.orders.manual_hold = trimmed.to_string(),
 
                     ("market_errors", "unknown") => merged.market_errors.unknown = trimmed.to_string(),
                     ("market_errors", "trade_link_check_failed") => merged.market_errors.trade_link_check_failed = trimmed.to_string(),
@@ -447,6 +463,8 @@ impl CategorizedChatMessages {
         orders.insert("failed_filter_exhausted".to_string(), vec!["buyer".to_string(), "attempts".to_string()]);
         orders.insert("market_error".to_string(), vec!["buyer".to_string(), "item".to_string()]);
         orders.insert("trade_link_invalid".to_string(), vec!["buyer".to_string()]);
+        orders.insert("retrying".to_string(), vec!["buyer".to_string(), "item".to_string()]);
+        orders.insert("manual_hold".to_string(), vec!["buyer".to_string(), "item".to_string()]);
 
         let mut market_errors = HashMap::new();
         market_errors.insert("unknown".to_string(), vec!["buyer".to_string(), "item".to_string()]);
@@ -504,6 +522,8 @@ pub fn resolve_category_and_key(message_id: &str) -> Option<(&'static str, &'sta
         "orders.failed_filter_exhausted" => Some(("orders", "failed_filter_exhausted")),
         "orders.market_error" => Some(("orders", "market_error")),
         "orders.trade_link_invalid" => Some(("orders", "trade_link_invalid")),
+        "orders.retrying" => Some(("orders", "retrying")),
+        "orders.manual_hold" => Some(("orders", "manual_hold")),
 
         "market_errors.unknown" => Some(("market_errors", "unknown")),
         "market_errors.trade_link_check_failed" => Some(("market_errors", "trade_link_check_failed")),
@@ -538,6 +558,8 @@ pub fn resolve_category_and_key(message_id: &str) -> Option<(&'static str, &'sta
         "order_failed_no_money_refund" => Some(("orders", "failed_no_money_refund")),
         "order_failed_no_money_penalty" => Some(("orders", "failed_no_money_penalty")),
         "order_failed_filter_exhausted" => Some(("orders", "failed_filter_exhausted")),
+        "order_retrying" => Some(("orders", "retrying")),
+        "order_manual_hold" => Some(("orders", "manual_hold")),
         "market_error" => Some(("orders", "market_error")),
         "trade_link_invalid" => Some(("orders", "trade_link_invalid")),
 

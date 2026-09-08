@@ -171,19 +171,51 @@ impl ChannelLogger {
         redemption_id: &str,
         user_login: &str,
         trade_link: &str,
+        item_name: Option<&str>,
     ) {
+        let msg = match item_name {
+            Some(name) => format!("Viewer @{} provided an invalid or private Steam trade link (rolled item: \"{}\")", user_login, name),
+            None => format!("Viewer @{} provided an invalid or private Steam trade link", user_login),
+        };
         self.log(
             broadcaster_id,
             ChannelLogLevel::Warn,
             ChannelLogCategory::Redemption,
             "TRADE_LINK_INVALID",
-            format!("Viewer @{} provided an invalid or private Steam trade link", user_login),
+            msg,
             Some(serde_json::json!({
                 "redemption_id": redemption_id,
                 "user_login": user_login,
                 "trade_link": trade_link,
+                "item_name": item_name,
             })),
-            Some("The viewer needs to set their Steam inventory to public and provide a valid Trade URL in reward input. Once resolved, you can retry the redemption manually in the rewards dashboard.".to_string()),
+            Some("The viewer needs to set their Steam inventory to public and provide a valid Trade URL in reward input. Channel points have been refunded.".to_string()),
+        );
+    }
+
+    pub fn log_redemption_manual_hold(
+        &self,
+        broadcaster_id: &str,
+        redemption_id: &str,
+        user_login: &str,
+        item_name: &str,
+        reason: &str,
+        details: Option<&str>,
+    ) {
+        self.log(
+            broadcaster_id,
+            ChannelLogLevel::Warn,
+            ChannelLogCategory::Redemption,
+            "REDEMPTION_MANUAL_HOLD",
+            format!("Redemption for item \"{}\" by @{} placed on manual hold (reason: {})", item_name, user_login, reason),
+            Some(serde_json::json!({
+                "redemption_id": redemption_id,
+                "user_login": user_login,
+                "item_name": item_name,
+                "reason": reason,
+                "details": details,
+            })),
+            Some("Channel points are preserved. You can retry the purchase, penalize, or refund the redemption manually in the dashboard.".to_string()),
         );
     }
 
