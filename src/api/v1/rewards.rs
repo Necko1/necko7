@@ -776,8 +776,6 @@ pub struct UpdateRewardBody {
     pub twitch_title: Option<String>,
     /// New Twitch reward description
     pub twitch_description: Option<String>,
-    /// New current market price in cents
-    pub current_market_price: Option<i32>,
     /// New permissible market price deviation percentage
     pub permissible_market_price_deviation: Option<i32>,
     /// New Twitch price markup percentage
@@ -831,6 +829,7 @@ pub struct UpdateRewardBody {
 fn detect_reward_changes(
     body: &UpdateRewardBody,
     existing: &crate::db::rewards::Reward,
+    new_market_price: Option<i32>,
 ) -> Vec<crate::channel_log::FieldChange> {
     let mut changes = Vec::new();
 
@@ -912,7 +911,7 @@ fn detect_reward_changes(
         }
     }
 
-    if let Some(new_cur_price) = body.current_market_price {
+    if let Some(new_cur_price) = new_market_price {
         if new_cur_price != existing.current_market_price {
             let curr = &existing.currency;
             let old_major = crate::steam::market::minor_to_major(existing.current_market_price as i64, curr);
@@ -1258,18 +1257,189 @@ pub async fn update_reward(
     }
 
     let setting = state.db.get_or_create_broadcaster_setting(&auth.channel_id).await?;
+    let effective_reward_type = body.reward_type.unwrap_or(existing.reward_type);
     let effective_pricing_mode = body.pricing_mode.unwrap_or(existing.pricing_mode);
+    let effective_price_strategy = body.price_strategy.or(existing.price_strategy).unwrap_or(crate::db::rewards::PriceStrategy::Average);
+    let currency = existing.currency.clone();
 
-    let new_cost = if let Some(manual_pts) = body.manual_twitch_points {
-        if effective_pricing_mode == crate::db::rewards::PricingMode::Manual {
+    let mut new_market_price: Option<i32> = None;
+    let mut resolved_pool_items: Option<Vec<crate::db::rewards::PoolItemConfig>> = None;
+
+    match effective_reward_type {
+        crate::db::rewards::RewardType::Pool => {
+            let should_resolve_pool = body.pool_items.is_some()
+                || body.reward_type == Some(crate::db::rewards::RewardType::Pool)
+                || (existing.reward_type == crate::db::rewards::RewardType::Pool && body.price_strategy.is_some());
+
+            if should_resolve_pool {
+                let mut pool = match body.pool_items.clone().or_else(|| existing.pool_items.as_ref().map(|j| j.0.clone())) {
+                    Some(items) if !items.is_empty() => items,
+                    _ => return Err(ApiError::BadRequest {
+                        message: "pool_items cannot be empty for POOL reward type".into(),
+                        param: "pool_items".into(),
+                    }),
+                };
+
+                for item in &pool {
+                    if item.market_hash_name.trim().is_empty() {
+                        return Err(ApiError::BadRequest {
+                            message: "pool item market_hash_name cannot be empty".into(),
+                            param: "pool_items".into(),
+                        });
+                    }
+                    if item.weight <= 0.0 || !item.weight.is_finite() {
+                        return Err(ApiError::BadRequest {
+                            message: "pool item weight must be a positive finite number".into(),
+                            param: "pool_items".into(),
+                        });
+                    }
+                }
+
+                let all_prices = state.get_cached_or_fetch_prices(&currency).await
+                    .map_err(|e| ApiError::Internal { message: format!("Failed to fetch market prices: {}", e) })?;
+
+                let price_map: std::collections::HashMap<&str, f64> = all_prices
+                    .iter()
+                    .map(|i| (i.market_hash_name.as_str(), i.price))
+                    .collect();
+
+                let mut price_weight_pairs: Vec<(f64, f64)> = Vec::with_capacity(pool.len());
+                let mut prices_vec: Vec<f64> = Vec::with_capacity(pool.len());
+
+                for item in &mut pool {
+                    if let Some(&p_major) = price_map.get(item.market_hash_name.as_str()) {
+                        item.current_market_price = market::major_to_minor(p_major, &currency) as i32;
+                    } else if item.current_market_price <= 0 {
+                        if let Some(ref existing_items) = existing.pool_items {
+                            if let Some(prev) = existing_items.0.iter().find(|i| i.market_hash_name == item.market_hash_name) {
+                                item.current_market_price = prev.current_market_price;
+                            }
+                        }
+                    }
+                    let p_major = market::minor_to_major(item.current_market_price as i64, &currency);
+                    prices_vec.push(p_major);
+                    price_weight_pairs.push((p_major, item.weight));
+                }
+
+                let effective_price_major = match effective_price_strategy {
+                    crate::db::rewards::PriceStrategy::Average => {
+                        crate::steam::market::prices::calculate_weighted_average(&price_weight_pairs).unwrap_or(0.0)
+                    }
+                    crate::db::rewards::PriceStrategy::Median => {
+                        crate::steam::market::prices::calculate_median(&mut prices_vec).unwrap_or(0.0)
+                    }
+                    crate::db::rewards::PriceStrategy::Max => {
+                        crate::steam::market::prices::calculate_max(&prices_vec).unwrap_or(0.0)
+                    }
+                };
+
+                if effective_price_major <= 0.0 {
+                    return Err(ApiError::BadRequest {
+                        message: "Effective price for pool items is zero or negative; check item prices".into(),
+                        param: "pool_items".into(),
+                    });
+                }
+
+                new_market_price = Some(market::major_to_minor(effective_price_major, &currency) as i32);
+                resolved_pool_items = Some(pool);
+            }
+        }
+        crate::db::rewards::RewardType::Fixed => {
+            let should_resolve_fixed = body.market_item_name.is_some()
+                || body.reward_type == Some(crate::db::rewards::RewardType::Fixed);
+
+            if should_resolve_fixed {
+                let item_name = match body.market_item_name.as_deref().or(existing.market_item_name.as_deref()) {
+                    Some(name) if !name.trim().is_empty() => name.trim().to_string(),
+                    _ => return Err(ApiError::BadRequest {
+                        message: "market_item_name is required for FIXED reward type".into(),
+                        param: "market_item_name".into(),
+                    }),
+                };
+
+                if setting.market_api_key.trim().is_empty() {
+                    return Err(ApiError::BadRequest {
+                        message: "Market API key is not configured for this channel".into(),
+                        param: "market_api_key".into(),
+                    });
+                }
+
+                let items_res = state.market_client.search_item(&setting.market_api_key, &item_name).await
+                    .map_err(|e| ApiError::Internal { message: format!("Failed to search item {}: {}", item_name, e) })?;
+
+                if let Some(err) = items_res.error {
+                    return Err(ApiError::Internal { message: format!("Market error searching item: {}", err) });
+                }
+
+                if !items_res.success || items_res.data.is_none() {
+                    return Err(ApiError::NotFound { message: format!("Item '{}' not found on market", item_name) });
+                }
+
+                let items_data = items_res.data.unwrap();
+                let cheapest = items_data.iter().min_by_key(|i| i.price)
+                    .ok_or_else(|| ApiError::NotFound { message: format!("No listings available for '{}'", item_name) })?;
+
+                new_market_price = Some(cheapest.price as i32);
+            }
+        }
+        crate::db::rewards::RewardType::Filter => {
+            let should_resolve_filter = body.filter_config.is_some()
+                || body.reward_type == Some(crate::db::rewards::RewardType::Filter)
+                || (existing.reward_type == crate::db::rewards::RewardType::Filter && body.price_strategy.is_some());
+
+            if should_resolve_filter {
+                let filter = match body.filter_config.as_ref().or(existing.filter_config.as_ref().map(|j| &j.0)) {
+                    Some(f) => f,
+                    _ => return Err(ApiError::BadRequest {
+                        message: "filter_config is required for FILTER reward type".into(),
+                        param: "filter_config".into(),
+                    }),
+                };
+
+                let all_prices = state.get_cached_or_fetch_prices(&currency).await
+                    .map_err(|e| ApiError::Internal { message: format!("Failed to fetch market prices: {}", e) })?;
+
+                let matching = crate::steam::market::prices::filter_prices(&all_prices, filter);
+                if matching.is_empty() {
+                    return Err(ApiError::BadRequest {
+                        message: "No market items match the specified filter criteria".into(),
+                        param: "filter_config".into(),
+                    });
+                }
+
+                let mut prices: Vec<f64> = matching.iter().map(|i| i.price).collect();
+                let effective_price_major = match effective_price_strategy {
+                    crate::db::rewards::PriceStrategy::Average => {
+                        crate::steam::market::prices::calculate_average(&prices).unwrap_or(filter.max_price)
+                    }
+                    crate::db::rewards::PriceStrategy::Median => {
+                        crate::steam::market::prices::calculate_median(&mut prices).unwrap_or(filter.max_price)
+                    }
+                    crate::db::rewards::PriceStrategy::Max => {
+                        crate::steam::market::prices::calculate_max(&prices).unwrap_or(filter.max_price)
+                    }
+                };
+
+                new_market_price = Some(market::major_to_minor(effective_price_major, &currency) as i32);
+            }
+        }
+    }
+
+    let effective_price = new_market_price.unwrap_or(existing.current_market_price);
+
+    let new_cost = if effective_pricing_mode == crate::db::rewards::PricingMode::Manual {
+        if let Some(manual_pts) = body.manual_twitch_points {
             Some(manual_pts.max(1))
+        } else if body.pricing_mode == Some(crate::db::rewards::PricingMode::Manual) {
+            existing.manual_twitch_points.map(|pts| (pts as u32).max(1))
         } else {
             None
         }
-    } else if effective_pricing_mode == crate::db::rewards::PricingMode::Auto && (body.twitch_price_markup_percentage.is_some() || body.current_market_price.is_some()) {
+    } else if effective_pricing_mode == crate::db::rewards::PricingMode::Auto
+        && (body.twitch_price_markup_percentage.is_some() || new_market_price.is_some() || body.pricing_mode.is_some())
+    {
         let effective_markup = body.twitch_price_markup_percentage.unwrap_or(existing.twitch_price_markup_percentage);
-        let effective_price = body.current_market_price.unwrap_or(existing.current_market_price);
-        let price_decimal = market::minor_to_major(effective_price as i64, &existing.currency);
+        let price_decimal = market::minor_to_major(effective_price as i64, &currency);
         let markup_factor = 1.0 + (effective_markup as f64 / 100.0).max(0.0);
         let raw_cost = price_decimal * markup_factor * setting.base_price_multiplier as f64;
         Some((raw_cost.ceil() as u32).max(1))
@@ -1337,7 +1507,7 @@ pub async fn update_reward(
         }
     };
 
-    let changes = detect_reward_changes(&body, &existing);
+    let changes = detect_reward_changes(&body, &existing, new_market_price);
     let has_price_change = changes.iter().any(|c| {
         c.field == "min_market_price" || c.field == "max_market_price" || c.field == "current_market_price"
     });
@@ -1351,11 +1521,11 @@ pub async fn update_reward(
         price_strategy: body.price_strategy,
         market_item_name: body.market_item_name,
         filter_config: body.filter_config.map(sqlx::types::Json),
-        pool_items: body.pool_items.map(sqlx::types::Json),
+        pool_items: resolved_pool_items.map(sqlx::types::Json).or_else(|| body.pool_items.map(sqlx::types::Json)),
         manual_twitch_points: body.manual_twitch_points.map(|v| v as i32),
         twitch_title: body.twitch_title,
         twitch_description: body.twitch_description,
-        current_market_price: body.current_market_price,
+        current_market_price: new_market_price,
         permissible_market_price_deviation: body.permissible_market_price_deviation,
         twitch_price_markup_percentage: body.twitch_price_markup_percentage,
         global_cooldown_seconds: body.global_cooldown_seconds,
@@ -2364,13 +2534,70 @@ mod tests {
             "max_redemptions_per_user_per_stream": 1
         }"#;
         let update: UpdateRewardBody = serde_json::from_str(json_body).unwrap();
-        let changes = detect_reward_changes(&update, &reward);
+        let changes = detect_reward_changes(&update, &reward, None);
 
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].field, "max_redemptions_per_user_per_stream");
         assert_eq!(changes[0].old_value, serde_json::json!(0));
         assert_eq!(changes[0].new_value, serde_json::json!(1));
         assert_eq!(changes[0].summary, "max_per_user_per_stream: 0 -> 1");
+    }
+
+    #[test]
+    fn test_detect_reward_changes_with_calculated_market_price() {
+        let reward = crate::db::rewards::Reward {
+            twitch_id: uuid::Uuid::new_v4(),
+            is_paused: false,
+            pause_reason: None,
+            is_deleted: false,
+            streamer_id: "12345".to_string(),
+            reward_type: crate::db::rewards::RewardType::Pool,
+            pricing_mode: crate::db::rewards::PricingMode::Manual,
+            price_strategy: Some(crate::db::rewards::PriceStrategy::Average),
+            market_item_name: None,
+            filter_config: None,
+            pool_items: None,
+            manual_twitch_points: Some(750),
+            twitch_title: "Case".to_string(),
+            twitch_description: "Desc".to_string(),
+            current_market_price: 63,
+            permissible_market_price_deviation: 10,
+            twitch_price_markup_percentage: 0,
+            global_cooldown_seconds: 0,
+            max_redemptions_per_stream: 0,
+            max_redemptions_per_user_per_stream: 0,
+            market_autobuy: true,
+            currency: "RUB".to_string(),
+            min_market_price: None,
+            max_market_price: None,
+            chat_min_messages: None,
+            chat_min_characters: None,
+            chat_time_window_hours: None,
+            chat_logical_operator: None,
+            refund_if_chat_req_failed: true,
+            purchase_limits: None,
+            is_public: true,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        let json_body = r#"{
+            "pool_items": [
+                {
+                    "market_hash_name": "AK-47 | Safari Mesh (Field-Tested)",
+                    "weight": 1.0,
+                    "permissible_market_price_deviation": 10
+                }
+            ]
+        }"#;
+        let update: UpdateRewardBody = serde_json::from_str(json_body).unwrap();
+        // Passing calculated market price of 58 cents (differs from existing 63)
+        let changes = detect_reward_changes(&update, &reward, Some(58));
+
+        assert!(changes.iter().any(|c| c.field == "current_market_price"));
+        let price_change = changes.iter().find(|c| c.field == "current_market_price").unwrap();
+        assert_eq!(price_change.old_value, serde_json::json!(0.63));
+        assert_eq!(price_change.new_value, serde_json::json!(0.58));
     }
 }
 
