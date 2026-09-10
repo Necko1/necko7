@@ -945,4 +945,97 @@ impl ChannelLogger {
             Some("Reward redemption limit was reached (personal or global). Channel points were returned to the viewer.".to_string()),
         );
     }
+
+    pub fn log_redemption_retry_requested(
+        &self,
+        broadcaster_id: &str,
+        redemption_id: &str,
+        user_login: &str,
+        item_name: Option<&str>,
+        retry_count: i32,
+        actor_id: &str,
+        actor_login: &str,
+    ) {
+        let item = item_name.unwrap_or("skin");
+        self.log(
+            broadcaster_id,
+            ChannelLogLevel::Info,
+            ChannelLogCategory::Redemption,
+            "REDEMPTION_RETRY_REQUESTED",
+            format!("Manual market purchase retry requested for @{} (\"{}\", attempt #{}) by @{}", user_login, item, retry_count, actor_login),
+            Some(serde_json::json!({
+                "redemption_id": redemption_id,
+                "user_login": user_login,
+                "item_name": item_name,
+                "retry_count": retry_count,
+                "actor_id": actor_id,
+                "actor_login": actor_login,
+            })),
+            None,
+        );
+    }
+
+    pub fn log_redemption_status_changed(
+        &self,
+        broadcaster_id: &str,
+        redemption_id: &str,
+        user_login: &str,
+        item_name: Option<&str>,
+        old_status: &str,
+        new_status: &str,
+        fail_cause: Option<&str>,
+        fail_description: Option<&str>,
+    ) {
+        let item_title = item_name.unwrap_or("skin");
+        let level = match new_status {
+            "COMPLETED" | "ORDER_CREATED" => ChannelLogLevel::Info,
+            "MANUAL_HOLD" => ChannelLogLevel::Warn,
+            "FAILED_REFUND" | "FAILED_PENALTY" => ChannelLogLevel::Warn,
+            _ => ChannelLogLevel::Info,
+        };
+        let cause_str = fail_cause.map(|c| format!(" (cause: {})", c)).unwrap_or_default();
+        self.log(
+            broadcaster_id,
+            level,
+            ChannelLogCategory::Redemption,
+            "REDEMPTION_STATUS_CHANGED",
+            format!("Redemption status for @{} (\"{}\") changed from {} to {}{}", user_login, item_title, old_status, new_status, cause_str),
+            Some(serde_json::json!({
+                "redemption_id": redemption_id,
+                "user_login": user_login,
+                "item_name": item_name,
+                "old_status": old_status,
+                "new_status": new_status,
+                "fail_cause": fail_cause,
+                "fail_description": fail_description,
+            })),
+            fail_description.map(|d| d.to_string()),
+        );
+    }
+
+    pub fn log_trade_offer_sent(
+        &self,
+        broadcaster_id: &str,
+        redemption_id: &str,
+        user_login: &str,
+        item_name: &str,
+        trade_id: &str,
+        tradeoffer_url: &str,
+    ) {
+        self.log(
+            broadcaster_id,
+            ChannelLogLevel::Info,
+            ChannelLogCategory::Redemption,
+            "STEAM_TRADE_OFFER_SENT",
+            format!("Steam trade offer for item \"{}\" sent to @{} (Trade ID: {})", item_name, user_login, trade_id),
+            Some(serde_json::json!({
+                "redemption_id": redemption_id,
+                "user_login": user_login,
+                "item_name": item_name,
+                "trade_id": trade_id,
+                "tradeoffer_url": tradeoffer_url,
+            })),
+            Some("Viewer needs to accept the trade offer on Steam before the time limit expires.".to_string()),
+        );
+    }
 }

@@ -134,8 +134,11 @@ pub async fn process_redemption(
             &broadcaster_user_id,
             reward_id,
             redemption_id,
+            &event.user_login,
+            initial_item_name.as_deref(),
             true,
-            Some("Bot or reward is not active")
+            "bot_or_reward_inactive",
+            Some("Bot or reward is inactive, paused, or deleted"),
         ).await;
 
         return;
@@ -167,8 +170,11 @@ pub async fn process_redemption(
                 &broadcaster_user_id,
                 reward_id,
                 redemption_id,
+                &event.user_login,
+                initial_item_name.as_deref(),
                 true,
-                Some("Couldn't parse trade link in user input")
+                "invalid_trade_link",
+                Some("Failed to parse Steam trade offer URL from user input"),
             ).await;
 
             let msg = state.render_chat_message(
@@ -258,8 +264,11 @@ pub async fn process_redemption(
                 &broadcaster_user_id,
                 reward_id,
                 redemption_id,
+                &event.user_login,
+                initial_item_name.as_deref(),
                 refund,
-                Some("User did not meet chat activity requirements")
+                "chat_requirements_unmet",
+                Some("User did not meet chat activity requirements"),
             ).await;
             let op_str = match operator {
                 crate::db::rewards::ChatLogicalOperator::And => "and",
@@ -376,8 +385,11 @@ pub async fn process_redemption(
                                 &broadcaster_user_id,
                                 reward_id,
                                 redemption_id,
+                                &event.user_login,
+                                initial_item_name.as_deref(),
                                 true,
-                                Some("Global purchase limit reached"),
+                                "global_limit_reached",
+                                Some("Global reward purchase limit reached"),
                             ).await;
 
                             let limit_str = rule.max_redemptions.to_string();
@@ -433,8 +445,11 @@ pub async fn process_redemption(
                                 &broadcaster_user_id,
                                 reward_id,
                                 redemption_id,
+                                &event.user_login,
+                                initial_item_name.as_deref(),
                                 true,
-                                Some("User purchase limit reached"),
+                                "user_limit_reached",
+                                Some("User reward purchase limit reached"),
                             ).await;
 
                             let limit_str = rule.max_redemptions.to_string();
@@ -508,7 +523,17 @@ pub async fn process_redemption(
                         })),
                     );
 
-                    update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("Market price below minimum limit")).await;
+                    update_redemption_status_failed(
+                        state.clone(),
+                        &broadcaster_user_id,
+                        reward_id,
+                        redemption_id,
+                        &event.user_login,
+                        Some(&item_name),
+                        true,
+                        "price_below_min",
+                        Some("Market price is below configured minimum limit"),
+                    ).await;
                     let msg = state.render_chat_message(
                         &broadcaster_user_id,
                         MSG_ORDER_FAILED,
@@ -557,7 +582,17 @@ pub async fn process_redemption(
                         })),
                     );
 
-                    update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("Market price exceeds maximum limit")).await;
+                    update_redemption_status_failed(
+                        state.clone(),
+                        &broadcaster_user_id,
+                        reward_id,
+                        redemption_id,
+                        &event.user_login,
+                        Some(&item_name),
+                        true,
+                        "price_above_max",
+                        Some("Market price exceeds configured maximum limit"),
+                    ).await;
                     let msg = state.render_chat_message(
                         &broadcaster_user_id,
                         MSG_ORDER_FAILED,
@@ -580,6 +615,7 @@ pub async fn process_redemption(
                 &reward_data.currency,
                 trade_link,
                 true,
+                None,
             ).await;
         }
         RewardType::Pool => {
@@ -594,7 +630,17 @@ pub async fn process_redemption(
                         "EMPTY_POOL",
                         None,
                     );
-                    update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("Pool items list is empty")).await;
+                    update_redemption_status_failed(
+                        state.clone(),
+                        &broadcaster_user_id,
+                        reward_id,
+                        redemption_id,
+                        &event.user_login,
+                        initial_item_name.as_deref(),
+                        true,
+                        "empty_pool",
+                        Some("Pool items list is empty"),
+                    ).await;
                     return;
                 }
             };
@@ -606,7 +652,17 @@ pub async fn process_redemption(
             let picked = match picked {
                 Some(item) => item,
                 None => {
-                    update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("Failed to pick pool item")).await;
+                    update_redemption_status_failed(
+                        state.clone(),
+                        &broadcaster_user_id,
+                        reward_id,
+                        redemption_id,
+                        &event.user_login,
+                        initial_item_name.as_deref(),
+                        true,
+                        "pool_pick_failed",
+                        Some("Failed to pick pool item"),
+                    ).await;
                     return;
                 }
             };
@@ -616,6 +672,35 @@ pub async fn process_redemption(
             let dev = picked.permissible_market_price_deviation as i64;
             let max_price_i64 = price + (price * dev) / 100;
             let max_price = max_price_i64.min(i32::MAX as i64) as i32;
+
+            let total_weight: f64 = pool.iter().map(|i| i.weight.max(0.0)).sum();
+            let chance = if total_weight > 0.0 {
+                (picked.weight.max(0.0) / total_weight) * 100.0
+            } else {
+                0.0
+            };
+            let formatted_chance = format_chance(chance);
+
+            let custom_order_created_msg = if let Some(ref custom_tpl) = picked.custom_message {
+                crate::messages::render_template(
+                    custom_tpl,
+                    &[
+                        ("buyer", &event.user_login),
+                        ("item", &item_name),
+                        ("chance", &formatted_chance),
+                    ],
+                )
+            } else {
+                state.render_chat_message(
+                    &broadcaster_user_id,
+                    crate::messages::MSG_ORDERS_POOL_CREATED,
+                    &[
+                        ("buyer", &event.user_login),
+                        ("item", &item_name),
+                        ("chance", &formatted_chance),
+                    ],
+                )
+            };
 
             buy_item_with_safeguarded_retry(
                 &state,
@@ -629,6 +714,7 @@ pub async fn process_redemption(
                 &reward_data.currency,
                 trade_link,
                 false,
+                Some(custom_order_created_msg),
             ).await;
         }
         RewardType::Filter => {
@@ -643,7 +729,17 @@ pub async fn process_redemption(
                         "FILTER_MISSING_CONFIG",
                         None,
                     );
-                    update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("Filter config is missing")).await;
+                    update_redemption_status_failed(
+                        state.clone(),
+                        &broadcaster_user_id,
+                        reward_id,
+                        redemption_id,
+                        &event.user_login,
+                        None,
+                        true,
+                        "filter_config_missing",
+                        Some("Filter config is missing"),
+                    ).await;
                     return;
                 }
             };
@@ -652,7 +748,17 @@ pub async fn process_redemption(
                 Ok(prices) => prices,
                 Err(e) => {
                     error!(error = %e, redemption_id = %redemption_id, "Failed to fetch prices for filter redemption");
-                    update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("Failed to fetch market prices")).await;
+                    update_redemption_status_failed(
+                        state.clone(),
+                        &broadcaster_user_id,
+                        reward_id,
+                        redemption_id,
+                        &event.user_login,
+                        None,
+                        true,
+                        "market_prices_fetch_failed",
+                        Some("Failed to fetch market prices"),
+                    ).await;
                     return;
                 }
             };
@@ -671,7 +777,17 @@ pub async fn process_redemption(
                         "currency": &reward_data.currency,
                     })),
                 );
-                update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some("No items match filter criteria")).await;
+                update_redemption_status_failed(
+                    state.clone(),
+                    &broadcaster_user_id,
+                    reward_id,
+                    redemption_id,
+                    &event.user_login,
+                    None,
+                    true,
+                    "no_items_match_filter",
+                    Some("No items match filter criteria"),
+                ).await;
                 let msg = state.render_chat_message(&broadcaster_user_id, MSG_ORDER_FAILED_FILTER_EXHAUSTED, &[("buyer", &event.user_login), ("attempts", "0")]);
                 let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await;
                 return;
@@ -829,6 +945,17 @@ pub async fn process_redemption(
                                 Some(&error_msg),
                             ).await;
 
+                            state.channel_logger.log_redemption_status_changed(
+                                &broadcaster_user_id,
+                                &redemption_id.to_string(),
+                                &event.user_login,
+                                Some(&item.market_hash_name),
+                                "PENDING",
+                                "MANUAL_HOLD",
+                                Some("no_money"),
+                                Some(&error_msg),
+                            );
+
                             let msg = state.render_chat_message(
                                 &broadcaster_user_id,
                                 MSG_ORDER_MANUAL_HOLD,
@@ -844,7 +971,26 @@ pub async fn process_redemption(
                                 kind = ?kind,
                                 "Buyer terminal error encountered on filter reward, aborting pool attempts and refunding"
                             );
-                            update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id, redemption_id, true, Some(&error_msg)).await;
+                            let error_kind_str = match kind {
+                                MarketBuyForErrorKind::SteamBanned => "buyer_banned",
+                                MarketBuyForErrorKind::NoMobileAuth => "no_mobile_authenticator",
+                                MarketBuyForErrorKind::OfflineTradesDisabled => "offline_trades_disabled",
+                                MarketBuyForErrorKind::InvalidTradeLink | MarketBuyForErrorKind::TradeLinkCheckFailed => "invalid_trade_url",
+                                MarketBuyForErrorKind::InventoryHidden => "inventory_hidden",
+                                MarketBuyForErrorKind::InventoryFull => "inventory_full",
+                                _ => "buyer_fault",
+                            };
+                            update_redemption_status_failed(
+                                state.clone(),
+                                &broadcaster_user_id,
+                                reward_id,
+                                redemption_id,
+                                &event.user_login,
+                                Some(&item.market_hash_name),
+                                true,
+                                error_kind_str,
+                                Some(&error_msg),
+                            ).await;
                             let msg_template = kind.to_market_error_message_key().unwrap_or(MSG_ORDER_FAILED);
                             let code_str = code.to_string();
                             let msg = state.render_chat_message(
@@ -876,7 +1022,10 @@ pub async fn process_redemption(
                     &broadcaster_user_id,
                     reward_id,
                     redemption_id,
+                    &event.user_login,
+                    None,
                     true,
+                    "all_filter_attempts_failed",
                     Some("All filter buy attempts failed"),
                 ).await;
 
@@ -975,6 +1124,20 @@ async fn check_and_pause_if_global_limit_reached(
     }
 }
 
+pub fn format_chance(chance: f64) -> String {
+    if chance <= 0.0 {
+        return "0%".to_string();
+    }
+    if chance >= 0.01 {
+        let rounded = (chance * 100.0).round() / 100.0;
+        let s = format!("{:.2}", rounded);
+        format!("{}%", s.trim_end_matches('0').trim_end_matches('.'))
+    } else {
+        let s = format!("{:.8}", chance);
+        format!("{}%", s.trim_end_matches('0').trim_end_matches('.'))
+    }
+}
+
 fn format_limit_period(window_hours: Option<i32>) -> String {
     match window_hours {
         Some(168) => "week".to_string(),
@@ -1015,6 +1178,7 @@ async fn buy_item_with_safeguarded_retry(
     currency: &str,
     trade_link: TradeLink,
     trigger_price_update_on_deviation: bool,
+    custom_order_created_msg: Option<String>,
 ) {
     for attempt in 1..=3 {
         let retry_count = (attempt - 1) as i32;
@@ -1070,12 +1234,13 @@ async fn buy_item_with_safeguarded_retry(
                     state.spawn_task(async move {
                         order_watcher.track_redemption(token).await;
                     });
-                    let msg = state.render_chat_message(
+                    let default_msg = state.render_chat_message(
                         broadcaster_user_id,
                         MSG_ORDER_CREATED,
                         &[("buyer", user_login), ("item", item_name)],
                     );
-                    let _ = state.send_chat_message(broadcaster_user_id, &msg, None).await;
+                    let msg = custom_order_created_msg.as_deref().unwrap_or(&default_msg);
+                    let _ = state.send_chat_message(broadcaster_user_id, msg, None).await;
                     return;
                 }
             }
@@ -1106,12 +1271,13 @@ async fn buy_item_with_safeguarded_retry(
                     state.spawn_task(async move {
                         order_watcher.track_redemption(token).await;
                     });
-                    let msg = state.render_chat_message(
+                    let default_msg = state.render_chat_message(
                         broadcaster_user_id,
                         MSG_ORDER_CREATED,
                         &[("buyer", user_login), ("item", item_name)],
                     );
-                    let _ = state.send_chat_message(broadcaster_user_id, &msg, None).await;
+                    let msg = custom_order_created_msg.as_deref().unwrap_or(&default_msg);
+                    let _ = state.send_chat_message(broadcaster_user_id, msg, None).await;
                     return;
                 }
             }
@@ -1189,12 +1355,13 @@ async fn buy_item_with_safeguarded_retry(
                     order_watcher.track_redemption(token).await;
                 });
 
-                let msg = state.render_chat_message(
+                let default_msg = state.render_chat_message(
                     broadcaster_user_id,
                     MSG_ORDER_CREATED,
                     &[("buyer", user_login), ("item", item_name)],
                 );
-                if let Err(e) = state.send_chat_message(broadcaster_user_id, &msg, None).await {
+                let msg = custom_order_created_msg.as_deref().unwrap_or(&default_msg);
+                if let Err(e) = state.send_chat_message(broadcaster_user_id, msg, None).await {
                     error!(error = %e, redemption_id = %redemption_id, broadcaster_id = %broadcaster_user_id, "Failed to send chat message for created order");
                 }
                 return;
@@ -1244,6 +1411,17 @@ async fn buy_item_with_safeguarded_retry(
                         error!(error = %e, redemption_id = %redemption_id, "DB error setting redemption to manual hold");
                     }
 
+                    state.channel_logger.log_redemption_status_changed(
+                        broadcaster_user_id,
+                        &redemption_id.to_string(),
+                        user_login,
+                        Some(item_name),
+                        "PENDING",
+                        "MANUAL_HOLD",
+                        Some("no_money"),
+                        Some(&error_msg),
+                    );
+
                     let msg = state.render_chat_message(
                         broadcaster_user_id,
                         MSG_ORDER_MANUAL_HOLD,
@@ -1274,7 +1452,10 @@ async fn buy_item_with_safeguarded_retry(
                         broadcaster_user_id,
                         reward_id,
                         redemption_id,
-                        true,
+                        user_login,
+                        Some(item_name),
+                        false,
+                        error_kind_str,
                         Some(&error_msg),
                     ).await;
 
@@ -1329,6 +1510,17 @@ async fn buy_item_with_safeguarded_retry(
                         error!(error = %e, redemption_id = %redemption_id, "DB error setting redemption to manual hold");
                     }
 
+                    state.channel_logger.log_redemption_status_changed(
+                        broadcaster_user_id,
+                        &redemption_id.to_string(),
+                        user_login,
+                        Some(item_name),
+                        "PENDING",
+                        "MANUAL_HOLD",
+                        Some("retries_exhausted"),
+                        Some(&error_msg),
+                    );
+
                     let msg = state.render_chat_message(
                         broadcaster_user_id,
                         MSG_ORDER_MANUAL_HOLD,
@@ -1369,6 +1561,17 @@ async fn buy_item_with_safeguarded_retry(
                         Some(&e.to_string()),
                     ).await;
 
+                    state.channel_logger.log_redemption_status_changed(
+                        broadcaster_user_id,
+                        &redemption_id.to_string(),
+                        user_login,
+                        Some(item_name),
+                        "PENDING",
+                        "MANUAL_HOLD",
+                        Some("network_error_retries_exhausted"),
+                        Some(&e.to_string()),
+                    );
+
                     let msg = state.render_chat_message(
                         broadcaster_user_id,
                         MSG_ORDER_MANUAL_HOLD,
@@ -1387,7 +1590,10 @@ async fn update_redemption_status_failed(
     broadcaster_user_id: &str,
     reward_id: Uuid,
     redemption_id: Uuid,
+    user_login: &str,
+    item_name: Option<&str>,
     return_channel_points: bool,
+    fail_cause: &str,
     fail_description: Option<&str>,
 ) {
     if let Err(e) = state.with_broadcaster_token(broadcaster_user_id, async |token| {
@@ -1412,27 +1618,42 @@ async fn update_redemption_status_failed(
 
     let redemption_status = if return_channel_points {
         RedemptionStatus::FailedRefund
-    } else { RedemptionStatus::FailedPenalty };
+    } else {
+        RedemptionStatus::FailedPenalty
+    };
 
     if let Err(e) = state.db.update_redemption_status(
         redemption_id,
         redemption_status,
-        None,
-        fail_description
+        Some(fail_cause),
+        fail_description,
     ).await {
         error!(
             error = %e,
             redemption_id = %redemption_id,
             status = ?redemption_status,
+            fail_cause = %fail_cause,
             fail_description = ?fail_description,
             "DB error updating failed redemption status"
         );
         return;
     }
 
+    state.channel_logger.log_redemption_status_changed(
+        broadcaster_user_id,
+        &redemption_id.to_string(),
+        user_login,
+        item_name,
+        "PENDING",
+        redemption_status.as_str(),
+        Some(fail_cause),
+        fail_description,
+    );
+
     info!(
         redemption_id = %redemption_id,
         status = ?redemption_status,
+        fail_cause = %fail_cause,
         fail_description = ?fail_description,
         "Redemption status marked as failed successfully"
     );
@@ -1456,6 +1677,7 @@ mod tests {
             weight: 100.0,
             permissible_market_price_deviation: 10,
             current_market_price: 1500,
+            custom_message: None,
         }];
         let picked = pick_pool_item(&items).unwrap();
         assert_eq!(picked.market_hash_name, "AK-47 | Redline (Field-Tested)");
@@ -1469,12 +1691,14 @@ mod tests {
                 weight: 90.0,
                 permissible_market_price_deviation: 10,
                 current_market_price: 100,
+                custom_message: None,
             },
             PoolItemConfig {
                 market_hash_name: "Rare".into(),
                 weight: 10.0,
                 permissible_market_price_deviation: 10,
                 current_market_price: 1000,
+                custom_message: None,
             },
         ];
 
@@ -1521,5 +1745,18 @@ mod tests {
         // Attempt 5: redemption_id-4
         let attempt5_id = format!("{}-{}", redemption_id, 5 - 1);
         assert_eq!(attempt5_id, format!("{}-4", redemption_id));
+    }
+
+    #[test]
+    fn test_format_chance() {
+        assert_eq!(format_chance(0.0), "0%");
+        assert_eq!(format_chance(-1.0), "0%");
+        assert_eq!(format_chance(5.0), "5%");
+        assert_eq!(format_chance(50.0), "50%");
+        assert_eq!(format_chance(0.5), "0.5%");
+        assert_eq!(format_chance(12.34), "12.34%");
+        assert_eq!(format_chance(12.346), "12.35%");
+        assert_eq!(format_chance(0.005), "0.005%");
+        assert_eq!(format_chance(0.000009), "0.000009%");
     }
 }

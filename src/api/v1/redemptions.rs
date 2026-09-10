@@ -182,18 +182,14 @@ pub async fn list_redemptions(
     path = "/api/v1/broadcasters/{channel_id}/redemptions/{redemption_id}/retry",
     tag = "Redemptions",
     summary = "Retry a failed or manual hold redemption",
-    description = "Retries a failed or manual hold redemption by attempting to buy the item from the market again. Only works for redemptions with status FAILED_PENALTY or MANUAL_HOLD.",
+    description = "Retries purchasing the item on CSGO Market for a failed or manual hold redemption. Increments retry count, resets failure details, sets status to ORDER_CREATED, and spawns an order watcher on success.",
     params(
         ("channel_id" = String, Path, description = "Twitch channel ID"),
         ("redemption_id" = Uuid, Path, description = "Twitch redemption UUID"),
     ),
     responses(
-        (status = 200, description = "Retry attempt completed", body = serde_json::Value,
-            example = json!({ "status": "order_created" })
-        ),
-        (status = 200, description = "Market error during retry", body = serde_json::Value,
-            example = json!({ "status": "market_error", "error": "Item not available" })
-        ),
+        (status = 200, description = "Retry attempt completed, order created", body = RedemptionResponse),
+        (status = 400, description = "Market rejected the retry order"),
         (status = 401, description = "Unauthorized — missing or invalid session cookie"),
         (status = 403, description = "Forbidden — redemption does not belong to this channel"),
         (status = 404, description = "Redemption or associated reward not found"),
@@ -208,7 +204,7 @@ pub async fn retry_redemption(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
     PathArg(path): PathArg<RedemptionPath>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<RedemptionResponse>, ApiError> {
     let redemption_id = path.redemption_id;
     let redemption = state.db.get_redemption(redemption_id).await?
         .ok_or_else(|| ApiError::NotFound {
@@ -250,6 +246,27 @@ pub async fn retry_redemption(
             message: "No market item name associated with redemption".into(),
             param: "market_item_name".into(),
         })?;
+
+    tracing::info!(
+        redemption_id = %redemption_id,
+        channel_id = %auth.channel_id,
+        user_id = %auth.user_id,
+        user_login = %auth.user_login,
+        item = %item_name,
+        current_status = ?redemption.status,
+        current_retry_count = redemption.retry_count,
+        "Manual redemption retry requested"
+    );
+
+    state.channel_logger.log_redemption_retry_requested(
+        &auth.channel_id,
+        &redemption_id.to_string(),
+        &redemption.user_login,
+        Some(item_name),
+        redemption.retry_count + 1,
+        &auth.user_id,
+        &auth.user_login,
+    );
 
     let (price_i64, deviation_i64) = match reward.reward_type {
         RewardType::Pool => {
@@ -317,7 +334,22 @@ pub async fn retry_redemption(
                 &redemption.user_login,
             );
 
-            return Ok(Json(serde_json::json!({ "status": "order_created" })));
+            state.channel_logger.log_redemption_status_changed(
+                &auth.channel_id,
+                &redemption_id.to_string(),
+                &redemption.user_login,
+                Some(item_name),
+                redemption.status.as_str(),
+                "ORDER_CREATED",
+                None,
+                None,
+            );
+
+            let updated = state.db.get_redemption(redemption_id).await?
+                .ok_or_else(|| ApiError::NotFound {
+                    message: "Redemption not found after update".to_string(),
+                })?;
+            return Ok(Json(RedemptionResponse::from(updated)));
         }
     }
 
@@ -376,6 +408,17 @@ pub async fn retry_redemption(
                 &redemption.user_login,
             );
 
+            state.channel_logger.log_redemption_status_changed(
+                &auth.channel_id,
+                &redemption_id.to_string(),
+                &redemption.user_login,
+                Some(item_name),
+                redemption.status.as_str(),
+                "ORDER_CREATED",
+                None,
+                None,
+            );
+
             tracing::info!(
                 redemption_id = %redemption_id,
                 channel_id = %auth.channel_id,
@@ -384,7 +427,11 @@ pub async fn retry_redemption(
                 "Manual redemption retry succeeded, new order created on market"
             );
             
-            Ok(Json(serde_json::json!({ "status": "order_created" })))
+            let updated = state.db.get_redemption(redemption_id).await?
+                .ok_or_else(|| ApiError::NotFound {
+                    message: "Redemption not found after update".to_string(),
+                })?;
+            Ok(Json(RedemptionResponse::from(updated)))
         }
         Ok(res) => {
             let error_msg = res.error.unwrap_or_else(|| "Unknown market error".to_string());
@@ -396,6 +443,7 @@ pub async fn retry_redemption(
                 channel_id = %auth.channel_id,
                 user_id = %auth.user_id,
                 error = %error_msg,
+                code = code,
                 "Manual redemption retry rejected by market"
             );
 
@@ -413,17 +461,30 @@ pub async fn retry_redemption(
                 RedemptionStatus::FailedPenalty
             };
 
+            let fail_desc = format!("Market rejected purchase retry: {}", error_msg);
+
             state.db.update_redemption_status(
                 redemption_id,
                 new_status,
                 Some("market_retry_failed"),
-                Some(&error_msg),
+                Some(&fail_desc),
             ).await?;
 
-            Ok(Json(serde_json::json!({
-                "status": "market_error",
-                "error": error_msg
-            })))
+            state.channel_logger.log_redemption_status_changed(
+                &auth.channel_id,
+                &redemption_id.to_string(),
+                &redemption.user_login,
+                Some(item_name),
+                redemption.status.as_str(),
+                new_status.as_str(),
+                Some("market_retry_failed"),
+                Some(&fail_desc),
+            );
+
+            Err(ApiError::BadRequest {
+                message: fail_desc,
+                param: "market".into(),
+            })
         }
         Err(e) => {
             tracing::error!(
@@ -504,6 +565,12 @@ pub async fn refund_redemption(
                 param: "redemption_id".to_string(),
             });
         }
+        RedemptionStatus::FailedPenalty => {
+            return Err(ApiError::UnprocessableEntity {
+                message: "Cannot refund a redemption that was already penalized".to_string(),
+                param: "redemption_id".to_string(),
+            });
+        }
         _ => {}
     }
 
@@ -541,6 +608,17 @@ pub async fn refund_redemption(
         "REFUND",
         &auth.user_id,
         &auth.user_login,
+    );
+
+    state.channel_logger.log_redemption_status_changed(
+        &auth.channel_id,
+        &redemption_id.to_string(),
+        &redemption.user_login,
+        redemption.market_item_name.as_deref().or(reward.market_item_name.as_deref()),
+        redemption.status.as_str(),
+        "FAILED_REFUND",
+        Some("manual_refund"),
+        Some("Manually refunded by channel owner/editor"),
     );
 
     tracing::info!(
@@ -656,6 +734,17 @@ pub async fn penalty_redemption(
         &auth.user_login,
     );
 
+    state.channel_logger.log_redemption_status_changed(
+        &auth.channel_id,
+        &redemption_id.to_string(),
+        &redemption.user_login,
+        redemption.market_item_name.as_deref().or(reward.market_item_name.as_deref()),
+        redemption.status.as_str(),
+        "FAILED_PENALTY",
+        Some("manual_penalty"),
+        Some("Manually penalized by channel owner/editor"),
+    );
+
     tracing::info!(
         redemption_id = %redemption_id,
         channel_id = %auth.channel_id,
@@ -696,5 +785,36 @@ mod tests {
 
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"user_trade_link\":\"https://steamcommunity.com/tradeoffer/new/?partner=123&token=abc\""));
+    }
+
+    #[test]
+    fn test_redemption_response_failure_details_serialization() {
+        let redemption = Redemption {
+            twitch_redemption_id: Uuid::new_v4(),
+            twitch_reward_id: Uuid::new_v4(),
+            user_id: "12345".to_string(),
+            user_login: "viewer".to_string(),
+            user_trade_link: "https://steamcommunity.com/tradeoffer/new/?partner=1&token=x".to_string(),
+            twitch_points_cost: 1000,
+            market_paid_price: None,
+            currency: "RUB".to_string(),
+            status: RedemptionStatus::FailedPenalty,
+            fail_cause: Some("market_retry_failed".to_string()),
+            fail_description: Some("Market rejected purchase retry: Item out of stock".to_string()),
+            retry_count: 1,
+            market_item_name: Some("AWP | Asiimov".to_string()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let response: RedemptionResponse = redemption.into();
+        assert_eq!(response.fail_cause.as_deref(), Some("market_retry_failed"));
+        assert_eq!(response.fail_description.as_deref(), Some("Market rejected purchase retry: Item out of stock"));
+        assert_eq!(response.status, RedemptionStatus::FailedPenalty);
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"fail_cause\":\"market_retry_failed\""));
+        assert!(json.contains("\"fail_description\":\"Market rejected purchase retry: Item out of stock\""));
+        assert!(json.contains("\"status\":\"FailedPenalty\""));
     }
 }

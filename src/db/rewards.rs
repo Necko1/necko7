@@ -126,6 +126,9 @@ pub struct PoolItemConfig {
     pub permissible_market_price_deviation: i32,
     #[serde(default)]
     pub current_market_price: i32,
+    /// Optional custom chat message announced when this skin is rolled
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
@@ -497,6 +500,25 @@ impl Db {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pool_item_config_custom_message_serialization() {
+        let json_without = r#"{"market_hash_name":"AK-47 | Redline (Field-Tested)","weight":10.0,"permissible_market_price_deviation":5,"current_market_price":1200}"#;
+        let item: PoolItemConfig = serde_json::from_str(json_without).expect("should deserialize without custom_message");
+        assert_eq!(item.custom_message, None);
+
+        let json_with = r#"{"market_hash_name":"AWP | Dragon Lore (Factory New)","weight":0.005,"permissible_market_price_deviation":10,"current_market_price":500000,"custom_message":"JACKPOT! @{buyer} just won {item} with {chance} chance!"}"#;
+        let item_with: PoolItemConfig = serde_json::from_str(json_with).expect("should deserialize with custom_message");
+        assert_eq!(item_with.custom_message.as_deref(), Some("JACKPOT! @{buyer} just won {item} with {chance} chance!"));
+
+        let serialized = serde_json::to_string(&item_with).expect("should serialize");
+        assert!(serialized.contains("JACKPOT!"));
     }
 }
 

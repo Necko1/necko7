@@ -103,6 +103,13 @@ impl OrderWatcher {
 
             if let Some(ref err) = current_trade_info.error {
                 error!(error = %err, redemption_id = %self.redemption.redemption_id, "Market API error in buy info");
+                self.state.channel_logger.log_market_buy_error(
+                    &self.broadcaster_id,
+                    &self.redemption.redemption_id.to_string(),
+                    "skin",
+                    "market_get_buy_info_error",
+                    err,
+                );
             } else if !current_trade_info.success || current_trade_info.data.is_none() {
                 warn!(redemption_id = %self.redemption.redemption_id, "Market buy info returned unsuccessful or empty");
             }
@@ -158,8 +165,17 @@ impl OrderWatcher {
         );
 
         let remaining = current_trade.receive_until.unwrap().remaining_pretty();
-        let tradeoffer = format!("https://steamcommunity.com/tradeoffer/{}/",
-                                 current_trade.trade_id.as_deref().unwrap_or(""));
+        let trade_id_str = current_trade.trade_id.as_deref().unwrap_or("");
+        let tradeoffer = format!("https://steamcommunity.com/tradeoffer/{}/", trade_id_str);
+
+        self.state.channel_logger.log_trade_offer_sent(
+            &self.broadcaster_id,
+            &self.redemption.redemption_id.to_string(),
+            &self.redemption.user_login,
+            &current_trade.market_hash_name,
+            trade_id_str,
+            &tradeoffer,
+        );
 
         let msg = self.state.render_chat_message(
             &self.broadcaster_id,
@@ -207,6 +223,17 @@ impl OrderWatcher {
             &self.redemption.redemption_id.to_string(),
             Some(&current_trade.market_hash_name),
             &self.redemption.user_login,
+        );
+
+        self.state.channel_logger.log_redemption_status_changed(
+            &self.broadcaster_id,
+            &self.redemption.redemption_id.to_string(),
+            &self.redemption.user_login,
+            Some(&current_trade.market_hash_name),
+            "ORDER_CREATED",
+            "COMPLETED",
+            None,
+            None,
         );
 
         let msg = self.state.render_chat_message(
@@ -335,11 +362,23 @@ impl OrderWatcher {
             if let Err(e) = self.state.db.update_redemption_status(
                 self.redemption.redemption_id,
                 redemption_status,
-                Some("buyer_not_claimed"), None
+                Some("buyer_not_claimed"),
+                Some("Viewer did not accept trade offer on Steam in time or declined it"),
             ).await {
                 error!(error = %e, redemption_id = %self.redemption.redemption_id, status = ?redemption_status, "Failed to update redemption status in DB");
                 return;
             };
+
+            self.state.channel_logger.log_redemption_status_changed(
+                &self.broadcaster_id,
+                &self.redemption.redemption_id.to_string(),
+                &self.redemption.user_login,
+                Some(&current_trade.market_hash_name),
+                "ORDER_CREATED",
+                redemption_status.as_str(),
+                Some("buyer_not_claimed"),
+                Some("Viewer did not accept trade offer on Steam in time or declined it"),
+            );
 
             if let Err(e) = self.state.with_broadcaster_token(&self.broadcaster_id, async |token| {
                 self.state.helix_client.update_redemption_status(
@@ -431,6 +470,16 @@ impl OrderWatcher {
                     &current_trade.market_hash_name,
                     "Market seller did not deliver item and retry limit reached",
                     None,
+                );
+                self.state.channel_logger.log_redemption_status_changed(
+                    &self.broadcaster_id,
+                    &self.redemption.redemption_id.to_string(),
+                    &self.redemption.user_login,
+                    Some(&current_trade.market_hash_name),
+                    "ORDER_CREATED",
+                    "MANUAL_HOLD",
+                    Some("seller_timeout_retries_exhausted"),
+                    Some("Market seller did not deliver item and auto-retry limit reached"),
                 );
                 let message = self.state.render_chat_message(
                     &self.broadcaster_id,
@@ -567,6 +616,16 @@ impl OrderWatcher {
                             "Insufficient bot balance on seller retry",
                             Some(&error_msg),
                         );
+                        self.state.channel_logger.log_redemption_status_changed(
+                            &self.broadcaster_id,
+                            &self.redemption.redemption_id.to_string(),
+                            &self.redemption.user_login,
+                            Some(&current_trade.market_hash_name),
+                            "ORDER_CREATED",
+                            "MANUAL_HOLD",
+                            Some("no_money"),
+                            Some(&error_msg),
+                        );
                         let msg = self.state.render_chat_message(
                             &self.broadcaster_id,
                             MSG_ORDER_MANUAL_HOLD,
@@ -590,6 +649,16 @@ impl OrderWatcher {
                             &self.redemption.user_login,
                             &current_trade.market_hash_name,
                             "Seller timeout and auto-retries exhausted",
+                            Some(&error_msg),
+                        );
+                        self.state.channel_logger.log_redemption_status_changed(
+                            &self.broadcaster_id,
+                            &self.redemption.redemption_id.to_string(),
+                            &self.redemption.user_login,
+                            Some(&current_trade.market_hash_name),
+                            "ORDER_CREATED",
+                            "MANUAL_HOLD",
+                            Some("seller_timeout_retries_exhausted"),
                             Some(&error_msg),
                         );
                         let msg = self.state.render_chat_message(
@@ -616,6 +685,16 @@ impl OrderWatcher {
                             &self.redemption.user_login,
                             &current_trade.market_hash_name,
                             "Network error on seller retry, retries exhausted",
+                            Some(&e.to_string()),
+                        );
+                        self.state.channel_logger.log_redemption_status_changed(
+                            &self.broadcaster_id,
+                            &self.redemption.redemption_id.to_string(),
+                            &self.redemption.user_login,
+                            Some(&current_trade.market_hash_name),
+                            "ORDER_CREATED",
+                            "MANUAL_HOLD",
+                            Some("network_error_retries_exhausted"),
                             Some(&e.to_string()),
                         );
                         let msg = self.state.render_chat_message(
@@ -666,6 +745,17 @@ impl OrderWatcher {
         ).await {
             error!(error = %e, redemption_id = %self.redemption.redemption_id, "Failed to update timed out redemption status in DB");
         }
+
+        self.state.channel_logger.log_redemption_status_changed(
+            &self.broadcaster_id,
+            &self.redemption.redemption_id.to_string(),
+            &self.redemption.user_login,
+            None,
+            "ORDER_CREATED",
+            "FAILED_PENALTY",
+            Some("timeout"),
+            Some("Timed out after 30 minutes waiting for trade completion"),
+        );
 
         if let Err(e) = self.state.with_broadcaster_token(&self.broadcaster_id, async |token| {
             self.state.helix_client.update_redemption_status(

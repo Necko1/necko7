@@ -19,6 +19,7 @@ pub const ALL_CATEGORIES: [&str; 5] = [
 
 // ── Orders Message Keys ────────────────────────────────────────────────────
 pub const MSG_ORDERS_CREATED: &str = "orders.created";
+pub const MSG_ORDERS_POOL_CREATED: &str = "orders.pool_created";
 pub const MSG_ORDERS_FAILED: &str = "orders.failed";
 pub const MSG_ORDERS_FAILED_NO_MONEY_REFUND: &str = "orders.failed_no_money_refund";
 pub const MSG_ORDERS_FAILED_NO_MONEY_PENALTY: &str = "orders.failed_no_money_penalty";
@@ -62,6 +63,7 @@ pub const MSG_LIMITS_GLOBAL_LIMIT_REACHED: &str = "limits.global_limit_reached";
 // ── Backwards-Compatibility Aliases ─────────────────────────────────────────
 pub const MSG_TRADE_LINK_INVALID: &str = MSG_ORDERS_TRADE_LINK_INVALID;
 pub const MSG_ORDER_CREATED: &str = MSG_ORDERS_CREATED;
+pub const MSG_ORDER_POOL_CREATED: &str = MSG_ORDERS_POOL_CREATED;
 pub const MSG_ORDER_FAILED: &str = MSG_ORDERS_FAILED;
 pub const MSG_ORDER_FAILED_NO_MONEY_REFUND: &str = MSG_ORDERS_FAILED_NO_MONEY_REFUND;
 pub const MSG_ORDER_FAILED_NO_MONEY_PENALTY: &str = MSG_ORDERS_FAILED_NO_MONEY_PENALTY;
@@ -86,6 +88,7 @@ pub const MSG_CHAT_REQ_FAILED_BOTH: &str = MSG_CHAT_REQ_FAILED_BOTH_REFUND;
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 pub struct OrdersMessages {
     pub created: String,
+    pub pool_created: String,
     pub failed: String,
     pub failed_no_money_refund: String,
     pub failed_no_money_penalty: String,
@@ -100,6 +103,7 @@ impl Default for OrdersMessages {
     fn default() -> Self {
         Self {
             created: "@{buyer} Market order created. Please wait for the trade offer (up to 5 minutes).".to_string(),
+            pool_created: "@{buyer} Rolled skin {item} (chance: {chance})! Market order created. Please wait for the trade offer (up to 5 minutes).".to_string(),
             failed: "@{buyer} Failed to create market order. Channel points refunded. Error {code}: {error}".to_string(),
             failed_no_money_refund: "@{buyer} Insufficient bot balance to purchase the item. Channel points refunded.".to_string(),
             failed_no_money_penalty: "@{buyer} Insufficient bot balance to purchase the item. Channel points are not refunded per streamer settings.".to_string(),
@@ -228,6 +232,7 @@ impl From<serde_json::Value> for CategorizedChatMessages {
         if is_nested {
             if let Some(orders_val) = obj.get("orders").and_then(|v| v.as_object()) {
                 if let Some(v) = orders_val.get("created").and_then(|s| s.as_str()) { result.orders.created = v.to_string(); }
+                if let Some(v) = orders_val.get("pool_created").and_then(|s| s.as_str()) { result.orders.pool_created = v.to_string(); }
                 if let Some(v) = orders_val.get("failed").and_then(|s| s.as_str()) { result.orders.failed = v.to_string(); }
                 if let Some(v) = orders_val.get("failed_no_money_refund").and_then(|s| s.as_str()) { result.orders.failed_no_money_refund = v.to_string(); }
                 if let Some(v) = orders_val.get("failed_no_money_penalty").and_then(|s| s.as_str()) { result.orders.failed_no_money_penalty = v.to_string(); }
@@ -280,6 +285,7 @@ impl From<serde_json::Value> for CategorizedChatMessages {
             if let Some((cat, key)) = resolve_category_and_key(k) {
                 match (cat, key) {
                     ("orders", "created") => result.orders.created = val_str,
+                    ("orders", "pool_created") => result.orders.pool_created = val_str,
                     ("orders", "failed") => result.orders.failed = val_str,
                     ("orders", "failed_no_money_refund") => result.orders.failed_no_money_refund = val_str,
                     ("orders", "failed_no_money_penalty") => result.orders.failed_no_money_penalty = val_str,
@@ -342,6 +348,7 @@ impl CategorizedChatMessages {
         match cat {
             "orders" => match key {
                 "created" => Some(&self.orders.created),
+                "pool_created" => Some(&self.orders.pool_created),
                 "failed" => Some(&self.orders.failed),
                 "failed_no_money_refund" => Some(&self.orders.failed_no_money_refund),
                 "failed_no_money_penalty" => Some(&self.orders.failed_no_money_penalty),
@@ -411,6 +418,7 @@ impl CategorizedChatMessages {
                 }
                 match (cat.as_str(), key.as_str()) {
                     ("orders", "created") => merged.orders.created = trimmed.to_string(),
+                    ("orders", "pool_created") => merged.orders.pool_created = trimmed.to_string(),
                     ("orders", "failed") => merged.orders.failed = trimmed.to_string(),
                     ("orders", "failed_no_money_refund") => merged.orders.failed_no_money_refund = trimmed.to_string(),
                     ("orders", "failed_no_money_penalty") => merged.orders.failed_no_money_penalty = trimmed.to_string(),
@@ -457,6 +465,7 @@ impl CategorizedChatMessages {
     pub fn all_placeholders() -> CategorizedPlaceholders {
         let mut orders = HashMap::new();
         orders.insert("created".to_string(), vec!["buyer".to_string(), "item".to_string()]);
+        orders.insert("pool_created".to_string(), vec!["buyer".to_string(), "item".to_string(), "chance".to_string()]);
         orders.insert("failed".to_string(), vec!["buyer".to_string(), "code".to_string(), "error".to_string(), "item".to_string()]);
         orders.insert("failed_no_money_refund".to_string(), vec!["buyer".to_string(), "item".to_string()]);
         orders.insert("failed_no_money_penalty".to_string(), vec!["buyer".to_string(), "item".to_string()]);
@@ -516,6 +525,7 @@ pub fn resolve_category_and_key(message_id: &str) -> Option<(&'static str, &'sta
     match message_id {
         // Dot-notation
         "orders.created" => Some(("orders", "created")),
+        "orders.pool_created" => Some(("orders", "pool_created")),
         "orders.failed" => Some(("orders", "failed")),
         "orders.failed_no_money_refund" => Some(("orders", "failed_no_money_refund")),
         "orders.failed_no_money_penalty" => Some(("orders", "failed_no_money_penalty")),
@@ -554,6 +564,7 @@ pub fn resolve_category_and_key(message_id: &str) -> Option<(&'static str, &'sta
 
         // Legacy flat keys
         "order_created" => Some(("orders", "created")),
+        "order_pool_created" => Some(("orders", "pool_created")),
         "order_failed" => Some(("orders", "failed")),
         "order_failed_no_money_refund" => Some(("orders", "failed_no_money_refund")),
         "order_failed_no_money_penalty" => Some(("orders", "failed_no_money_penalty")),
@@ -729,5 +740,23 @@ mod tests {
         });
         let parsed_nested = parse_custom_messages(nested);
         assert_eq!(parsed_nested.get("market_errors").unwrap().get("inventory_hidden").unwrap(), "Custom hidden");
+    }
+
+    #[test]
+    fn test_orders_pool_created_template() {
+        let defaults = CategorizedChatMessages::default();
+        let tpl = defaults.get_message(MSG_ORDERS_POOL_CREATED).expect("pool_created template must exist");
+        let rendered = render_template(tpl, &[
+            ("buyer", "viewer1"),
+            ("item", "MAC-10 | Bronzer"),
+            ("chance", "0.5%"),
+        ]);
+        assert_eq!(rendered, "@viewer1 Rolled skin MAC-10 | Bronzer (chance: 0.5%)! Market order created. Please wait for the trade offer (up to 5 minutes).");
+
+        let placeholders = CategorizedChatMessages::all_placeholders();
+        let pool_vars = placeholders.orders.get("pool_created").expect("orders.pool_created placeholders must exist");
+        assert!(pool_vars.contains(&"chance".to_string()));
+        assert!(pool_vars.contains(&"item".to_string()));
+        assert!(pool_vars.contains(&"buyer".to_string()));
     }
 }

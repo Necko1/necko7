@@ -15,6 +15,19 @@ pub enum RedemptionStatus {
     ManualHold,
 }
 
+impl RedemptionStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "PENDING",
+            Self::OrderCreated => "ORDER_CREATED",
+            Self::FailedRefund => "FAILED_REFUND",
+            Self::FailedPenalty => "FAILED_PENALTY",
+            Self::Completed => "COMPLETED",
+            Self::ManualHold => "MANUAL_HOLD",
+        }
+    }
+}
+
 #[derive(Debug, Clone, FromRow)]
 pub struct Redemption {
     pub twitch_redemption_id: Uuid,
@@ -194,7 +207,7 @@ impl Db {
         retry_count: i32,
     ) -> DbResult<()> {
         sqlx::query(
-            "UPDATE redemptions SET status = 'ORDER_CREATED', market_paid_price = $1, market_item_name = COALESCE($2, market_item_name), retry_count = $3, updated_at = NOW() WHERE twitch_redemption_id = $4"
+            "UPDATE redemptions SET status = 'ORDER_CREATED', market_paid_price = $1, market_item_name = COALESCE($2, market_item_name), retry_count = $3, fail_cause = NULL, fail_description = NULL, updated_at = NOW() WHERE twitch_redemption_id = $4"
         )
         .bind(market_paid_price)
         .bind(market_item_name)
@@ -207,7 +220,7 @@ impl Db {
 
     pub async fn set_redemption_completed(&self, twitch_redemption_id: Uuid) -> DbResult<()> {
         sqlx::query(
-            "UPDATE redemptions SET status = 'COMPLETED', updated_at = NOW() WHERE twitch_redemption_id = $1"
+            "UPDATE redemptions SET status = 'COMPLETED', fail_cause = NULL, fail_description = NULL, updated_at = NOW() WHERE twitch_redemption_id = $1"
         )
         .bind(twitch_redemption_id)
         .execute(&self.pool)
