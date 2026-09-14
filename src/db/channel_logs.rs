@@ -109,6 +109,8 @@ pub struct ListChannelLogsQuery {
     pub level: Option<String>,
     /// Filter by category (REDEMPTION, REWARD, MARKET, BOT, AUTH, SYSTEM)
     pub category: Option<String>,
+    /// Exact redemption correlation ID from structured event details
+    pub redemption_id: Option<uuid::Uuid>,
     /// Search substring within message or event_type
     pub search: Option<String>,
     /// Filter logs starting from timestamp (inclusive)
@@ -184,6 +186,10 @@ impl Db {
             "SELECT COUNT(*) FROM channel_logs WHERE broadcaster_id = "
         );
         count_builder.push_bind(broadcaster_id);
+        if let Some(id) = query.redemption_id {
+            count_builder.push(" AND details->>'redemption_id' = ");
+            count_builder.push_bind(id.to_string());
+        }
 
         if let Some(level) = &query.level {
             if let Some(lvl) = ChannelLogLevel::from_str_case_insensitive(level) {
@@ -231,6 +237,10 @@ impl Db {
                WHERE broadcaster_id = "#
         );
         select_builder.push_bind(broadcaster_id);
+        if let Some(id) = query.redemption_id {
+            select_builder.push(" AND details->>'redemption_id' = ");
+            select_builder.push_bind(id.to_string());
+        }
 
         if let Some(level) = &query.level {
             if let Some(lvl) = ChannelLogLevel::from_str_case_insensitive(level) {
@@ -323,6 +333,16 @@ impl Db {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redemption_filter_requires_an_exact_uuid() {
+        let id = uuid::Uuid::new_v4();
+        let query: ListChannelLogsQuery = serde_json::from_value(serde_json::json!({ "redemption_id": id })).unwrap();
+        assert_eq!(query.redemption_id, Some(id));
+        assert!(serde_json::from_value::<ListChannelLogsQuery>(serde_json::json!({ "redemption_id": "%" })).is_err());
+        let legacy: ListChannelLogsQuery = serde_json::from_value(serde_json::json!({ "search": "purchase" })).unwrap();
+        assert!(legacy.redemption_id.is_none());
+    }
 
     #[test]
     fn test_channel_log_level_parsing_and_str() {

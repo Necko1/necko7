@@ -89,6 +89,32 @@ pub async fn get_viewer_channel_profile(
     Path(channel_id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ViewerChannelProfileResponse>, ApiError> {
+    build_channel_profile(&channel_id, &user_id, &state).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/broadcasters/{channel_id}/chat/users/{user_id}/profile",
+    tag = "Viewer Profile",
+    summary = "Get channel viewer context for an owner or editor",
+    params(("channel_id" = String, Path), ("user_id" = String, Path)),
+    responses((status = 200, body = ViewerChannelProfileResponse), (status = 403, description = "Owner or editor required")),
+    security(("session_id" = []))
+)]
+pub async fn get_operator_viewer_profile(
+    auth: crate::api::extractor::authorized_channel::AuthorizedChannel,
+    Path((channel_id, user_id)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ViewerChannelProfileResponse>, ApiError> {
+    debug_assert_eq!(channel_id, auth.channel_id);
+    build_channel_profile(&auth.channel_id, &user_id, &state).await
+}
+
+async fn build_channel_profile(
+    channel_id: &str,
+    user_id: &str,
+    state: &Arc<AppState>,
+) -> Result<Json<ViewerChannelProfileResponse>, ApiError> {
     let broadcaster = state.db.resolve_broadcaster(&channel_id).await?
         .ok_or_else(|| ApiError::NotFound {
             message: format!("Channel '{}' not found", channel_id),
@@ -144,7 +170,7 @@ pub async fn get_viewer_channel_profile(
                     Some(&user_id),
                     rule.window_hours,
                     None,
-                ).await.unwrap_or(0);
+                ).await?;
 
                 let max = rule.max_redemptions;
                 let remaining = (max as i64 - used).max(0);

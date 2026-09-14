@@ -62,6 +62,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         public_broadcasters::get_public_rewards,
         public_broadcasters::get_public_reward_by_id,
         viewer_profile::get_viewer_channel_profile,
+        viewer_profile::get_operator_viewer_profile,
         viewer_profile::get_viewer_channel_redemptions,
         viewer_profile::get_viewer_global_profile,
         viewer_profile::get_viewer_global_redemptions,
@@ -209,6 +210,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/broadcasters/{channel_id}/chat/users/{user_id}/redemptions", get(chat_stats::get_user_redemptions))
         .route("/broadcasters/{channel_id}/logs", get(channel_logs::list_channel_logs))
         .route("/broadcasters/{channel_id}/logs/summary", get(channel_logs::get_channel_logs_summary))
+        .route("/broadcasters/{channel_id}/chat/users/{user_id}/profile", get(viewer_profile::get_operator_viewer_profile))
         .route("/broadcasters/{channel_id}/me/profile", get(viewer_profile::get_viewer_channel_profile))
         .route("/broadcasters/{channel_id}/me/redemptions", get(viewer_profile::get_viewer_channel_redemptions))
         .route("/me/profile", get(viewer_profile::get_viewer_global_profile))
@@ -291,6 +293,7 @@ mod tests {
         assert!(json.contains("/api/v1/me/profile"), "OpenAPI schema must contain global viewer profile route");
         assert!(json.contains("/api/v1/me/redemptions"), "OpenAPI schema must contain global viewer redemptions route");
         assert!(json.contains("PublicRewardsConfig"), "OpenAPI schema must contain PublicRewardsConfig");
+        assert!(json.contains("/api/v1/broadcasters/{channel_id}/chat/users/{user_id}/profile"), "Operator viewer context must be documented");
         assert!(json.contains("ViewerGlobalRedemption"), "OpenAPI schema must contain ViewerGlobalRedemption");
     }
 }
