@@ -244,7 +244,7 @@ fn build_public_reward_response(
             crate::db::rewards::PricingMode::Auto => {
                 let markup = 1.0 + (r.twitch_price_markup_percentage as f64 / 100.0);
                 let mult = base_multiplier as f64;
-                let price_major = r.current_market_price as f64 / 100.0;
+                let price_major = crate::steam::market::minor_to_major(r.current_market_price as i64, &r.currency);
                 Some((price_major * mult * markup).round() as i32)
             }
         }
@@ -253,12 +253,12 @@ fn build_public_reward_response(
     };
 
     let market_price = if cfg.show_market_price {
-        Some(r.current_market_price as f64 / 100.0)
+        Some(crate::steam::market::minor_to_major(r.current_market_price as i64, &r.currency))
     } else {
         None
     };
 
-    let currency = if cfg.show_market_price {
+    let currency = if cfg.show_market_price || (cfg.show_pool_items && cfg.show_pool_item_prices) || cfg.show_filter_details {
         Some(r.currency.clone())
     } else {
         None
@@ -282,7 +282,7 @@ fn build_public_reward_response(
                 };
 
                 let item_price = if cfg.show_pool_item_prices {
-                    Some(item.current_market_price as f64 / 100.0)
+                    Some(crate::steam::market::minor_to_major(item.current_market_price as i64, &r.currency))
                 } else {
                     None
                 };
@@ -370,5 +370,56 @@ fn build_public_reward_response(
         filter_details,
         chat_requirements,
         purchase_limits,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::rewards::{Reward, RewardType, PricingMode, PoolItemConfig};
+    use crate::db::broadcaster_settings::PublicRewardsConfig;
+
+    fn reward(currency: &str) -> Reward {
+        Reward {
+            twitch_id: Uuid::new_v4(), is_paused: false, pause_reason: None, is_deleted: false,
+            streamer_id: "123".into(), reward_type: RewardType::Pool, pricing_mode: PricingMode::Auto,
+            price_strategy: None, market_item_name: Some("AK-47 | Redline".into()), filter_config: None,
+            pool_items: Some(sqlx::types::Json(vec![PoolItemConfig { market_hash_name: "AK-47 | Redline".into(), weight: 1.0, permissible_market_price_deviation: 10, current_market_price: 2500, custom_message: None }])),
+            manual_twitch_points: Some(750), twitch_title: "Drop".into(), twitch_description: "Trade URL".into(),
+            current_market_price: 2500, permissible_market_price_deviation: 10, twitch_price_markup_percentage: 20,
+            global_cooldown_seconds: 0, max_redemptions_per_stream: 0, max_redemptions_per_user_per_stream: 0,
+            market_autobuy: true, currency: currency.into(), min_market_price: None, max_market_price: None,
+            chat_min_messages: None, chat_min_characters: None, chat_time_window_hours: None, chat_logical_operator: None,
+            refund_if_chat_req_failed: true, purchase_limits: None, is_public: true,
+            created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn public_prices_and_auto_points_use_the_rewards_currency() {
+        let cfg = PublicRewardsConfig { show_cost_points: true, show_market_price: true, show_pool_items: true, show_pool_item_prices: true, ..Default::default() };
+        for (currency, major, points) in [("USD", 2.5, 300), ("EUR", 2.5, 300), ("RUB", 25.0, 3000)] {
+            let mut r = reward(currency);
+            let public = build_public_reward_response(&r, &cfg, 100);
+            assert_eq!(public.market_price, Some(major));
+            assert_eq!(public.pool_items.unwrap()[0].current_market_price, Some(major));
+            assert_eq!(public.cost_points, Some(points));
+            r.pricing_mode = PricingMode::Manual;
+            assert_eq!(build_public_reward_response(&r, &cfg, 100).cost_points, Some(750));
+        }
+    }
+
+    #[test]
+    fn publishing_pool_prices_keeps_currency_without_exposing_hidden_prices_or_chances() {
+        let mut cfg = PublicRewardsConfig { show_market_price: false, show_pool_items: true, show_pool_item_prices: true, show_pool_chances: false, show_filter_details: false, ..Default::default() };
+        let r = reward("USD");
+        let public = build_public_reward_response(&r, &cfg, 100);
+        assert_eq!(public.currency.as_deref(), Some("USD"));
+        assert_eq!(public.market_price, None);
+        assert_eq!(public.pool_items.unwrap()[0].chance_percentage, None);
+        cfg.show_pool_item_prices = false;
+        let private = build_public_reward_response(&r, &cfg, 100);
+        assert_eq!(private.currency, None);
+        assert_eq!(private.pool_items.unwrap()[0].current_market_price, None);
     }
 }
