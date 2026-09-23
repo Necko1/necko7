@@ -1,3 +1,10 @@
+use crate::messages::{
+    MSG_MARKET_ERR_BOT_BANNED, MSG_MARKET_ERR_INVENTORY_FULL, MSG_MARKET_ERR_INVENTORY_HIDDEN,
+    MSG_MARKET_ERR_NO_MOBILE_AUTH, MSG_MARKET_ERR_OFFLINE_TRADES_DISABLED,
+    MSG_MARKET_ERR_STEAM_BANNED, MSG_MARKET_ERR_TRADE_LINK_CHECK_FAILED,
+    MSG_MARKET_ERR_TRADE_LINK_INVALID, MSG_MARKET_ERR_UNKNOWN,
+};
+
 /// Classification of errors returned by Market.csgo.com `buy-for` API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarketBuyForErrorKind {
@@ -44,6 +51,21 @@ impl MarketBuyForErrorKind {
         )
     }
 
+    /// Returns the corresponding message template key, or None if it's funds/price deviation/generic.
+    pub fn to_market_error_message_key(&self) -> Option<&'static str> {
+        match self {
+            MarketBuyForErrorKind::Unknown => Some(MSG_MARKET_ERR_UNKNOWN),
+            MarketBuyForErrorKind::TradeLinkCheckFailed => Some(MSG_MARKET_ERR_TRADE_LINK_CHECK_FAILED),
+            MarketBuyForErrorKind::InventoryHidden => Some(MSG_MARKET_ERR_INVENTORY_HIDDEN),
+            MarketBuyForErrorKind::SteamBanned => Some(MSG_MARKET_ERR_STEAM_BANNED),
+            MarketBuyForErrorKind::NoMobileAuth => Some(MSG_MARKET_ERR_NO_MOBILE_AUTH),
+            MarketBuyForErrorKind::OfflineTradesDisabled => Some(MSG_MARKET_ERR_OFFLINE_TRADES_DISABLED),
+            MarketBuyForErrorKind::InvalidTradeLink => Some(MSG_MARKET_ERR_TRADE_LINK_INVALID),
+            MarketBuyForErrorKind::CheckBotBanned => Some(MSG_MARKET_ERR_BOT_BANNED),
+            MarketBuyForErrorKind::InventoryFull => Some(MSG_MARKET_ERR_INVENTORY_FULL),
+            _ => None,
+        }
+    }
 }
 
 /// Classifies Market.csgo.com `buy-for` error using both the numeric error code
