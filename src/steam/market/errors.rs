@@ -51,7 +51,7 @@ impl MarketBuyForErrorKind {
         )
     }
 
-    /// Returns the corresponding message template key, or None if it's funds/price deviation/generic.
+    /// Specific chat template for a classified Market response, where available.
     pub fn to_market_error_message_key(&self) -> Option<&'static str> {
         match self {
             MarketBuyForErrorKind::Unknown => Some(MSG_MARKET_ERR_UNKNOWN),
@@ -296,4 +296,5 @@ mod tests {
             MarketBuyForErrorKind::PriceOrChanceDeviation
         );
     }
+
 }

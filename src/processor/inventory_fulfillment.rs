@@ -4,9 +4,10 @@ use uuid::Uuid;
 
 use crate::processor::order_watcher::{OrderWatcher, WatcherRedemptionData};
 use crate::messages::{
+    MSG_MARKET_ERR_UNKNOWN,
     MSG_ORDERS_CREATED, MSG_ORDERS_INSUFFICIENT_FUNDS, MSG_ORDERS_RECONCILIATION_REQUIRED,
     MSG_ORDERS_RETRY_AVAILABLE, MSG_ORDERS_TRADE_LINK_REQUIRED, MSG_ORDERS_UNAVAILABLE,
-    MSG_ORDERS_STEAM_ACCOUNT_ACTION, MSG_ORDERS_REFUNDED, MSG_TRADES_ACCEPTED, MSG_TRADES_CREATED,
+    MSG_ORDERS_REFUNDED, MSG_TRADES_ACCEPTED, MSG_TRADES_CREATED,
     MSG_TRADES_FAILED_BUYER, MSG_TRADES_FAILED_SELLER,
 };
 use crate::state::AppState;
@@ -26,16 +27,12 @@ fn is_definitive_rejection(kind: MarketBuyForErrorKind, order_id: Option<&str>) 
 }
 
 fn rejected_order_template(kind: MarketBuyForErrorKind) -> &'static str {
+    if let Some(template) = kind.to_market_error_message_key() {
+        return template;
+    }
     match kind {
         MarketBuyForErrorKind::NotEnoughFunds => MSG_ORDERS_INSUFFICIENT_FUNDS,
         MarketBuyForErrorKind::PriceOrChanceDeviation => MSG_ORDERS_UNAVAILABLE,
-        MarketBuyForErrorKind::InvalidTradeLink |
-        MarketBuyForErrorKind::TradeLinkCheckFailed |
-        MarketBuyForErrorKind::OfflineTradesDisabled => MSG_ORDERS_TRADE_LINK_REQUIRED,
-        MarketBuyForErrorKind::InventoryHidden |
-        MarketBuyForErrorKind::SteamBanned |
-        MarketBuyForErrorKind::NoMobileAuth |
-        MarketBuyForErrorKind::InventoryFull => MSG_ORDERS_STEAM_ACCOUNT_ACTION,
         _ => MSG_ORDERS_RETRY_AVAILABLE,
     }
 }
@@ -127,7 +124,12 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
             let kind = classify_market_buy_for_error(response.code.unwrap_or(0), &detail);
             if !is_definitive_rejection(kind, response.id.as_deref()) {
                 state.db.mark_attempt_ambiguous(redemption_id, &custom_id, &detail).await.map_err(|e| e.to_string())?;
-                send_inventory_chat(state, &reward.streamer_id, MSG_ORDERS_RECONCILIATION_REQUIRED,
+                let template = if response.id.is_none() && kind == MarketBuyForErrorKind::Unknown {
+                    MSG_MARKET_ERR_UNKNOWN
+                } else {
+                    MSG_ORDERS_RECONCILIATION_REQUIRED
+                };
+                send_inventory_chat(state, &reward.streamer_id, template,
                     &redemption.user_login, &inventory.1, &[]).await;
                 return Ok("RECONCILIATION_REQUIRED");
             }
@@ -269,8 +271,11 @@ pub fn spawn_watcher(state: &Arc<AppState>, redemption_id: Uuid, reward_id: Uuid
 mod tests {
     use super::{is_definitive_rejection, rejected_order_template, resolve_trade_link, terminal_trade_template};
     use crate::messages::{
-        MSG_ORDERS_INSUFFICIENT_FUNDS, MSG_ORDERS_RETRY_AVAILABLE,
-        MSG_ORDERS_STEAM_ACCOUNT_ACTION, MSG_ORDERS_TRADE_LINK_REQUIRED, MSG_ORDERS_UNAVAILABLE,
+        MSG_ORDERS_INSUFFICIENT_FUNDS,
+        MSG_ORDERS_UNAVAILABLE, MSG_MARKET_ERR_BOT_BANNED, MSG_MARKET_ERR_INVENTORY_HIDDEN,
+        MSG_MARKET_ERR_TRADE_LINK_INVALID, MSG_MARKET_ERR_TRADE_LINK_CHECK_FAILED,
+        MSG_MARKET_ERR_STEAM_BANNED, MSG_MARKET_ERR_NO_MOBILE_AUTH,
+        MSG_MARKET_ERR_OFFLINE_TRADES_DISABLED, MSG_MARKET_ERR_INVENTORY_FULL,
         MSG_TRADES_FAILED_BUYER, MSG_TRADES_FAILED_SELLER,
     };
     use crate::steam::market::errors::MarketBuyForErrorKind;
@@ -279,9 +284,14 @@ mod tests {
     fn chat_templates_match_persisted_fulfillment_outcomes() {
         assert_eq!(rejected_order_template(MarketBuyForErrorKind::NotEnoughFunds), MSG_ORDERS_INSUFFICIENT_FUNDS);
         assert_eq!(rejected_order_template(MarketBuyForErrorKind::PriceOrChanceDeviation), MSG_ORDERS_UNAVAILABLE);
-        assert_eq!(rejected_order_template(MarketBuyForErrorKind::InvalidTradeLink), MSG_ORDERS_TRADE_LINK_REQUIRED);
-        assert_eq!(rejected_order_template(MarketBuyForErrorKind::InventoryHidden), MSG_ORDERS_STEAM_ACCOUNT_ACTION);
-        assert_eq!(rejected_order_template(MarketBuyForErrorKind::CheckBotBanned), MSG_ORDERS_RETRY_AVAILABLE);
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::InvalidTradeLink), MSG_MARKET_ERR_TRADE_LINK_INVALID);
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::InventoryHidden), MSG_MARKET_ERR_INVENTORY_HIDDEN);
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::CheckBotBanned), MSG_MARKET_ERR_BOT_BANNED);
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::TradeLinkCheckFailed), MSG_MARKET_ERR_TRADE_LINK_CHECK_FAILED);
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::SteamBanned), MSG_MARKET_ERR_STEAM_BANNED);
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::NoMobileAuth), MSG_MARKET_ERR_NO_MOBILE_AUTH);
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::OfflineTradesDisabled), MSG_MARKET_ERR_OFFLINE_TRADES_DISABLED);
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::InventoryFull), MSG_MARKET_ERR_INVENTORY_FULL);
         assert_eq!(terminal_trade_template(true), MSG_TRADES_FAILED_BUYER);
         assert_eq!(terminal_trade_template(false), MSG_TRADES_FAILED_SELLER);
     }

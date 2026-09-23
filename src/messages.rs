@@ -28,15 +28,6 @@ pub const MSG_ORDERS_UNAVAILABLE: &str = "orders.unavailable";
 pub const MSG_ORDERS_RETRY_AVAILABLE: &str = "orders.retry_available";
 pub const MSG_ORDERS_RECONCILIATION_REQUIRED: &str = "orders.reconciliation_required";
 pub const MSG_ORDERS_REFUNDED: &str = "orders.refunded";
-pub const MSG_ORDERS_POOL_CREATED: &str = "orders.pool_created";
-pub const MSG_ORDERS_FAILED: &str = "orders.failed";
-pub const MSG_ORDERS_FAILED_NO_MONEY_REFUND: &str = "orders.failed_no_money_refund";
-pub const MSG_ORDERS_FAILED_NO_MONEY_PENALTY: &str = "orders.failed_no_money_penalty";
-pub const MSG_ORDERS_FAILED_FILTER_EXHAUSTED: &str = "orders.failed_filter_exhausted";
-pub const MSG_ORDERS_MARKET_ERROR: &str = "orders.market_error";
-pub const MSG_ORDERS_TRADE_LINK_INVALID: &str = "orders.trade_link_invalid";
-pub const MSG_ORDERS_RETRYING: &str = "orders.retrying";
-pub const MSG_ORDERS_MANUAL_HOLD: &str = "orders.manual_hold";
 
 // ── Market Errors Message Keys (buy-for) ───────────────────────────────────
 pub const MSG_MARKET_ERR_UNKNOWN: &str = "market_errors.unknown";
@@ -54,10 +45,6 @@ pub const MSG_TRADES_CREATED: &str = "trades.created";
 pub const MSG_TRADES_ACCEPTED: &str = "trades.accepted";
 pub const MSG_TRADES_FAILED_BUYER: &str = "trades.failed_buyer";
 pub const MSG_TRADES_FAILED_SELLER: &str = "trades.failed_seller";
-pub const MSG_TRADES_FAILED_BUYER_REFUND: &str = "trades.failed_buyer_refund";
-pub const MSG_TRADES_FAILED_BUYER_PENALTY: &str = "trades.failed_buyer_penalty";
-pub const MSG_TRADES_FAILED_SELLER_REFUND: &str = "trades.failed_seller_refund";
-pub const MSG_TRADES_TIMEOUT: &str = "trades.timeout";
 
 // ── Chat Requirements Message Keys ─────────────────────────────────────────
 pub const MSG_CHAT_REQ_FAILED_MESSAGES_REFUND: &str = "chat_requirements.messages_refund";
@@ -71,23 +58,7 @@ pub const MSG_CHAT_REQ_FAILED_BOTH_PENALTY: &str = "chat_requirements.both_penal
 pub const MSG_LIMITS_USER_LIMIT_REACHED: &str = "limits.user_limit_reached";
 pub const MSG_LIMITS_GLOBAL_LIMIT_REACHED: &str = "limits.global_limit_reached";
 
-// ── Backwards-Compatibility Aliases ─────────────────────────────────────────
-pub const MSG_TRADE_LINK_INVALID: &str = MSG_ORDERS_TRADE_LINK_INVALID;
-pub const MSG_ORDER_CREATED: &str = MSG_ORDERS_CREATED;
-pub const MSG_ORDER_POOL_CREATED: &str = MSG_ORDERS_POOL_CREATED;
-pub const MSG_ORDER_FAILED: &str = MSG_ORDERS_FAILED;
-pub const MSG_ORDER_FAILED_NO_MONEY_REFUND: &str = MSG_ORDERS_FAILED_NO_MONEY_REFUND;
-pub const MSG_ORDER_FAILED_NO_MONEY_PENALTY: &str = MSG_ORDERS_FAILED_NO_MONEY_PENALTY;
-pub const MSG_ORDER_FAILED_FILTER_EXHAUSTED: &str = MSG_ORDERS_FAILED_FILTER_EXHAUSTED;
-pub const MSG_ORDER_RETRYING: &str = MSG_ORDERS_RETRYING;
-pub const MSG_ORDER_MANUAL_HOLD: &str = MSG_ORDERS_MANUAL_HOLD;
-pub const MSG_MARKET_ERROR: &str = MSG_ORDERS_MARKET_ERROR;
-pub const MSG_TRADE_CREATED: &str = MSG_TRADES_CREATED;
-pub const MSG_TRADE_ACCEPTED: &str = MSG_TRADES_ACCEPTED;
-pub const MSG_TRADE_FAILED_BUYER_REFUND: &str = MSG_TRADES_FAILED_BUYER_REFUND;
-pub const MSG_TRADE_FAILED_BUYER_PENALTY: &str = MSG_TRADES_FAILED_BUYER_PENALTY;
-pub const MSG_TRADE_FAILED_SELLER_REFUND: &str = MSG_TRADES_FAILED_SELLER_REFUND;
-pub const MSG_TRADE_TIMEOUT: &str = MSG_TRADES_TIMEOUT;
+// ── Call-site aliases ──────────────────────────────────────────────────────
 pub const MSG_USER_PURCHASE_LIMIT_REACHED: &str = MSG_LIMITS_USER_LIMIT_REACHED;
 pub const MSG_GLOBAL_PURCHASE_LIMIT_REACHED: &str = MSG_LIMITS_GLOBAL_LIMIT_REACHED;
 pub const MSG_CHAT_REQ_FAILED_MESSAGES: &str = MSG_CHAT_REQ_FAILED_MESSAGES_REFUND;
@@ -108,15 +79,6 @@ pub struct OrdersMessages {
     pub retry_available: String,
     pub reconciliation_required: String,
     pub refunded: String,
-    pub pool_created: String,
-    pub failed: String,
-    pub failed_no_money_refund: String,
-    pub failed_no_money_penalty: String,
-    pub failed_filter_exhausted: String,
-    pub market_error: String,
-    pub trade_link_invalid: String,
-    pub retrying: String,
-    pub manual_hold: String,
 }
 
 impl Default for OrdersMessages {
@@ -132,15 +94,6 @@ impl Default for OrdersMessages {
             retry_available: "@{buyer} Market did not create an order for {item}. Your points remain pending; check your inventory to retry or request a refund.".to_string(),
             reconciliation_required: "@{buyer} Market's status for {item} is being checked. Please do not start another order or refund until it is resolved; your points remain pending.".to_string(),
             refunded: "@{buyer} Your channel points for {item} were refunded. Inventory fulfillment is closed.".to_string(),
-            pool_created: "@{buyer} Rolled skin {item} (chance: {chance})! Market order created. Please wait for the trade offer (up to 5 minutes).".to_string(),
-            failed: "@{buyer} Failed to create market order. Channel points refunded. Error {code}: {error}".to_string(),
-            failed_no_money_refund: "@{buyer} Insufficient bot balance to purchase the item. Channel points refunded.".to_string(),
-            failed_no_money_penalty: "@{buyer} Insufficient bot balance to purchase the item. Channel points are not refunded per streamer settings.".to_string(),
-            failed_filter_exhausted: "@{buyer} No items found matching the reward filters (attempts exhausted). Channel points refunded.".to_string(),
-            market_error: "@{buyer} An internal market error occurred. Please check logs for details.".to_string(),
-            trade_link_invalid: "@{buyer} Invalid Steam trade URL. Channel points refunded.".to_string(),
-            retrying: "@{buyer} Initial market order attempt failed, retrying automatically. This may take up to 30 minutes.".to_string(),
-            manual_hold: "@{buyer} Item purchase could not be completed automatically. Your request is on hold for manual streamer review. Channel points are preserved.".to_string(),
         }
     }
 }
@@ -161,17 +114,33 @@ pub struct MarketErrorsMessages {
 impl Default for MarketErrorsMessages {
     fn default() -> Self {
         Self {
-            unknown: "@{buyer} Market error: an unknown error occurred. Channel points refunded.".to_string(),
-            trade_link_check_failed: "@{buyer} Market failed to verify your trade link. Channel points refunded.".to_string(),
-            inventory_hidden: "@{buyer} Your Steam inventory is private. Please set your inventory to public and try again. Channel points refunded.".to_string(),
-            steam_banned: "@{buyer} Your Steam account is banned or cannot trade. Channel points refunded.".to_string(),
-            no_mobile_authenticator: "@{buyer} Steam Guard Mobile Authenticator is not enabled on your account. Channel points refunded.".to_string(),
-            offline_trades_disabled: "@{buyer} Error verifying trade link. Please enable offline trade offers in your Steam settings. Channel points refunded.".to_string(),
-            trade_link_invalid: "@{buyer} Your Steam trade link is invalid. Channel points refunded.".to_string(),
-            trade_check_bot_banned: "@{buyer} Market verification bot is currently unavailable. Please try again later. Channel points refunded.".to_string(),
-            inventory_full: "@{buyer} Your CS2 inventory is full. Please free up space and try again. Channel points refunded.".to_string(),
+            unknown: "@{buyer} Market returned an uncertain result for {item}. We are checking whether an order exists; your points remain pending. Do not retry or refund yet.".to_string(),
+            trade_link_check_failed: "@{buyer} Market could not verify the trade link for {item}. Check the link and your inventory for available actions; your points remain pending.".to_string(),
+            inventory_hidden: "@{buyer} Market could not order {item} because your Steam inventory is private. Make it public, then check your inventory for available actions; your points remain pending.".to_string(),
+            steam_banned: "@{buyer} Market could not order {item} because your Steam account cannot trade. Check Steam restrictions and your inventory for available actions; your points remain pending.".to_string(),
+            no_mobile_authenticator: "@{buyer} Market could not order {item} because Steam Guard Mobile Authenticator is not enabled. Check your Steam account and inventory for available actions; your points remain pending.".to_string(),
+            offline_trades_disabled: "@{buyer} Market could not order {item} because offline trade offers are unavailable on your Steam account. Check Steam settings and your inventory for available actions; your points remain pending.".to_string(),
+            trade_link_invalid: "@{buyer} Market rejected the trade link for {item}. Correct the link, then check your inventory for available actions; your points remain pending.".to_string(),
+            trade_check_bot_banned: "@{buyer} Market could not verify the trade link for {item} because its checking bot is unavailable. Check your inventory for available actions; your points remain pending.".to_string(),
+            inventory_full: "@{buyer} Market could not order {item} because your CS2 inventory is full. Free up space, then check your inventory for available actions; your points remain pending.".to_string(),
         }
     }
+}
+
+// Older settings saves copied every displayed default into the override JSON.
+// Ignore only those exact obsolete defaults; separately authored messages stay intact.
+fn is_legacy_market_default(key: &str, value: &str) -> bool {
+    matches!((key, value),
+        ("unknown", "@{buyer} Market error: an unknown error occurred. Channel points refunded.") |
+        ("trade_link_check_failed", "@{buyer} Market failed to verify your trade link. Channel points refunded.") |
+        ("inventory_hidden", "@{buyer} Your Steam inventory is private. Please set your inventory to public and try again. Channel points refunded.") |
+        ("steam_banned", "@{buyer} Your Steam account is banned or cannot trade. Channel points refunded.") |
+        ("no_mobile_authenticator", "@{buyer} Steam Guard Mobile Authenticator is not enabled on your account. Channel points refunded.") |
+        ("offline_trades_disabled", "@{buyer} Error verifying trade link. Please enable offline trade offers in your Steam settings. Channel points refunded.") |
+        ("trade_link_invalid", "@{buyer} Your Steam trade link is invalid. Channel points refunded.") |
+        ("trade_check_bot_banned", "@{buyer} Market verification bot is currently unavailable. Please try again later. Channel points refunded.") |
+        ("inventory_full", "@{buyer} Your CS2 inventory is full. Please free up space and try again. Channel points refunded.")
+    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
@@ -180,10 +149,6 @@ pub struct TradesMessages {
     pub accepted: String,
     pub failed_buyer: String,
     pub failed_seller: String,
-    pub failed_buyer_refund: String,
-    pub failed_buyer_penalty: String,
-    pub failed_seller_refund: String,
-    pub timeout: String,
 }
 
 impl Default for TradesMessages {
@@ -193,10 +158,6 @@ impl Default for TradesMessages {
             accepted: "@{buyer} Trade offer accepted. Enjoy your skin!".to_string(),
             failed_buyer: "@{buyer} The Steam trade for {item} ended without delivery on the buyer side. Your points remain pending; check your inventory for available actions.".to_string(),
             failed_seller: "@{buyer} The Market trade for {item} ended without delivery. Your points remain pending; check your inventory to retry or request a refund.".to_string(),
-            failed_buyer_refund: "@{buyer} Trade offer failed or was declined. Channel points refunded.".to_string(),
-            failed_buyer_penalty: "@{buyer} Trade offer failed or was declined. Channel points are not refunded per streamer settings.".to_string(),
-            failed_seller_refund: "@{buyer} Seller failed to send the item. Channel points refunded.".to_string(),
-            timeout: "@{buyer} Trade offer timed out. Channel points are not refunded.".to_string(),
         }
     }
 }
@@ -274,15 +235,6 @@ impl From<serde_json::Value> for CategorizedChatMessages {
                 if let Some(v) = orders_val.get("retry_available").and_then(|s| s.as_str()) { result.orders.retry_available = v.to_string(); }
                 if let Some(v) = orders_val.get("reconciliation_required").and_then(|s| s.as_str()) { result.orders.reconciliation_required = v.to_string(); }
                 if let Some(v) = orders_val.get("refunded").and_then(|s| s.as_str()) { result.orders.refunded = v.to_string(); }
-                if let Some(v) = orders_val.get("pool_created").and_then(|s| s.as_str()) { result.orders.pool_created = v.to_string(); }
-                if let Some(v) = orders_val.get("failed").and_then(|s| s.as_str()) { result.orders.failed = v.to_string(); }
-                if let Some(v) = orders_val.get("failed_no_money_refund").and_then(|s| s.as_str()) { result.orders.failed_no_money_refund = v.to_string(); }
-                if let Some(v) = orders_val.get("failed_no_money_penalty").and_then(|s| s.as_str()) { result.orders.failed_no_money_penalty = v.to_string(); }
-                if let Some(v) = orders_val.get("failed_filter_exhausted").and_then(|s| s.as_str()) { result.orders.failed_filter_exhausted = v.to_string(); }
-                if let Some(v) = orders_val.get("market_error").and_then(|s| s.as_str()) { result.orders.market_error = v.to_string(); }
-                if let Some(v) = orders_val.get("trade_link_invalid").and_then(|s| s.as_str()) { result.orders.trade_link_invalid = v.to_string(); }
-                if let Some(v) = orders_val.get("retrying").and_then(|s| s.as_str()) { result.orders.retrying = v.to_string(); }
-                if let Some(v) = orders_val.get("manual_hold").and_then(|s| s.as_str()) { result.orders.manual_hold = v.to_string(); }
             }
             if let Some(m_val) = obj.get("market_errors").and_then(|v| v.as_object()) {
                 if let Some(v) = m_val.get("unknown").and_then(|s| s.as_str()) { result.market_errors.unknown = v.to_string(); }
@@ -300,10 +252,6 @@ impl From<serde_json::Value> for CategorizedChatMessages {
                 if let Some(v) = t_val.get("accepted").and_then(|s| s.as_str()) { result.trades.accepted = v.to_string(); }
                 if let Some(v) = t_val.get("failed_buyer").and_then(|s| s.as_str()) { result.trades.failed_buyer = v.to_string(); }
                 if let Some(v) = t_val.get("failed_seller").and_then(|s| s.as_str()) { result.trades.failed_seller = v.to_string(); }
-                if let Some(v) = t_val.get("failed_buyer_refund").and_then(|s| s.as_str()) { result.trades.failed_buyer_refund = v.to_string(); }
-                if let Some(v) = t_val.get("failed_buyer_penalty").and_then(|s| s.as_str()) { result.trades.failed_buyer_penalty = v.to_string(); }
-                if let Some(v) = t_val.get("failed_seller_refund").and_then(|s| s.as_str()) { result.trades.failed_seller_refund = v.to_string(); }
-                if let Some(v) = t_val.get("timeout").and_then(|s| s.as_str()) { result.trades.timeout = v.to_string(); }
             }
             if let Some(c_val) = obj.get("chat_requirements").and_then(|v| v.as_object()) {
                 if let Some(v) = c_val.get("messages_refund").and_then(|s| s.as_str()) { result.chat_requirements.messages_refund = v.to_string(); }
@@ -338,15 +286,6 @@ impl From<serde_json::Value> for CategorizedChatMessages {
                     ("orders", "retry_available") => result.orders.retry_available = val_str,
                     ("orders", "reconciliation_required") => result.orders.reconciliation_required = val_str,
                     ("orders", "refunded") => result.orders.refunded = val_str,
-                    ("orders", "pool_created") => result.orders.pool_created = val_str,
-                    ("orders", "failed") => result.orders.failed = val_str,
-                    ("orders", "failed_no_money_refund") => result.orders.failed_no_money_refund = val_str,
-                    ("orders", "failed_no_money_penalty") => result.orders.failed_no_money_penalty = val_str,
-                    ("orders", "failed_filter_exhausted") => result.orders.failed_filter_exhausted = val_str,
-                    ("orders", "market_error") => result.orders.market_error = val_str,
-                    ("orders", "trade_link_invalid") => result.orders.trade_link_invalid = val_str,
-                    ("orders", "retrying") => result.orders.retrying = val_str,
-                    ("orders", "manual_hold") => result.orders.manual_hold = val_str,
 
                     ("market_errors", "unknown") => result.market_errors.unknown = val_str,
                     ("market_errors", "trade_link_check_failed") => result.market_errors.trade_link_check_failed = val_str,
@@ -362,10 +301,6 @@ impl From<serde_json::Value> for CategorizedChatMessages {
                     ("trades", "accepted") => result.trades.accepted = val_str,
                     ("trades", "failed_buyer") => result.trades.failed_buyer = val_str,
                     ("trades", "failed_seller") => result.trades.failed_seller = val_str,
-                    ("trades", "failed_buyer_refund") => result.trades.failed_buyer_refund = val_str,
-                    ("trades", "failed_buyer_penalty") => result.trades.failed_buyer_penalty = val_str,
-                    ("trades", "failed_seller_refund") => result.trades.failed_seller_refund = val_str,
-                    ("trades", "timeout") => result.trades.timeout = val_str,
 
                     ("chat_requirements", "messages_refund") => result.chat_requirements.messages_refund = val_str,
                     ("chat_requirements", "messages_penalty") => result.chat_requirements.messages_penalty = val_str,
@@ -412,15 +347,6 @@ impl CategorizedChatMessages {
                 "retry_available" => Some(&self.orders.retry_available),
                 "reconciliation_required" => Some(&self.orders.reconciliation_required),
                 "refunded" => Some(&self.orders.refunded),
-                "pool_created" => Some(&self.orders.pool_created),
-                "failed" => Some(&self.orders.failed),
-                "failed_no_money_refund" => Some(&self.orders.failed_no_money_refund),
-                "failed_no_money_penalty" => Some(&self.orders.failed_no_money_penalty),
-                "failed_filter_exhausted" => Some(&self.orders.failed_filter_exhausted),
-                "market_error" => Some(&self.orders.market_error),
-                "trade_link_invalid" => Some(&self.orders.trade_link_invalid),
-                "retrying" => Some(&self.orders.retrying),
-                "manual_hold" => Some(&self.orders.manual_hold),
                 _ => None,
             },
             "market_errors" => match key {
@@ -440,10 +366,6 @@ impl CategorizedChatMessages {
                 "accepted" => Some(&self.trades.accepted),
                 "failed_buyer" => Some(&self.trades.failed_buyer),
                 "failed_seller" => Some(&self.trades.failed_seller),
-                "failed_buyer_refund" => Some(&self.trades.failed_buyer_refund),
-                "failed_buyer_penalty" => Some(&self.trades.failed_buyer_penalty),
-                "failed_seller_refund" => Some(&self.trades.failed_seller_refund),
-                "timeout" => Some(&self.trades.timeout),
                 _ => None,
             },
             "chat_requirements" => match key {
@@ -482,6 +404,9 @@ impl CategorizedChatMessages {
                 if trimmed.is_empty() {
                     continue;
                 }
+                if cat == "market_errors" && is_legacy_market_default(key, trimmed) {
+                    continue;
+                }
                 match (cat.as_str(), key.as_str()) {
                     ("orders", "created") => merged.orders.created = trimmed.to_string(),
                     ("orders", "waiting_viewer") => merged.orders.waiting_viewer = trimmed.to_string(),
@@ -493,15 +418,6 @@ impl CategorizedChatMessages {
                     ("orders", "retry_available") => merged.orders.retry_available = trimmed.to_string(),
                     ("orders", "reconciliation_required") => merged.orders.reconciliation_required = trimmed.to_string(),
                     ("orders", "refunded") => merged.orders.refunded = trimmed.to_string(),
-                    ("orders", "pool_created") => merged.orders.pool_created = trimmed.to_string(),
-                    ("orders", "failed") => merged.orders.failed = trimmed.to_string(),
-                    ("orders", "failed_no_money_refund") => merged.orders.failed_no_money_refund = trimmed.to_string(),
-                    ("orders", "failed_no_money_penalty") => merged.orders.failed_no_money_penalty = trimmed.to_string(),
-                    ("orders", "failed_filter_exhausted") => merged.orders.failed_filter_exhausted = trimmed.to_string(),
-                    ("orders", "market_error") => merged.orders.market_error = trimmed.to_string(),
-                    ("orders", "trade_link_invalid") => merged.orders.trade_link_invalid = trimmed.to_string(),
-                    ("orders", "retrying") => merged.orders.retrying = trimmed.to_string(),
-                    ("orders", "manual_hold") => merged.orders.manual_hold = trimmed.to_string(),
 
                     ("market_errors", "unknown") => merged.market_errors.unknown = trimmed.to_string(),
                     ("market_errors", "trade_link_check_failed") => merged.market_errors.trade_link_check_failed = trimmed.to_string(),
@@ -517,10 +433,6 @@ impl CategorizedChatMessages {
                     ("trades", "accepted") => merged.trades.accepted = trimmed.to_string(),
                     ("trades", "failed_buyer") => merged.trades.failed_buyer = trimmed.to_string(),
                     ("trades", "failed_seller") => merged.trades.failed_seller = trimmed.to_string(),
-                    ("trades", "failed_buyer_refund") => merged.trades.failed_buyer_refund = trimmed.to_string(),
-                    ("trades", "failed_buyer_penalty") => merged.trades.failed_buyer_penalty = trimmed.to_string(),
-                    ("trades", "failed_seller_refund") => merged.trades.failed_seller_refund = trimmed.to_string(),
-                    ("trades", "timeout") => merged.trades.timeout = trimmed.to_string(),
 
                     ("chat_requirements", "messages_refund") => merged.chat_requirements.messages_refund = trimmed.to_string(),
                     ("chat_requirements", "messages_penalty") => merged.chat_requirements.messages_penalty = trimmed.to_string(),
@@ -545,37 +457,16 @@ impl CategorizedChatMessages {
         for key in ["waiting_viewer", "waiting_operator", "trade_link_required", "steam_account_action", "insufficient_funds", "unavailable", "retry_available", "reconciliation_required", "refunded"] {
             orders.insert(key.to_string(), vec!["buyer".to_string(), "item".to_string()]);
         }
-        orders.insert("pool_created".to_string(), vec!["buyer".to_string(), "item".to_string(), "chance".to_string()]);
-        orders.insert("failed".to_string(), vec!["buyer".to_string(), "code".to_string(), "error".to_string(), "item".to_string()]);
-        orders.insert("failed_no_money_refund".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-        orders.insert("failed_no_money_penalty".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-        orders.insert("failed_filter_exhausted".to_string(), vec!["buyer".to_string(), "attempts".to_string()]);
-        orders.insert("market_error".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-        orders.insert("trade_link_invalid".to_string(), vec!["buyer".to_string()]);
-        orders.insert("retrying".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-        orders.insert("manual_hold".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-
         let mut market_errors = HashMap::new();
-        market_errors.insert("unknown".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-        market_errors.insert("trade_link_check_failed".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-        market_errors.insert("inventory_hidden".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-        market_errors.insert("steam_banned".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-        market_errors.insert("no_mobile_authenticator".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-        market_errors.insert("offline_trades_disabled".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-        market_errors.insert("trade_link_invalid".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-        market_errors.insert("trade_check_bot_banned".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-        market_errors.insert("inventory_full".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-
+        for key in ["unknown", "trade_link_check_failed", "inventory_hidden", "steam_banned", "no_mobile_authenticator", "offline_trades_disabled", "trade_link_invalid", "trade_check_bot_banned", "inventory_full"] {
+            market_errors.insert(key.to_string(), vec!["buyer".to_string(), "item".to_string()]);
+        }
         let mut trades = HashMap::new();
         trades.insert("created".to_string(), vec!["buyer".to_string(), "remaining".to_string(), "tradeoffer".to_string(), "item".to_string()]);
         trades.insert("accepted".to_string(), vec!["buyer".to_string(), "item".to_string()]);
         for key in ["failed_buyer", "failed_seller"] {
             trades.insert(key.to_string(), vec!["buyer".to_string(), "item".to_string()]);
         }
-        trades.insert("failed_buyer_refund".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-        trades.insert("failed_buyer_penalty".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-        trades.insert("failed_seller_refund".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-        trades.insert("timeout".to_string(), vec!["buyer".to_string(), "item".to_string()]);
 
         let mut chat_requirements = HashMap::new();
         let chat_msg_vars = vec!["buyer".to_string(), "user_messages".to_string(), "min_messages".to_string(), "hours".to_string(), "period".to_string()];
@@ -617,16 +508,6 @@ pub fn resolve_category_and_key(message_id: &str) -> Option<(&'static str, &'sta
         "orders.retry_available" => Some(("orders", "retry_available")),
         "orders.reconciliation_required" => Some(("orders", "reconciliation_required")),
         "orders.refunded" => Some(("orders", "refunded")),
-        "orders.pool_created" => Some(("orders", "pool_created")),
-        "orders.failed" => Some(("orders", "failed")),
-        "orders.failed_no_money_refund" => Some(("orders", "failed_no_money_refund")),
-        "orders.failed_no_money_penalty" => Some(("orders", "failed_no_money_penalty")),
-        "orders.failed_filter_exhausted" => Some(("orders", "failed_filter_exhausted")),
-        "orders.market_error" => Some(("orders", "market_error")),
-        "orders.trade_link_invalid" => Some(("orders", "trade_link_invalid")),
-        "orders.retrying" => Some(("orders", "retrying")),
-        "orders.manual_hold" => Some(("orders", "manual_hold")),
-
         "market_errors.unknown" => Some(("market_errors", "unknown")),
         "market_errors.trade_link_check_failed" => Some(("market_errors", "trade_link_check_failed")),
         "market_errors.inventory_hidden" => Some(("market_errors", "inventory_hidden")),
@@ -636,15 +517,10 @@ pub fn resolve_category_and_key(message_id: &str) -> Option<(&'static str, &'sta
         "market_errors.trade_link_invalid" => Some(("market_errors", "trade_link_invalid")),
         "market_errors.trade_check_bot_banned" => Some(("market_errors", "trade_check_bot_banned")),
         "market_errors.inventory_full" => Some(("market_errors", "inventory_full")),
-
         "trades.created" => Some(("trades", "created")),
         "trades.accepted" => Some(("trades", "accepted")),
         "trades.failed_buyer" => Some(("trades", "failed_buyer")),
         "trades.failed_seller" => Some(("trades", "failed_seller")),
-        "trades.failed_buyer_refund" => Some(("trades", "failed_buyer_refund")),
-        "trades.failed_buyer_penalty" => Some(("trades", "failed_buyer_penalty")),
-        "trades.failed_seller_refund" => Some(("trades", "failed_seller_refund")),
-        "trades.timeout" => Some(("trades", "timeout")),
 
         "chat_requirements.messages_refund" => Some(("chat_requirements", "messages_refund")),
         "chat_requirements.messages_penalty" => Some(("chat_requirements", "messages_penalty")),
@@ -658,22 +534,8 @@ pub fn resolve_category_and_key(message_id: &str) -> Option<(&'static str, &'sta
 
         // Legacy flat keys
         "order_created" => Some(("orders", "created")),
-        "order_pool_created" => Some(("orders", "pool_created")),
-        "order_failed" => Some(("orders", "failed")),
-        "order_failed_no_money_refund" => Some(("orders", "failed_no_money_refund")),
-        "order_failed_no_money_penalty" => Some(("orders", "failed_no_money_penalty")),
-        "order_failed_filter_exhausted" => Some(("orders", "failed_filter_exhausted")),
-        "order_retrying" => Some(("orders", "retrying")),
-        "order_manual_hold" => Some(("orders", "manual_hold")),
-        "market_error" => Some(("orders", "market_error")),
-        "trade_link_invalid" => Some(("orders", "trade_link_invalid")),
-
         "trade_created" => Some(("trades", "created")),
         "trade_accepted" => Some(("trades", "accepted")),
-        "trade_failed_buyer_refund" => Some(("trades", "failed_buyer_refund")),
-        "trade_failed_buyer_penalty" => Some(("trades", "failed_buyer_penalty")),
-        "trade_failed_seller_refund" => Some(("trades", "failed_seller_refund")),
-        "trade_timeout" => Some(("trades", "timeout")),
 
         "chat_req_failed_messages_refund" | "chat_req_failed_messages" => Some(("chat_requirements", "messages_refund")),
         "chat_req_failed_messages_penalty" => Some(("chat_requirements", "messages_penalty")),
@@ -707,7 +569,7 @@ pub fn parse_custom_messages(val: serde_json::Value) -> HashMap<String, HashMap<
                 let cat_map = result.entry(cat.clone()).or_default();
                 for (k, v) in sub_obj {
                     if let Some(s) = v.as_str() {
-                        if !s.trim().is_empty() {
+                        if !s.trim().is_empty() && !(cat == "market_errors" && is_legacy_market_default(k, s)) {
                             cat_map.insert(k.clone(), s.to_string());
                         }
                     }
@@ -719,7 +581,9 @@ pub fn parse_custom_messages(val: serde_json::Value) -> HashMap<String, HashMap<
             if let Some(s) = v.as_str() {
                 if !s.trim().is_empty() {
                     if let Some((cat, subkey)) = resolve_category_and_key(k) {
-                        result.entry(cat.to_string()).or_default().insert(subkey.to_string(), s.to_string());
+                        if !(cat == "market_errors" && is_legacy_market_default(subkey, s)) {
+                            result.entry(cat.to_string()).or_default().insert(subkey.to_string(), s.to_string());
+                        }
                     }
                 }
             }
@@ -770,6 +634,7 @@ mod tests {
         assert_eq!(defaults.get_message(MSG_ORDERS_CREATED).unwrap(), &defaults.orders.created);
         assert_eq!(defaults.get_message("order_created").unwrap(), &defaults.orders.created);
         assert_eq!(defaults.get_message(MSG_MARKET_ERR_INVENTORY_HIDDEN).unwrap(), &defaults.market_errors.inventory_hidden);
+        assert_eq!(defaults.get_message(MSG_ORDERS_STEAM_ACCOUNT_ACTION).unwrap(), &defaults.orders.steam_account_action);
         assert_eq!(defaults.get_message(MSG_TRADES_ACCEPTED).unwrap(), &defaults.trades.accepted);
         assert_eq!(defaults.get_message(MSG_CHAT_REQ_FAILED_MESSAGES_REFUND).unwrap(), &defaults.chat_requirements.messages_refund);
         assert_eq!(defaults.get_message(MSG_LIMITS_USER_LIMIT_REACHED).unwrap(), &defaults.limits.user_limit_reached);
@@ -785,6 +650,11 @@ mod tests {
             MSG_ORDERS_STEAM_ACCOUNT_ACTION,
             MSG_ORDERS_UNAVAILABLE, MSG_ORDERS_RETRY_AVAILABLE,
             MSG_ORDERS_RECONCILIATION_REQUIRED, MSG_ORDERS_REFUNDED,
+            MSG_MARKET_ERR_UNKNOWN, MSG_MARKET_ERR_TRADE_LINK_CHECK_FAILED,
+            MSG_MARKET_ERR_INVENTORY_HIDDEN, MSG_MARKET_ERR_STEAM_BANNED,
+            MSG_MARKET_ERR_NO_MOBILE_AUTH, MSG_MARKET_ERR_OFFLINE_TRADES_DISABLED,
+            MSG_MARKET_ERR_TRADE_LINK_INVALID, MSG_MARKET_ERR_BOT_BANNED,
+            MSG_MARKET_ERR_INVENTORY_FULL,
             MSG_TRADES_FAILED_BUYER, MSG_TRADES_FAILED_SELLER,
         ] {
             let (category, name) = resolve_category_and_key(key).unwrap();
@@ -792,6 +662,7 @@ mod tests {
             assert!(!template.contains("points refunded") || key == MSG_ORDERS_REFUNDED, "{key}");
             let allowed = match category {
                 "orders" => placeholders.orders.get(name).unwrap(),
+                "market_errors" => placeholders.market_errors.get(name).unwrap(),
                 "trades" => placeholders.trades.get(name).unwrap(),
                 _ => unreachable!(),
             };
@@ -818,8 +689,8 @@ mod tests {
         let from_flat: CategorizedChatMessages = serde_json::from_value(flat_json).unwrap();
         assert_eq!(from_flat.orders.created, "Custom flat order created");
         assert_eq!(from_flat.trades.accepted, "Custom flat trade accepted");
-        // default filled for rest
-        assert_eq!(from_flat.market_errors.inventory_hidden, CategorizedChatMessages::default().market_errors.inventory_hidden);
+        // default filled for other active templates
+        assert_eq!(from_flat.orders.waiting_viewer, CategorizedChatMessages::default().orders.waiting_viewer);
 
         // Nested category format
         let nested_json = serde_json::json!({
@@ -842,48 +713,65 @@ mod tests {
         let mut custom = HashMap::new();
         let mut orders_map = HashMap::new();
         orders_map.insert("created".to_string(), "Overridden order created".to_string());
-        orders_map.insert("failed".to_string(), "".to_string()); // empty ignored
+        orders_map.insert("failed_no_money_refund".to_string(), "Obsolete refund claim".to_string());
         custom.insert("orders".to_string(), orders_map);
 
         let merged = CategorizedChatMessages::merge_with_overrides(&defaults, &custom);
         assert_eq!(merged.orders.created, "Overridden order created");
-        assert_eq!(merged.orders.failed, defaults.orders.failed);
+        assert!(serde_json::to_value(&merged).unwrap()["orders"].get("failed_no_money_refund").is_none());
     }
 
     #[test]
     fn test_parse_custom_messages_both_formats() {
         let flat = serde_json::json!({
             "order_created": "My order",
-            "trade_timeout": "My timeout"
+            "trade_created": "My trade"
         });
         let parsed_flat = parse_custom_messages(flat);
         assert_eq!(parsed_flat.get("orders").unwrap().get("created").unwrap(), "My order");
-        assert_eq!(parsed_flat.get("trades").unwrap().get("timeout").unwrap(), "My timeout");
+        assert_eq!(parsed_flat.get("trades").unwrap().get("created").unwrap(), "My trade");
 
         let nested = serde_json::json!({
-            "market_errors": {
-                "inventory_hidden": "Custom hidden"
+            "orders": {
+                "waiting_viewer": "Custom wait"
             }
         });
         let parsed_nested = parse_custom_messages(nested);
-        assert_eq!(parsed_nested.get("market_errors").unwrap().get("inventory_hidden").unwrap(), "Custom hidden");
+        assert_eq!(parsed_nested.get("orders").unwrap().get("waiting_viewer").unwrap(), "Custom wait");
     }
 
     #[test]
-    fn test_orders_pool_created_template() {
+    fn active_templates_exclude_removed_refund_and_retry_flags() {
         let defaults = CategorizedChatMessages::default();
-        let tpl = defaults.get_message(MSG_ORDERS_POOL_CREATED).expect("pool_created template must exist");
-        let rendered = render_template(tpl, &[
-            ("buyer", "viewer1"),
-            ("item", "MAC-10 | Bronzer"),
-            ("chance", "0.5%"),
-        ]);
-        assert_eq!(rendered, "@viewer1 Rolled skin MAC-10 | Bronzer (chance: 0.5%)! Market order created. Please wait for the trade offer (up to 5 minutes).");
+        let visible = serde_json::to_value(&defaults).unwrap();
+        assert!(visible.get("market_errors").is_some());
+        for key in ["pool_created", "failed_no_money_refund", "failed_no_money_penalty", "failed_filter_exhausted", "retrying", "manual_hold"] {
+            assert!(visible["orders"].get(key).is_none(), "{key}");
+            assert!(defaults.get_message(&format!("orders.{key}")).is_none(), "{key}");
+        }
+        for key in ["failed_buyer_refund", "failed_buyer_penalty", "failed_seller_refund", "timeout"] {
+            assert!(visible["trades"].get(key).is_none(), "{key}");
+        }
+        assert!(visible["chat_requirements"].get("messages_refund").is_some());
+        assert!(visible["chat_requirements"].get("messages_penalty").is_some());
+    }
 
-        let placeholders = CategorizedChatMessages::all_placeholders();
-        let pool_vars = placeholders.orders.get("pool_created").expect("orders.pool_created placeholders must exist");
-        assert!(pool_vars.contains(&"chance".to_string()));
-        assert!(pool_vars.contains(&"item".to_string()));
-        assert!(pool_vars.contains(&"buyer".to_string()));
+    #[test]
+    fn copied_legacy_market_defaults_do_not_claim_a_refund() {
+        let old = "@{buyer} Your Steam inventory is private. Please set your inventory to public and try again. Channel points refunded.";
+        let saved = serde_json::json!({"market_errors": {"inventory_hidden": old}});
+        let parsed = parse_custom_messages(saved);
+        assert!(parsed.get("market_errors").and_then(|m| m.get("inventory_hidden")).is_none());
+        let merged = CategorizedChatMessages::merge_with_overrides(
+            &CategorizedChatMessages::default(),
+            &HashMap::from([("market_errors".to_string(), HashMap::from([("inventory_hidden".to_string(), old.to_string())]))]),
+        );
+        assert_eq!(merged.get_message(MSG_MARKET_ERR_INVENTORY_HIDDEN), Some(CategorizedChatMessages::default().market_errors.inventory_hidden.as_str()));
+        let custom = "@{buyer} Please open your Steam inventory for {item}.";
+        let merged_custom = CategorizedChatMessages::merge_with_overrides(
+            &CategorizedChatMessages::default(),
+            &HashMap::from([("market_errors".to_string(), HashMap::from([("inventory_hidden".to_string(), custom.to_string())]))]),
+        );
+        assert_eq!(merged_custom.get_message(MSG_MARKET_ERR_INVENTORY_HIDDEN), Some(custom));
     }
 }
