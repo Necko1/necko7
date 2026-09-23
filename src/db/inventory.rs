@@ -41,6 +41,7 @@ pub struct InventoryItem {
     pub lifecycle_status: String,
     pub fulfillment_mode: String,
     pub buyer_retry_allowed: bool,
+    pub has_buyer_revert: bool,
     pub market_order_id: Option<String>,
     pub market_custom_id: Option<String>,
     pub latest_attempt_custom_id: Option<String>,
@@ -214,16 +215,20 @@ impl Db {
             .bind(redemption_id).fetch_one(&mut *tx).await?;
         if redemption_status != "PENDING" { return Ok(None); }
         if last_action.is_some_and(|at| (Utc::now() - at).num_seconds() < 30) { return Ok(None); }
-        let latest = sqlx::query("SELECT status, outcome_kind FROM inventory_order_attempts WHERE inventory_id = $1 ORDER BY attempt_id DESC LIMIT 1")
+        let latest = sqlx::query("SELECT status FROM inventory_order_attempts WHERE inventory_id = $1 ORDER BY attempt_id DESC LIMIT 1")
             .bind(inventory_id).fetch_optional(&mut *tx).await?;
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM inventory_order_attempts WHERE inventory_id = $1")
             .bind(inventory_id).fetch_one(&mut *tx).await?;
         if let Some(ref previous) = latest {
             let previous_status: String = previous.try_get("status")?;
             if !matches!(previous_status.as_str(), "REJECTED" | "SELLER_FAILED" | "BUYER_FAILED") { return Ok(None); }
-            let previous_outcome: Option<String> = previous.try_get("outcome_kind")?;
-            if viewer_action && previous_outcome.as_deref() == Some("buyer_reverted") { return Ok(None); }
             if previous_status == "BUYER_FAILED" && viewer_action && !buyer_allowed { return Ok(None); }
+        }
+        if viewer_action {
+            let has_buyer_revert: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM inventory_order_attempts WHERE inventory_id = $1 AND outcome_kind = 'buyer_reverted')"
+            ).bind(inventory_id).fetch_one(&mut *tx).await?;
+            if has_buyer_revert { return Ok(None); }
         }
         let any_unresolved: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM inventory_order_attempts WHERE inventory_id = $1
@@ -524,10 +529,10 @@ impl Db {
             .bind(redemption_id).fetch_one(&mut *tx).await?;
         if redemption_status != "PENDING" { return Ok(false); }
         if viewer_action {
-            let latest_outcome: Option<String> = sqlx::query_scalar(
-                "SELECT outcome_kind FROM inventory_order_attempts WHERE inventory_id = $1 ORDER BY attempt_id DESC LIMIT 1"
-            ).bind(id).fetch_optional(&mut *tx).await?.flatten();
-            if latest_outcome.as_deref() == Some("buyer_reverted") { return Ok(false); }
+            let has_buyer_revert: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM inventory_order_attempts WHERE inventory_id = $1 AND outcome_kind = 'buyer_reverted')"
+            ).bind(id).fetch_one(&mut *tx).await?;
+            if has_buyer_revert { return Ok(false); }
         }
         let unsafe_attempt: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM inventory_order_attempts WHERE inventory_id = $1 AND NOT
             (status IN ('REJECTED','SELLER_FAILED','BUYER_FAILED') OR (status = 'TERMINAL_UNCLASSIFIED' AND last_market_stage = '5')))")
@@ -559,6 +564,7 @@ impl Db {
         Ok(sqlx::query_as::<_, InventoryItem>(
             "SELECT i.id, i.redemption_id, i.viewer_id, i.item_name, i.fixed_price, i.currency,
                     i.lifecycle_status, i.fulfillment_mode, i.buyer_retry_allowed,
+                    EXISTS(SELECT 1 FROM inventory_order_attempts buyer_reverts WHERE buyer_reverts.inventory_id = i.id AND buyer_reverts.outcome_kind = 'buyer_reverted') AS has_buyer_revert,
                     i.market_order_id, i.market_custom_id, latest.custom_id AS latest_attempt_custom_id,
                     latest.max_price AS latest_attempt_max_price, latest.status AS latest_attempt_status,
                     latest.outcome_kind AS latest_attempt_outcome_kind,
@@ -777,6 +783,7 @@ mod tests {
             assert_eq!(item.latest_market_stage.as_deref(), Some("5"));
             assert_eq!(item.attempt_count, 1, "a terminal observation must not create another Market attempt");
             assert_eq!(item.latest_attempt_outcome_kind.as_deref(), Some(expected));
+            assert_eq!(item.has_buyer_revert, expected == "buyer_reverted");
             assert_eq!(item.latest_cancellation_reason.as_deref(), Some("cancelled"));
             assert_eq!(item.latest_causer.as_deref(), causer);
             assert_eq!(item.latest_market_refund, refund);
@@ -821,9 +828,13 @@ mod tests {
             &market_observation("5", false, false, false, Some("seller"), None)).await.unwrap();
         assert_eq!(db.get_viewer_inventory(&viewer, None, None, None, 100, 0).await.unwrap()
             .into_iter().find(|item| item.redemption_id == buyer_allowed).unwrap().latest_attempt_outcome_kind.as_deref(), Some("seller_not_sent"));
+        assert!(db.get_viewer_inventory(&viewer, None, None, None, 100, 0).await.unwrap()
+            .into_iter().find(|item| item.redemption_id == buyer_allowed).unwrap().has_buyer_revert);
         sqlx::query("UPDATE inventory_items SET last_action_at = NOW() - INTERVAL '31 seconds' WHERE redemption_id=$1")
             .bind(buyer_allowed).execute(db.pool()).await.unwrap();
-        assert!(db.begin_inventory_attempt(buyer_allowed, "test-link", true).await.unwrap().is_some(), "a later seller failure permits viewer retry");
+        assert!(db.begin_inventory_attempt(buyer_allowed, "test-link", true).await.unwrap().is_none(), "a later seller failure cannot restore viewer retry after buyer revert");
+        assert!(!db.reserve_inventory_refund(buyer_allowed, true).await.unwrap(), "a later seller failure cannot restore viewer self-refund after buyer revert");
+        assert!(db.begin_inventory_attempt(buyer_allowed, "test-link", false).await.unwrap().is_some(), "operator retry remains available");
 
         let (buyer_refund, refund_custom) = new_tracking_attempt(&db, reward, &viewer, true).await;
         db.observe_market_attempt(buyer_refund, &refund_custom,
@@ -844,7 +855,14 @@ mod tests {
         db.observe_market_attempt(seller_refund, &second_custom, &order).await.unwrap();
         db.observe_market_attempt(seller_refund, &second_custom,
             &market_observation("5", false, false, false, Some("seller"), None)).await.unwrap();
-        assert!(db.reserve_inventory_refund(seller_refund, true).await.unwrap(), "a later seller failure permits viewer self-refund");
+        assert!(!db.reserve_inventory_refund(seller_refund, true).await.unwrap(), "a prior buyer revert blocks viewer self-refund after a later seller failure");
+        assert!(db.reserve_inventory_refund(seller_refund, false).await.unwrap(), "operator refund remains available after a later seller failure");
+
+        let (seller_only, seller_only_custom) = new_tracking_attempt(&db, reward, &viewer, false).await;
+        db.observe_market_attempt(seller_only, &seller_only_custom, &order).await.unwrap();
+        db.observe_market_attempt(seller_only, &seller_only_custom,
+            &market_observation("5", false, false, false, Some("seller"), None)).await.unwrap();
+        assert!(db.reserve_inventory_refund(seller_only, true).await.unwrap(), "seller failure without buyer revert permits viewer refund");
 
         let (buyer_unaccepted, unaccepted_custom) = new_tracking_attempt(&db, reward, &viewer, true).await;
         db.observe_market_attempt(buyer_unaccepted, &unaccepted_custom,
