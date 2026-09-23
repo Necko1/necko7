@@ -3,6 +3,7 @@ use tracing::{debug, error, info, warn};
 use crate::processor::balance_updater::BalanceUpdater;
 use crate::processor::order_watcher::{OrderWatcher, WatcherRedemptionData};
 use crate::processor::price_updater::PriceUpdater;
+use crate::processor::inventory_fulfillment;
 use crate::state::AppState;
 
 pub fn start_broadcaster_tasks(state: Arc<AppState>, channel_id: String) {
@@ -51,6 +52,40 @@ pub async fn start_background_tasks(state: Arc<AppState>) {
     let state_orders = state.clone();
     state.spawn_task(async move {
         recover_active_orders(state_orders).await;
+    });
+
+    let state_pending_inventory = state.clone();
+    state.spawn_task(async move {
+        recover_unclaimed_inventory_orders(state_pending_inventory).await;
+    });
+
+    let state_ambiguous = state.clone();
+    state.spawn_task(async move {
+        recover_ambiguous_inventory_attempts(state_ambiguous).await;
+    });
+
+    let state_twitch = state.clone();
+    let twitch_token = state.shutdown_token.clone();
+    state.spawn_task(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        loop {
+            tokio::select! {
+                _ = twitch_token.cancelled() => return,
+                _ = interval.tick() => recover_delivered_twitch(state_twitch.clone()).await,
+            }
+        }
+    });
+
+    let state_resolution = state.clone();
+    let resolution_token = state.shutdown_token.clone();
+    state.spawn_task(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        loop {
+            tokio::select! {
+                _ = resolution_token.cancelled() => return,
+                _ = interval.tick() => recover_unresolved_inventory_selection(state_resolution.clone()).await,
+            }
+        }
     });
 
     let state_sessions = state.clone();
@@ -144,6 +179,61 @@ pub async fn start_background_tasks(state: Arc<AppState>) {
         }
         Err(e) => {
             error!(error = %e, "Failed to load broadcasters from DB at startup for background tasks");
+        }
+    }
+}
+
+async fn recover_unresolved_inventory_selection(state: Arc<AppState>) {
+    let pending = match state.db.claim_pending_inventory_resolution().await {
+        Ok(rows) => rows,
+        Err(e) => { error!(error = %e, "Cannot claim unfinished inventory selection"); return; }
+    };
+    for redemption_id in pending {
+        if state.shutdown_token.is_cancelled() { return; }
+        crate::processor::redemption::resume_pending_inventory_resolution(state.clone(), redemption_id).await;
+    }
+}
+
+async fn recover_delivered_twitch(state: Arc<AppState>) {
+    let pending = match state.db.get_delivered_inventory_awaiting_twitch().await {
+        Ok(rows) => rows,
+        Err(e) => { error!(error = %e, "Cannot load delivered items awaiting Twitch fulfillment"); return; }
+    };
+    for redemption_id in pending {
+        if state.shutdown_token.is_cancelled() { return; }
+        if let Err(e) = inventory_fulfillment::fulfill_delivered_twitch(&state, redemption_id).await {
+            warn!(error = %e, %redemption_id, "Twitch fulfillment remains pending");
+        }
+    }
+}
+
+async fn recover_unclaimed_inventory_orders(state: Arc<AppState>) {
+    let pending = match state.db.get_pending_inventory_without_attempt().await {
+        Ok(rows) => rows,
+        Err(e) => { error!(error = %e, "Failed to load unclaimed inventory orders"); return; }
+    };
+    for item in pending {
+        if state.shutdown_token.is_cancelled() { return; }
+        info!(redemption_id = %item.redemption_id, "Starting the single initial Market attempt after restart");
+        if let Err(e) = inventory_fulfillment::purchase(&state, item.redemption_id, false, false).await {
+            error!(error = %e, redemption_id = %item.redemption_id, "Cannot recover initial purchase");
+        }
+    }
+}
+
+async fn recover_ambiguous_inventory_attempts(state: Arc<AppState>) {
+    let attempts = match state.db.get_unresolved_inventory_attempts().await {
+        Ok(rows) => rows,
+        Err(e) => { error!(error = %e, "Cannot load ambiguous inventory attempts"); return; }
+    };
+    for (redemption_id, custom_id) in attempts {
+        if state.shutdown_token.is_cancelled() { return; }
+        let result = inventory_fulfillment::reconcile(&state, redemption_id, &custom_id).await;
+        if matches!(result, Ok(true)) { continue; }
+        let resolved = state.db.latest_inventory_attempt(redemption_id).await.ok().flatten()
+            .is_some_and(|attempt| matches!(attempt.status.as_str(), "ORDER_CREATED" | "TRADE_WAITING" | "DELIVERED" | "SELLER_FAILED" | "BUYER_FAILED"));
+        if !resolved {
+            let _ = state.db.require_inventory_reconciliation(redemption_id, &custom_id).await;
         }
     }
 }

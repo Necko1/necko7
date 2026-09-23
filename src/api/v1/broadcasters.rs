@@ -124,10 +124,6 @@ pub struct BroadcasterSettingsResponse {
     pub base_price_multiplier: i16,
     /// Period (in seconds) between automatic price updates
     pub update_prices_period: i32,
-    /// Automatically refund if buyer fails delivery
-    pub refund_on_buyer_fail: bool,
-    /// Automatically refund if there's not enough money
-    pub refund_if_no_money: bool,
     /// Pause the reward if there's not enough money
     pub pause_reward_if_no_money: bool,
     /// Market chance percentage to transfer item
@@ -160,8 +156,6 @@ pub struct BroadcasterSettingsResponse {
                 "market_api_key_set": true,
                 "base_price_multiplier": 150,
                 "update_prices_period": 300,
-                "refund_on_buyer_fail": true,
-                "refund_if_no_money": false,
                 "pause_reward_if_no_money": true,
                 "market_chance_to_transfer": 80,
                 "add_bot_badge": false,
@@ -213,8 +207,6 @@ pub async fn get_broadcaster_settings(
         market_api_key_set: !setting.market_api_key.is_empty(),
         base_price_multiplier: setting.base_price_multiplier,
         update_prices_period: setting.update_prices_period,
-        refund_on_buyer_fail: setting.refund_on_buyer_fail,
-        refund_if_no_money: setting.refund_if_no_money,
         pause_reward_if_no_money: setting.pause_reward_if_no_money,
         market_chance_to_transfer: setting.market_chance_to_transfer,
         add_bot_badge: setting.add_bot_badge,
@@ -233,10 +225,6 @@ pub struct UpdateBroadcasterSettingsBody {
     pub base_price_multiplier: Option<i16>,
     /// Period (in seconds) between automatic price updates
     pub update_prices_period: Option<i32>,
-    /// Automatically refund if buyer fails delivery
-    pub refund_on_buyer_fail: Option<bool>,
-    /// Automatically refund if there's not enough money
-    pub refund_if_no_money: Option<bool>,
     /// Pause the reward if there's not enough money
     pub pause_reward_if_no_money: Option<bool>,
     /// Market chance percentage to transfer item
@@ -268,8 +256,6 @@ pub struct UpdateBroadcasterSettingsBody {
                 "market_api_key_set": true,
                 "base_price_multiplier": 150,
                 "update_prices_period": 300,
-                "refund_on_buyer_fail": true,
-                "refund_if_no_money": false,
                 "pause_reward_if_no_money": true,
                 "market_chance_to_transfer": 80,
                 "add_bot_badge": false,
@@ -305,8 +291,6 @@ pub async fn update_broadcaster_settings(
         market_api_key: body.market_api_key,
         base_price_multiplier: body.base_price_multiplier,
         update_prices_period: body.update_prices_period,
-        refund_on_buyer_fail: body.refund_on_buyer_fail,
-        refund_if_no_money: body.refund_if_no_money,
         pause_reward_if_no_money: body.pause_reward_if_no_money,
         market_chance_to_transfer: body.market_chance_to_transfer,
         chat_messages: body.chat_messages,
@@ -378,28 +362,6 @@ pub async fn update_broadcaster_settings(
                 old_value: serde_json::json!(existing_setting.update_prices_period),
                 new_value: serde_json::json!(period),
                 summary: format!("update_prices_period: {}s -> {}s", existing_setting.update_prices_period, period),
-            });
-        }
-    }
-
-    if let Some(ref_buyer) = patch.refund_on_buyer_fail {
-        if ref_buyer != existing_setting.refund_on_buyer_fail {
-            setting_changes.push(crate::channel_log::FieldChange {
-                field: "refund_on_buyer_fail".to_string(),
-                old_value: serde_json::json!(existing_setting.refund_on_buyer_fail),
-                new_value: serde_json::json!(ref_buyer),
-                summary: format!("refund_on_buyer_fail: {} -> {}", existing_setting.refund_on_buyer_fail, ref_buyer),
-            });
-        }
-    }
-
-    if let Some(ref_money) = patch.refund_if_no_money {
-        if ref_money != existing_setting.refund_if_no_money {
-            setting_changes.push(crate::channel_log::FieldChange {
-                field: "refund_if_no_money".to_string(),
-                old_value: serde_json::json!(existing_setting.refund_if_no_money),
-                new_value: serde_json::json!(ref_money),
-                summary: format!("refund_if_no_money: {} -> {}", existing_setting.refund_if_no_money, ref_money),
             });
         }
     }
@@ -498,8 +460,6 @@ pub async fn update_broadcaster_settings(
         market_api_key_set: !setting.market_api_key.is_empty(),
         base_price_multiplier: setting.base_price_multiplier,
         update_prices_period: setting.update_prices_period,
-        refund_on_buyer_fail: setting.refund_on_buyer_fail,
-        refund_if_no_money: setting.refund_if_no_money,
         pause_reward_if_no_money: setting.pause_reward_if_no_money,
         market_chance_to_transfer: setting.market_chance_to_transfer,
         add_bot_badge: setting.add_bot_badge,

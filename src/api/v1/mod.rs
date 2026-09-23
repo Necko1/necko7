@@ -25,6 +25,8 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         crate::api::auth::user_login_redirect,
         crate::api::auth::logout,
         users::get_current_user,
+        users::get_viewer_settings,
+        users::update_viewer_settings,
         broadcasters::list_broadcasters,
         broadcasters::get_broadcaster_settings,
         broadcasters::update_broadcaster_settings,
@@ -66,10 +68,20 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         viewer_profile::get_viewer_channel_redemptions,
         viewer_profile::get_viewer_global_profile,
         viewer_profile::get_viewer_global_redemptions,
+        viewer_profile::get_viewer_inventory,
+        viewer_profile::get_viewer_channel_inventory,
+        viewer_profile::get_operator_viewer_inventory,
+        viewer_profile::request_viewer_inventory_attempt,
+        viewer_profile::request_viewer_inventory_refund,
+        viewer_profile::request_operator_inventory_attempt,
+        viewer_profile::request_operator_inventory_refund,
     ),
     components(schemas(
         crate::api::auth::LogoutResponse,
         users::UserResponse,
+        users::UpdateViewerSettings,
+        crate::db::inventory::ViewerSettings,
+        viewer_profile::InventoryActionResult,
         broadcasters::BroadcasterListItem,
         broadcasters::BroadcasterSettingsResponse,
         broadcasters::UpdateBroadcasterSettingsBody,
@@ -124,6 +136,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         crate::db::redemptions::ViewerChannelRedemption,
         crate::db::redemptions::ViewerGlobalRedemption,
         crate::db::redemptions::ViewerRedemptionStats,
+        crate::db::inventory::InventoryItem,
         ErrorBody,
         ErrorDetail,
         crate::db::channel_permissions::ChannelRole,
@@ -183,6 +196,7 @@ impl utoipa::Modify for SecurityAddon {
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/users/me", get(users::get_current_user))
+        .route("/users/me/settings", get(users::get_viewer_settings).put(users::update_viewer_settings))
         .route("/broadcasters", get(broadcasters::list_broadcasters))
         .route("/broadcasters/{channel_id}", get(broadcasters::get_broadcaster_settings))
         .route("/broadcasters/{channel_id}/settings", put(broadcasters::update_broadcaster_settings))
@@ -211,9 +225,16 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/broadcasters/{channel_id}/logs", get(channel_logs::list_channel_logs))
         .route("/broadcasters/{channel_id}/logs/summary", get(channel_logs::get_channel_logs_summary))
         .route("/broadcasters/{channel_id}/chat/users/{user_id}/profile", get(viewer_profile::get_operator_viewer_profile))
+        .route("/broadcasters/{channel_id}/chat/users/{user_id}/inventory", get(viewer_profile::get_operator_viewer_inventory))
+        .route("/broadcasters/{channel_id}/chat/users/{user_id}/inventory/{inventory_id}/attempt", post(viewer_profile::request_operator_inventory_attempt))
+        .route("/broadcasters/{channel_id}/chat/users/{user_id}/inventory/{inventory_id}/refund", post(viewer_profile::request_operator_inventory_refund))
         .route("/broadcasters/{channel_id}/me/profile", get(viewer_profile::get_viewer_channel_profile))
+        .route("/broadcasters/{channel_id}/me/inventory", get(viewer_profile::get_viewer_channel_inventory))
         .route("/broadcasters/{channel_id}/me/redemptions", get(viewer_profile::get_viewer_channel_redemptions))
         .route("/me/profile", get(viewer_profile::get_viewer_global_profile))
+        .route("/me/inventory", get(viewer_profile::get_viewer_inventory))
+        .route("/me/inventory/{inventory_id}/attempt", post(viewer_profile::request_viewer_inventory_attempt))
+        .route("/me/inventory/{inventory_id}/refund", post(viewer_profile::request_viewer_inventory_refund))
         .route("/me/redemptions", get(viewer_profile::get_viewer_global_redemptions))
         .route("/public/broadcasters/{identifier}", get(public_broadcasters::get_public_broadcaster_info))
         .route("/public/broadcasters/{identifier}/rewards", get(public_broadcasters::get_public_rewards))
@@ -295,6 +316,10 @@ mod tests {
         assert!(json.contains("PublicRewardsConfig"), "OpenAPI schema must contain PublicRewardsConfig");
         assert!(json.contains("/api/v1/broadcasters/{channel_id}/chat/users/{user_id}/profile"), "Operator viewer context must be documented");
         assert!(json.contains("ViewerGlobalRedemption"), "OpenAPI schema must contain ViewerGlobalRedemption");
+        assert!(json.contains("/api/v1/me/inventory"));
+        assert!(json.contains("/api/v1/broadcasters/{channel_id}/me/inventory"));
+        assert!(json.contains("/api/v1/broadcasters/{channel_id}/chat/users/{user_id}/inventory"));
+        assert!(json.contains("InventoryItem"));
     }
 }
 

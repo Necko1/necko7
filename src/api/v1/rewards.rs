@@ -65,6 +65,7 @@ pub struct RewardResponse {
     pub max_redemptions_per_user_per_stream: i16,
     /// Whether to automatically buy from the market
     pub market_autobuy: bool,
+    pub retry_on_buyer_failure: bool,
     /// Currency code (e.g. "RUB", "USD")
     pub currency: String,
     /// Optional minimum allowed market price in cents
@@ -115,6 +116,7 @@ impl From<Reward> for RewardResponse {
             max_redemptions_per_stream: r.max_redemptions_per_stream,
             max_redemptions_per_user_per_stream: r.max_redemptions_per_user_per_stream,
             market_autobuy: r.market_autobuy,
+            retry_on_buyer_failure: r.retry_on_buyer_failure,
             currency: r.currency,
             min_market_price: r.min_market_price,
             max_market_price: r.max_market_price,
@@ -233,6 +235,8 @@ pub struct CreateRewardBody {
     pub max_redemptions_per_user_per_stream: i16,
     /// Whether to automatically buy from the market
     pub market_autobuy: bool,
+    #[serde(default)]
+    pub retry_on_buyer_failure: bool,
     /// Whether to create the reward as paused
     pub is_paused: bool,
     /// Optional minimum allowed market price in cents (auto-pauses reward if below)
@@ -732,6 +736,7 @@ pub async fn create_reward(
         max_redemptions_per_stream: body.max_redemptions_per_stream,
         max_redemptions_per_user_per_stream: body.max_redemptions_per_user_per_stream,
         market_autobuy: body.market_autobuy,
+        retry_on_buyer_failure: body.retry_on_buyer_failure,
         currency,
         min_market_price: body.min_market_price,
         max_market_price: body.max_market_price,
@@ -788,6 +793,7 @@ pub struct UpdateRewardBody {
     pub max_redemptions_per_user_per_stream: Option<i16>,
     /// New market autobuy flag
     pub market_autobuy: Option<bool>,
+    pub retry_on_buyer_failure: Option<bool>,
     /// New paused status
     pub is_paused: Option<bool>,
     /// New pause reason ("MANUAL", "NO_MONEY")
@@ -1532,6 +1538,7 @@ pub async fn update_reward(
         max_redemptions_per_stream: body.max_redemptions_per_stream,
         max_redemptions_per_user_per_stream: body.max_redemptions_per_user_per_stream,
         market_autobuy: body.market_autobuy,
+        retry_on_buyer_failure: body.retry_on_buyer_failure,
         currency: None,
         min_market_price: body.min_market_price,
         max_market_price: body.max_market_price,
@@ -2392,6 +2399,7 @@ mod tests {
             max_redemptions_per_stream: 0,
             max_redemptions_per_user_per_stream: 0,
             market_autobuy: true,
+            retry_on_buyer_failure: false,
             currency: "USD".to_string(),
             min_market_price: None,
             max_market_price: None,
@@ -2511,6 +2519,7 @@ mod tests {
             max_redemptions_per_stream: 0,
             max_redemptions_per_user_per_stream: 0,
             market_autobuy: true,
+            retry_on_buyer_failure: false,
             currency: "RUB".to_string(),
             min_market_price: None,
             max_market_price: None,
@@ -2567,6 +2576,7 @@ mod tests {
             max_redemptions_per_stream: 0,
             max_redemptions_per_user_per_stream: 0,
             market_autobuy: true,
+            retry_on_buyer_failure: false,
             currency: "RUB".to_string(),
             min_market_price: None,
             max_market_price: None,

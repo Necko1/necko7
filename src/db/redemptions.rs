@@ -79,6 +79,20 @@ macro_rules! redemption_insert_returning {
 }
 
 impl Db {
+    /// Only redemptions inserted by the inventory-era EventSub path are claimed.
+    /// A stale claim can be resumed after a worker exits before item creation.
+    pub async fn claim_pending_inventory_resolution(&self) -> DbResult<Vec<Uuid>> {
+        Ok(sqlx::query_scalar(
+            "UPDATE redemptions r SET inventory_resolution_claimed_at = NOW()
+             WHERE r.twitch_redemption_id IN (
+                 SELECT pending.twitch_redemption_id FROM redemptions pending
+                 WHERE pending.status = 'PENDING'
+                   AND pending.inventory_resolution_claimed_at < NOW() - INTERVAL '5 minutes'
+                   AND NOT EXISTS (SELECT 1 FROM inventory_items i WHERE i.redemption_id = pending.twitch_redemption_id)
+                 ORDER BY pending.inventory_resolution_claimed_at LIMIT 100 FOR UPDATE SKIP LOCKED
+             ) RETURNING r.twitch_redemption_id"
+        ).fetch_all(&self.pool).await?)
+    }
     pub async fn get_redemption(&self, twitch_redemption_id: Uuid) -> DbResult<Option<Redemption>> {
         let redemption = sqlx::query_as::<_, Redemption>(redemption_select!("WHERE twitch_redemption_id = $1"))
             .bind(twitch_redemption_id)
@@ -145,7 +159,7 @@ impl Db {
 
     pub async fn insert_redemption_if_new(&self, new: &NewRedemption) -> DbResult<Option<Redemption>> {
         let redemption = sqlx::query_as::<_, Redemption>(redemption_insert_returning!(
-            "INSERT INTO redemptions (twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, retry_count, market_item_name, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, NULL, NULL, 0, $9, NOW(), NOW()) ON CONFLICT (twitch_redemption_id) DO NOTHING"
+            "INSERT INTO redemptions (twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, retry_count, market_item_name, inventory_resolution_claimed_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, NULL, NULL, 0, $9, NOW(), NOW(), NOW()) ON CONFLICT (twitch_redemption_id) DO NOTHING"
         ))
         .bind(new.twitch_redemption_id)
         .bind(new.twitch_reward_id)
@@ -187,6 +201,7 @@ impl Db {
         fail_cause: Option<&str>,
         fail_description: Option<&str>,
     ) -> DbResult<()> {
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "UPDATE redemptions SET status = $1, fail_cause = $2, fail_description = $3, updated_at = NOW() WHERE twitch_redemption_id = $4"
         )
@@ -194,8 +209,13 @@ impl Db {
         .bind(fail_cause)
         .bind(fail_description)
         .bind(twitch_redemption_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        if status == RedemptionStatus::Completed {
+            sqlx::query("UPDATE inventory_items SET acquired_at = COALESCE(acquired_at, NOW()) WHERE redemption_id = $1")
+                .bind(twitch_redemption_id).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -207,7 +227,9 @@ impl Db {
         retry_count: i32,
     ) -> DbResult<()> {
         sqlx::query(
-            "UPDATE redemptions SET status = 'ORDER_CREATED', market_paid_price = $1, market_item_name = COALESCE($2, market_item_name), retry_count = $3, fail_cause = NULL, fail_description = NULL, updated_at = NOW() WHERE twitch_redemption_id = $4"
+            "UPDATE redemptions SET status = 'ORDER_CREATED', market_paid_price = $1, market_item_name = COALESCE($2, market_item_name), retry_count = $3, fail_cause = NULL, fail_description = NULL, updated_at = NOW()
+             WHERE twitch_redemption_id = $4 AND status IN ('PENDING','ORDER_CREATED')
+               AND EXISTS (SELECT 1 FROM inventory_items i WHERE i.redemption_id = $4 AND i.lifecycle_status IN ('ORDER_PENDING','TRADE_WAITING'))"
         )
         .bind(market_paid_price)
         .bind(market_item_name)
@@ -225,6 +247,8 @@ impl Db {
         .bind(twitch_redemption_id)
         .execute(&self.pool)
         .await?;
+        sqlx::query("UPDATE inventory_items SET acquired_at = COALESCE(acquired_at, NOW()) WHERE redemption_id = $1")
+            .bind(twitch_redemption_id).execute(&self.pool).await?;
         Ok(())
     }
 

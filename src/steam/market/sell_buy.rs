@@ -227,28 +227,9 @@ impl MarketClient {
             .send()
             .await?;
 
-        let status = res.status();
-        let text = res.text().await?;
-
-        match serde_json::from_str::<MarketBuyForResponse>(&text) {
-            Ok(data) => Ok(data),
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    status = status.as_u16(),
-                    raw_body = %text,
-                    custom_id = %custom_id,
-                    "Failed to deserialize Market buy-for response"
-                );
-                Ok(MarketBuyForResponse {
-                    id: None,
-                    price: None,
-                    success: false,
-                    error: Some(format!("HTTP {}: {}", status.as_u16(), text)),
-                    code: Some(status.as_u16() as u32),
-                })
-            }
-        }
+        // An HTTP or parse failure does not prove that Market rejected creation.
+        // The caller must retain the custom_id and reconcile an unknown outcome.
+        res.error_for_status()?.json::<MarketBuyForResponse>().await
     }
 
     pub async fn get_buy_info(

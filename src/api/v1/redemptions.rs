@@ -3,16 +3,13 @@ use crate::api::extractor::authorized_channel::AuthorizedChannel;
 use crate::api::extractor::path::PathArg;
 use crate::api::extractor::query::QueryArg;
 use crate::db::redemptions::{Redemption, RedemptionStatus};
-use crate::db::rewards::RewardType;
 use crate::state::AppState;
-use crate::steam::market::errors::{classify_market_buy_for_error, MarketBuyForErrorKind};
 use axum::extract::State;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
 use uuid::Uuid;
-use crate::processor::order_watcher::{OrderWatcher, WatcherRedemptionData};
 
 #[derive(Deserialize)]
 pub struct RedemptionPath {
@@ -222,289 +219,23 @@ pub async fn retry_redemption(
         });
     }
 
-    match redemption.status {
-        RedemptionStatus::FailedPenalty | RedemptionStatus::ManualHold => {}
-        _ => return Err(ApiError::UnprocessableEntity {
-            message: "Can only retry failed or manual hold redemptions".to_string(),
-            param: "redemption_id".to_string(),
-        }),
+    if !state.db.inventory_exists(redemption_id).await? {
+        return Err(ApiError::UnprocessableEntity {
+            message: "Historical redemption has no proven fixed inventory snapshot".into(),
+            param: "redemption_id".into(),
+        });
     }
-
-    let setting = state.db.get_broadcaster_setting(&auth.channel_id).await?
-        .ok_or_else(|| ApiError::Internal {
-            message: "Broadcaster settings not found".to_string(),
-        })?;
-
-    let trade_link = crate::steam::trade_link::TradeLink::parse(&redemption.user_trade_link)
-        .ok_or_else(|| ApiError::Internal {
-            message: "Invalid trade link stored for this redemption".to_string(),
-        })?;
-
-    let item_name = redemption.market_item_name.as_deref()
-        .or(reward.market_item_name.as_deref())
-        .ok_or_else(|| ApiError::BadRequest {
-            message: "No market item name associated with redemption".into(),
-            param: "market_item_name".into(),
-        })?;
-
-    tracing::info!(
-        redemption_id = %redemption_id,
-        channel_id = %auth.channel_id,
-        user_id = %auth.user_id,
-        user_login = %auth.user_login,
-        item = %item_name,
-        current_status = ?redemption.status,
-        current_retry_count = redemption.retry_count,
-        "Manual redemption retry requested"
-    );
-
-    state.channel_logger.log_redemption_retry_requested(
-        &auth.channel_id,
-        &redemption_id.to_string(),
-        &redemption.user_login,
-        Some(item_name),
-        redemption.retry_count + 1,
-        &auth.user_id,
-        &auth.user_login,
-    );
-
-    let (price_i64, deviation_i64) = match reward.reward_type {
-        RewardType::Pool => {
-            let pool_item = reward.pool_items.as_ref()
-                .and_then(|j| j.0.iter().find(|i| i.market_hash_name == item_name));
-            if let Some(pi) = pool_item {
-                (pi.current_market_price as i64, pi.permissible_market_price_deviation as i64)
-            } else {
-                (reward.current_market_price as i64, reward.permissible_market_price_deviation as i64)
-            }
-        }
-        _ => (reward.current_market_price as i64, reward.permissible_market_price_deviation as i64),
-    };
-    let max_price_i64 = price_i64 + (price_i64 * deviation_i64 / 100);
-    let max_price = max_price_i64.clamp(0, i32::MAX as i64) as i32;
-
-    let new_retry_count = state.db.increment_retry_count(redemption_id).await?;
-    let custom_id = format!("{}-{}", redemption.twitch_redemption_id, new_retry_count);
-
-    // Double check if order was already created on market
-    if let Ok(info) = state.market_client.get_buy_info(&setting.market_api_key, &custom_id).await {
-        if info.success && info.data.as_ref().map_or(false, |d| !d.is_failed()) {
-            let data = info.data.unwrap();
-            let paid_price = (data.paid * 100.0) as i64;
-            state.db.set_redemption_order_created(
-                redemption_id,
-                paid_price,
-                Some(item_name),
-                new_retry_count,
-            ).await?;
-
-            let order_watcher = OrderWatcher::new(
-                state.clone(),
-                setting.market_api_key,
-                auth.channel_id.clone(),
-                WatcherRedemptionData {
-                    redemption_id,
-                    reward_id: reward.twitch_id,
-                    user_login: redemption.user_login.clone(),
-                    custom_id,
-                },
-            );
-
-            let token = state.shutdown_token.clone();
-            state.spawn_task(async move {
-                order_watcher.track_redemption(token).await;
-            });
-
-            state.channel_logger.log_redemption_manual_action(
-                &auth.channel_id,
-                &redemption_id.to_string(),
-                &redemption.user_login,
-                Some(item_name),
-                "RETRY",
-                &auth.user_id,
-                &auth.user_login,
-            );
-
-            state.channel_logger.log_redemption_order_created(
-                &auth.channel_id,
-                &redemption_id.to_string(),
-                item_name,
-                paid_price,
-                &reward.currency,
-                &redemption.user_login,
-            );
-
-            state.channel_logger.log_redemption_status_changed(
-                &auth.channel_id,
-                &redemption_id.to_string(),
-                &redemption.user_login,
-                Some(item_name),
-                redemption.status.as_str(),
-                "ORDER_CREATED",
-                None,
-                None,
-            );
-
-            let updated = state.db.get_redemption(redemption_id).await?
-                .ok_or_else(|| ApiError::NotFound {
-                    message: "Redemption not found after update".to_string(),
-                })?;
-            return Ok(Json(RedemptionResponse::from(updated)));
-        }
+    let result = crate::processor::inventory_fulfillment::purchase(&state, redemption_id, false, false).await
+        .map_err(|message| ApiError::Internal { message })?;
+    if result != "ORDER_CREATED" {
+        return Err(ApiError::UnprocessableEntity {
+            message: format!("Market order was not created: {result}"), param: "redemption_id".into(),
+        });
     }
-
-    let market_result = state.market_client.buy_for(
-        &setting.market_api_key,
-        item_name,
-        max_price,
-        setting.market_chance_to_transfer,
-        trade_link,
-        &custom_id,
-    ).await;
-
-    match market_result {
-        Ok(res) if res.success => {
-            let paid_price = res.price.unwrap_or(max_price as i64);
-            state.db.set_redemption_order_created(
-                redemption_id,
-                paid_price,
-                Some(item_name),
-                new_retry_count,
-            ).await?;
-            
-            let order_watcher = OrderWatcher::new(
-                state.clone(),
-                setting.market_api_key,
-                auth.channel_id.clone(),
-                WatcherRedemptionData {
-                    redemption_id,
-                    reward_id: reward.twitch_id,
-                    user_login: redemption.user_login.clone(),
-                    custom_id,
-                }
-            );
-
-            let token = state.shutdown_token.clone();
-            state.spawn_task(async move {
-                order_watcher.track_redemption(token).await;
-            });
-
-            state.channel_logger.log_redemption_manual_action(
-                &auth.channel_id,
-                &redemption_id.to_string(),
-                &redemption.user_login,
-                Some(item_name),
-                "RETRY",
-                &auth.user_id,
-                &auth.user_login,
-            );
-
-            state.channel_logger.log_redemption_order_created(
-                &auth.channel_id,
-                &redemption_id.to_string(),
-                item_name,
-                paid_price,
-                &reward.currency,
-                &redemption.user_login,
-            );
-
-            state.channel_logger.log_redemption_status_changed(
-                &auth.channel_id,
-                &redemption_id.to_string(),
-                &redemption.user_login,
-                Some(item_name),
-                redemption.status.as_str(),
-                "ORDER_CREATED",
-                None,
-                None,
-            );
-
-            tracing::info!(
-                redemption_id = %redemption_id,
-                channel_id = %auth.channel_id,
-                user_id = %auth.user_id,
-                paid_price = paid_price,
-                "Manual redemption retry succeeded, new order created on market"
-            );
-            
-            let updated = state.db.get_redemption(redemption_id).await?
-                .ok_or_else(|| ApiError::NotFound {
-                    message: "Redemption not found after update".to_string(),
-                })?;
-            Ok(Json(RedemptionResponse::from(updated)))
-        }
-        Ok(res) => {
-            let error_msg = res.error.unwrap_or_else(|| "Unknown market error".to_string());
-            let code = res.code.unwrap_or(0);
-            let kind = classify_market_buy_for_error(code, &error_msg);
-
-            tracing::warn!(
-                redemption_id = %redemption_id,
-                channel_id = %auth.channel_id,
-                user_id = %auth.user_id,
-                error = %error_msg,
-                code = code,
-                "Manual redemption retry rejected by market"
-            );
-
-            state.channel_logger.log_market_buy_error(
-                &auth.channel_id,
-                &redemption_id.to_string(),
-                item_name,
-                "market_retry_failed",
-                &error_msg,
-            );
-
-            let new_status = if kind == MarketBuyForErrorKind::NotEnoughFunds || redemption.status == RedemptionStatus::ManualHold {
-                RedemptionStatus::ManualHold
-            } else {
-                RedemptionStatus::FailedPenalty
-            };
-
-            let fail_desc = format!("Market rejected purchase retry: {}", error_msg);
-
-            state.db.update_redemption_status(
-                redemption_id,
-                new_status,
-                Some("market_retry_failed"),
-                Some(&fail_desc),
-            ).await?;
-
-            state.channel_logger.log_redemption_status_changed(
-                &auth.channel_id,
-                &redemption_id.to_string(),
-                &redemption.user_login,
-                Some(item_name),
-                redemption.status.as_str(),
-                new_status.as_str(),
-                Some("market_retry_failed"),
-                Some(&fail_desc),
-            );
-
-            Err(ApiError::BadRequest {
-                message: fail_desc,
-                param: "market".into(),
-            })
-        }
-        Err(e) => {
-            tracing::error!(
-                error = %e,
-                redemption_id = %redemption_id,
-                channel_id = %auth.channel_id,
-                "Manual redemption retry failed due to market HTTP error"
-            );
-            state.channel_logger.log_market_buy_error(
-                &auth.channel_id,
-                &redemption_id.to_string(),
-                item_name,
-                "network_error",
-                &e.to_string(),
-            );
-            Err(ApiError::Internal {
-                message: format!("Market API request failed: {}", e),
-            })
-        }
-    }
+    let updated = state.db.get_redemption(redemption_id).await?.ok_or_else(|| ApiError::NotFound {
+        message: "Redemption not found".into(),
+    })?;
+    Ok(Json(RedemptionResponse::from(updated)))
 }
 
 #[utoipa::path(
@@ -550,6 +281,15 @@ pub async fn refund_redemption(
         return Err(ApiError::Forbidden {
             message: "Redemption does not belong to this channel".to_string(),
         });
+    }
+
+    if state.db.inventory_exists(redemption_id).await? {
+        let result = crate::processor::inventory_fulfillment::refund(&state, redemption_id).await
+            .map_err(|message| ApiError::Internal { message })?;
+        if result != "REFUNDED" {
+            return Err(ApiError::UnprocessableEntity { message: format!("Refund is not safe: {result}"), param: "redemption_id".into() });
+        }
+        return Ok(Json(serde_json::json!({ "status": "refunded" })));
     }
 
     match redemption.status {
@@ -674,6 +414,10 @@ pub async fn penalty_redemption(
         return Err(ApiError::Forbidden {
             message: "Redemption does not belong to this channel".to_string(),
         });
+    }
+
+    if state.db.inventory_exists(redemption_id).await? {
+        return Err(ApiError::UnprocessableEntity { message: "Inventory fulfillment remains pending until delivery or a safe explicit refund".into(), param: "redemption_id".into() });
     }
 
     match redemption.status {

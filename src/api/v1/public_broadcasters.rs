@@ -388,7 +388,7 @@ mod tests {
             manual_twitch_points: Some(750), twitch_title: "Drop".into(), twitch_description: "Trade URL".into(),
             current_market_price: 2500, permissible_market_price_deviation: 10, twitch_price_markup_percentage: 20,
             global_cooldown_seconds: 0, max_redemptions_per_stream: 0, max_redemptions_per_user_per_stream: 0,
-            market_autobuy: true, currency: currency.into(), min_market_price: None, max_market_price: None,
+            market_autobuy: true, retry_on_buyer_failure: false, currency: currency.into(), min_market_price: None, max_market_price: None,
             chat_min_messages: None, chat_min_characters: None, chat_time_window_hours: None, chat_logical_operator: None,
             refund_if_chat_req_failed: true, purchase_limits: None, is_public: true,
             created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
