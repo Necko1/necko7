@@ -82,8 +82,10 @@ repeat a Market purchase.
 Viewer/operator refund first reconciles the latest Market attempt when needed.
 The same inventory lock reserves `REFUNDING` only if every attempt is provably
 terminal or rejected and the redemption is pending. Delivery cannot win that
-lock afterward. A viewer cannot reserve a self-refund when any attempt for that
-item was `buyer_reverted`; operator refund retains its existing channel permission.
+lock afterward. A viewer cannot reserve a self-refund when the latest attempt
+is `buyer_reverted`; a later operator-initiated attempt that ends in a seller
+failure is evaluated on its own outcome. Operator refund retains its existing
+channel permission.
 A successful Twitch refund closes the item as `REFUNDED` and
 the redemption as `FAILED_REFUND`. An uncertain Twitch refund leaves
 `RECONCILIATION_REQUIRED` for review, so it cannot be retried blindly.
@@ -137,7 +139,8 @@ category needs operator review. For a complete new attempt, stage 5 without a
 trade is `seller_not_sent`; an unaccepted trade uses `buyer_not_accepted` or
 `seller_cancelled` according to `causer`; observed settlement uses
 `buyer_reverted` or `seller_reverted`. Only `buyer_not_accepted` uses the
-snapshotted viewer retry permission; `buyer_reverted` requires operator action.
+snapshotted viewer retry permission; a latest `buyer_reverted` attempt requires
+operator action. A later terminal seller attempt can again allow viewer action.
 Seller categories allow an explicit retry
 for the same item and fixed ceiling. Unknown or contradictory evidence becomes
 `OPERATOR_REVIEW` without a viewer retry. A confirmed stage 5 can permit an
