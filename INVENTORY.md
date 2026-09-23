@@ -96,6 +96,10 @@ channel overrides are ignored so their obsolete refund text is not sent;
 separately customized overrides remain intact. Obsolete automatic refund,
 penalty, retry, and filter fallback templates are ignored. No migration deletes
 historical custom JSON; a later channel settings save may drop ignored keys.
+The item-unavailable notice includes the inventory's fixed purchase ceiling in
+major currency units (two decimals for RUB, three for USD/EUR). An uncertain
+order or trade notice says only that the status is unconfirmed and actions are
+unavailable; the existing watcher does not guarantee continuous reconciliation.
 
 ## Migration and follow-up tracking
 

@@ -694,7 +694,9 @@ impl AppState {
             if let Some(channel_msgs) = self.chat_messages.read().get(channel_id) {
                 if let Some(cat_map) = channel_msgs.get(cat) {
                     if let Some(tpl) = cat_map.get(key) {
-                        if !tpl.trim().is_empty() {
+                        if !tpl.trim().is_empty()
+                            && !crate::messages::is_obsolete_copied_default(cat, key, tpl)
+                        {
                             return tpl.clone();
                         }
                     }

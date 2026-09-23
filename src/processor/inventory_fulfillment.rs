@@ -6,7 +6,7 @@ use crate::processor::order_watcher::{OrderWatcher, WatcherRedemptionData};
 use crate::messages::{
     MSG_MARKET_ERR_UNKNOWN,
     MSG_ORDERS_CREATED, MSG_ORDERS_INSUFFICIENT_FUNDS, MSG_ORDERS_RECONCILIATION_REQUIRED,
-    MSG_ORDERS_RETRY_AVAILABLE, MSG_ORDERS_TRADE_LINK_REQUIRED, MSG_ORDERS_UNAVAILABLE,
+    MSG_ORDERS_TRADE_LINK_REQUIRED, MSG_ORDERS_UNAVAILABLE,
     MSG_ORDERS_REFUNDED, MSG_TRADES_ACCEPTED, MSG_TRADES_CREATED,
     MSG_TRADES_FAILED_BUYER, MSG_TRADES_FAILED_SELLER,
 };
@@ -26,14 +26,22 @@ fn is_definitive_rejection(kind: MarketBuyForErrorKind, order_id: Option<&str>) 
     order_id.is_none() && !matches!(kind, MarketBuyForErrorKind::Unknown | MarketBuyForErrorKind::Other)
 }
 
-fn rejected_order_template(kind: MarketBuyForErrorKind) -> &'static str {
-    if let Some(template) = kind.to_market_error_message_key() {
-        return template;
-    }
+fn rejected_order_template(kind: MarketBuyForErrorKind) -> Option<&'static str> {
     match kind {
-        MarketBuyForErrorKind::NotEnoughFunds => MSG_ORDERS_INSUFFICIENT_FUNDS,
-        MarketBuyForErrorKind::PriceOrChanceDeviation => MSG_ORDERS_UNAVAILABLE,
-        _ => MSG_ORDERS_RETRY_AVAILABLE,
+        MarketBuyForErrorKind::NotEnoughFunds => Some(MSG_ORDERS_INSUFFICIENT_FUNDS),
+        MarketBuyForErrorKind::PriceOrChanceDeviation => Some(MSG_ORDERS_UNAVAILABLE),
+        MarketBuyForErrorKind::Unknown | MarketBuyForErrorKind::Other => None,
+        _ => kind.to_market_error_message_key(),
+    }
+}
+
+fn format_inventory_price(amount: i64, currency: &str) -> String {
+    let major = crate::steam::market::minor_to_major(amount, currency);
+    let code = currency.to_ascii_uppercase();
+    if matches!(code.as_str(), "USD" | "EUR") {
+        format!("{major:.3} {code}")
+    } else {
+        format!("{major:.2} {code}")
     }
 }
 
@@ -141,8 +149,13 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
             };
             let changed = state.db.mark_attempt_rejected(redemption_id, &custom_id, label, &detail).await.map_err(|e| e.to_string())?;
             if changed {
-                send_inventory_chat(state, &reward.streamer_id, rejected_order_template(kind),
-                    &redemption.user_login, &inventory.1, &[]).await;
+                if let Some(template) = rejected_order_template(kind) {
+                    let price = format_inventory_price(inventory.2, &inventory.3);
+                    send_inventory_chat(state, &reward.streamer_id, template,
+                        &redemption.user_login, &inventory.1, &[("price", &price)]).await;
+                } else {
+                    warn!(?kind, %redemption_id, "No chat template for definitive Market rejection");
+                }
             }
             Ok(match label { "no_money" => "INSUFFICIENT_FUNDS", "trade_link" => "TRADE_LINK_REQUIRED", _ => "RETRY_AVAILABLE" })
         }
@@ -269,7 +282,7 @@ pub fn spawn_watcher(state: &Arc<AppState>, redemption_id: Uuid, reward_id: Uuid
 
 #[cfg(test)]
 mod tests {
-    use super::{is_definitive_rejection, rejected_order_template, resolve_trade_link, terminal_trade_template};
+    use super::{format_inventory_price, is_definitive_rejection, rejected_order_template, resolve_trade_link, terminal_trade_template};
     use crate::messages::{
         MSG_ORDERS_INSUFFICIENT_FUNDS,
         MSG_ORDERS_UNAVAILABLE, MSG_MARKET_ERR_BOT_BANNED, MSG_MARKET_ERR_INVENTORY_HIDDEN,
@@ -282,18 +295,35 @@ mod tests {
 
     #[test]
     fn chat_templates_match_persisted_fulfillment_outcomes() {
-        assert_eq!(rejected_order_template(MarketBuyForErrorKind::NotEnoughFunds), MSG_ORDERS_INSUFFICIENT_FUNDS);
-        assert_eq!(rejected_order_template(MarketBuyForErrorKind::PriceOrChanceDeviation), MSG_ORDERS_UNAVAILABLE);
-        assert_eq!(rejected_order_template(MarketBuyForErrorKind::InvalidTradeLink), MSG_MARKET_ERR_TRADE_LINK_INVALID);
-        assert_eq!(rejected_order_template(MarketBuyForErrorKind::InventoryHidden), MSG_MARKET_ERR_INVENTORY_HIDDEN);
-        assert_eq!(rejected_order_template(MarketBuyForErrorKind::CheckBotBanned), MSG_MARKET_ERR_BOT_BANNED);
-        assert_eq!(rejected_order_template(MarketBuyForErrorKind::TradeLinkCheckFailed), MSG_MARKET_ERR_TRADE_LINK_CHECK_FAILED);
-        assert_eq!(rejected_order_template(MarketBuyForErrorKind::SteamBanned), MSG_MARKET_ERR_STEAM_BANNED);
-        assert_eq!(rejected_order_template(MarketBuyForErrorKind::NoMobileAuth), MSG_MARKET_ERR_NO_MOBILE_AUTH);
-        assert_eq!(rejected_order_template(MarketBuyForErrorKind::OfflineTradesDisabled), MSG_MARKET_ERR_OFFLINE_TRADES_DISABLED);
-        assert_eq!(rejected_order_template(MarketBuyForErrorKind::InventoryFull), MSG_MARKET_ERR_INVENTORY_FULL);
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::NotEnoughFunds), Some(MSG_ORDERS_INSUFFICIENT_FUNDS));
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::PriceOrChanceDeviation), Some(MSG_ORDERS_UNAVAILABLE));
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::InvalidTradeLink), Some(MSG_MARKET_ERR_TRADE_LINK_INVALID));
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::InventoryHidden), Some(MSG_MARKET_ERR_INVENTORY_HIDDEN));
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::CheckBotBanned), Some(MSG_MARKET_ERR_BOT_BANNED));
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::TradeLinkCheckFailed), Some(MSG_MARKET_ERR_TRADE_LINK_CHECK_FAILED));
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::SteamBanned), Some(MSG_MARKET_ERR_STEAM_BANNED));
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::NoMobileAuth), Some(MSG_MARKET_ERR_NO_MOBILE_AUTH));
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::OfflineTradesDisabled), Some(MSG_MARKET_ERR_OFFLINE_TRADES_DISABLED));
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::InventoryFull), Some(MSG_MARKET_ERR_INVENTORY_FULL));
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::Unknown), None);
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::Other), None);
         assert_eq!(terminal_trade_template(true), MSG_TRADES_FAILED_BUYER);
         assert_eq!(terminal_trade_template(false), MSG_TRADES_FAILED_SELLER);
+    }
+
+    #[test]
+    fn unavailable_message_uses_full_fixed_price_in_major_units() {
+        use crate::messages::{render_template, CategorizedChatMessages};
+        let template = CategorizedChatMessages::default().orders.unavailable;
+        for (minor, currency, expected) in [
+            (2750, "RUB", "27.50 RUB"),
+            (2750, "USD", "2.750 USD"),
+            (2750, "EUR", "2.750 EUR"),
+        ] {
+            let price = format_inventory_price(minor, currency);
+            assert_eq!(price, expected);
+            assert!(render_template(&template, &[("buyer", "viewer"), ("item", "AK-47"), ("price", &price)]).contains(expected));
+        }
     }
 
     #[test]

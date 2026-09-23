@@ -22,10 +22,8 @@ pub const MSG_ORDERS_CREATED: &str = "orders.created";
 pub const MSG_ORDERS_WAITING_VIEWER: &str = "orders.waiting_viewer";
 pub const MSG_ORDERS_WAITING_OPERATOR: &str = "orders.waiting_operator";
 pub const MSG_ORDERS_TRADE_LINK_REQUIRED: &str = "orders.trade_link_required";
-pub const MSG_ORDERS_STEAM_ACCOUNT_ACTION: &str = "orders.steam_account_action";
 pub const MSG_ORDERS_INSUFFICIENT_FUNDS: &str = "orders.insufficient_funds";
 pub const MSG_ORDERS_UNAVAILABLE: &str = "orders.unavailable";
-pub const MSG_ORDERS_RETRY_AVAILABLE: &str = "orders.retry_available";
 pub const MSG_ORDERS_RECONCILIATION_REQUIRED: &str = "orders.reconciliation_required";
 pub const MSG_ORDERS_REFUNDED: &str = "orders.refunded";
 
@@ -73,10 +71,8 @@ pub struct OrdersMessages {
     pub waiting_viewer: String,
     pub waiting_operator: String,
     pub trade_link_required: String,
-    pub steam_account_action: String,
     pub insufficient_funds: String,
     pub unavailable: String,
-    pub retry_available: String,
     pub reconciliation_required: String,
     pub refunded: String,
 }
@@ -88,11 +84,9 @@ impl Default for OrdersMessages {
             waiting_viewer: "@{buyer} {item} is in your inventory. Your auto-buy preference is off, so no Market order was placed. Start delivery or refund your points from your inventory.".to_string(),
             waiting_operator: "@{buyer} {item} is in your inventory. Auto-buy is off for this reward, so no Market order was placed. The channel team will review delivery.".to_string(),
             trade_link_required: "@{buyer} {item} needs a valid Steam trade link. Check the link in your reward message or profile, then start delivery from your inventory; your points remain pending.".to_string(),
-            steam_account_action: "@{buyer} Market could not order {item} because of Steam account or inventory settings. Check trading restrictions, Steam Guard and inventory visibility or capacity. Your points remain pending.".to_string(),
             insufficient_funds: "@{buyer} Market could not order {item} because the channel account has insufficient balance. Your points remain pending; try again later or request a refund from your inventory.".to_string(),
-            unavailable: "@{buyer} Market could not order {item} at its fixed price. Your points remain pending; you can retry later or request a refund from your inventory.".to_string(),
-            retry_available: "@{buyer} Market did not create an order for {item}. Your points remain pending; check your inventory to retry or request a refund.".to_string(),
-            reconciliation_required: "@{buyer} Market's status for {item} is being checked. Please do not start another order or refund until it is resolved; your points remain pending.".to_string(),
+            unavailable: "@{buyer} Market could not find {item} at or below {price} with the configured transfer chance. Your points remain pending; check your inventory for available actions.".to_string(),
+            reconciliation_required: "@{buyer} The order or trade status for {item} is unconfirmed. It may still deliver; your points remain pending and inventory actions are unavailable until its status is resolved.".to_string(),
             refunded: "@{buyer} Your channel points for {item} were refunded. Inventory fulfillment is closed.".to_string(),
         }
     }
@@ -114,7 +108,7 @@ pub struct MarketErrorsMessages {
 impl Default for MarketErrorsMessages {
     fn default() -> Self {
         Self {
-            unknown: "@{buyer} Market returned an uncertain result for {item}. We are checking whether an order exists; your points remain pending. Do not retry or refund yet.".to_string(),
+            unknown: "@{buyer} Market returned an unclear response for {item}. An order may already exist; your points remain pending and inventory actions are unavailable until its status is resolved.".to_string(),
             trade_link_check_failed: "@{buyer} Market could not verify the trade link for {item}. Check the link and your inventory for available actions; your points remain pending.".to_string(),
             inventory_hidden: "@{buyer} Market could not order {item} because your Steam inventory is private. Make it public, then check your inventory for available actions; your points remain pending.".to_string(),
             steam_banned: "@{buyer} Market could not order {item} because your Steam account cannot trade. Check Steam restrictions and your inventory for available actions; your points remain pending.".to_string(),
@@ -140,6 +134,17 @@ fn is_legacy_market_default(key: &str, value: &str) -> bool {
         ("trade_link_invalid", "@{buyer} Your Steam trade link is invalid. Channel points refunded.") |
         ("trade_check_bot_banned", "@{buyer} Market verification bot is currently unavailable. Please try again later. Channel points refunded.") |
         ("inventory_full", "@{buyer} Your CS2 inventory is full. Please free up space and try again. Channel points refunded.")
+    )
+}
+
+pub(crate) fn is_obsolete_copied_default(category: &str, key: &str, value: &str) -> bool {
+    if category == "market_errors" && is_legacy_market_default(key, value) {
+        return true;
+    }
+    matches!((category, key, value),
+        ("orders", "unavailable", "@{buyer} Market could not order {item} at its fixed price. Your points remain pending; you can retry later or request a refund from your inventory.") |
+        ("orders", "reconciliation_required", "@{buyer} Market's status for {item} is being checked. Please do not start another order or refund until it is resolved; your points remain pending.") |
+        ("market_errors", "unknown", "@{buyer} Market returned an uncertain result for {item}. We are checking whether an order exists; your points remain pending. Do not retry or refund yet.")
     )
 }
 
@@ -229,10 +234,8 @@ impl From<serde_json::Value> for CategorizedChatMessages {
                 if let Some(v) = orders_val.get("waiting_viewer").and_then(|s| s.as_str()) { result.orders.waiting_viewer = v.to_string(); }
                 if let Some(v) = orders_val.get("waiting_operator").and_then(|s| s.as_str()) { result.orders.waiting_operator = v.to_string(); }
                 if let Some(v) = orders_val.get("trade_link_required").and_then(|s| s.as_str()) { result.orders.trade_link_required = v.to_string(); }
-                if let Some(v) = orders_val.get("steam_account_action").and_then(|s| s.as_str()) { result.orders.steam_account_action = v.to_string(); }
                 if let Some(v) = orders_val.get("insufficient_funds").and_then(|s| s.as_str()) { result.orders.insufficient_funds = v.to_string(); }
                 if let Some(v) = orders_val.get("unavailable").and_then(|s| s.as_str()) { result.orders.unavailable = v.to_string(); }
-                if let Some(v) = orders_val.get("retry_available").and_then(|s| s.as_str()) { result.orders.retry_available = v.to_string(); }
                 if let Some(v) = orders_val.get("reconciliation_required").and_then(|s| s.as_str()) { result.orders.reconciliation_required = v.to_string(); }
                 if let Some(v) = orders_val.get("refunded").and_then(|s| s.as_str()) { result.orders.refunded = v.to_string(); }
             }
@@ -280,10 +283,8 @@ impl From<serde_json::Value> for CategorizedChatMessages {
                     ("orders", "waiting_viewer") => result.orders.waiting_viewer = val_str,
                     ("orders", "waiting_operator") => result.orders.waiting_operator = val_str,
                     ("orders", "trade_link_required") => result.orders.trade_link_required = val_str,
-                    ("orders", "steam_account_action") => result.orders.steam_account_action = val_str,
                     ("orders", "insufficient_funds") => result.orders.insufficient_funds = val_str,
                     ("orders", "unavailable") => result.orders.unavailable = val_str,
-                    ("orders", "retry_available") => result.orders.retry_available = val_str,
                     ("orders", "reconciliation_required") => result.orders.reconciliation_required = val_str,
                     ("orders", "refunded") => result.orders.refunded = val_str,
 
@@ -341,10 +342,8 @@ impl CategorizedChatMessages {
                 "waiting_viewer" => Some(&self.orders.waiting_viewer),
                 "waiting_operator" => Some(&self.orders.waiting_operator),
                 "trade_link_required" => Some(&self.orders.trade_link_required),
-                "steam_account_action" => Some(&self.orders.steam_account_action),
                 "insufficient_funds" => Some(&self.orders.insufficient_funds),
                 "unavailable" => Some(&self.orders.unavailable),
-                "retry_available" => Some(&self.orders.retry_available),
                 "reconciliation_required" => Some(&self.orders.reconciliation_required),
                 "refunded" => Some(&self.orders.refunded),
                 _ => None,
@@ -404,7 +403,7 @@ impl CategorizedChatMessages {
                 if trimmed.is_empty() {
                     continue;
                 }
-                if cat == "market_errors" && is_legacy_market_default(key, trimmed) {
+                if is_obsolete_copied_default(cat, key, trimmed) {
                     continue;
                 }
                 match (cat.as_str(), key.as_str()) {
@@ -412,10 +411,8 @@ impl CategorizedChatMessages {
                     ("orders", "waiting_viewer") => merged.orders.waiting_viewer = trimmed.to_string(),
                     ("orders", "waiting_operator") => merged.orders.waiting_operator = trimmed.to_string(),
                     ("orders", "trade_link_required") => merged.orders.trade_link_required = trimmed.to_string(),
-                    ("orders", "steam_account_action") => merged.orders.steam_account_action = trimmed.to_string(),
                     ("orders", "insufficient_funds") => merged.orders.insufficient_funds = trimmed.to_string(),
                     ("orders", "unavailable") => merged.orders.unavailable = trimmed.to_string(),
-                    ("orders", "retry_available") => merged.orders.retry_available = trimmed.to_string(),
                     ("orders", "reconciliation_required") => merged.orders.reconciliation_required = trimmed.to_string(),
                     ("orders", "refunded") => merged.orders.refunded = trimmed.to_string(),
 
@@ -454,9 +451,10 @@ impl CategorizedChatMessages {
     pub fn all_placeholders() -> CategorizedPlaceholders {
         let mut orders = HashMap::new();
         orders.insert("created".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-        for key in ["waiting_viewer", "waiting_operator", "trade_link_required", "steam_account_action", "insufficient_funds", "unavailable", "retry_available", "reconciliation_required", "refunded"] {
+        for key in ["waiting_viewer", "waiting_operator", "trade_link_required", "insufficient_funds", "reconciliation_required", "refunded"] {
             orders.insert(key.to_string(), vec!["buyer".to_string(), "item".to_string()]);
         }
+        orders.insert("unavailable".to_string(), vec!["buyer".to_string(), "item".to_string(), "price".to_string()]);
         let mut market_errors = HashMap::new();
         for key in ["unknown", "trade_link_check_failed", "inventory_hidden", "steam_banned", "no_mobile_authenticator", "offline_trades_disabled", "trade_link_invalid", "trade_check_bot_banned", "inventory_full"] {
             market_errors.insert(key.to_string(), vec!["buyer".to_string(), "item".to_string()]);
@@ -502,10 +500,8 @@ pub fn resolve_category_and_key(message_id: &str) -> Option<(&'static str, &'sta
         "orders.waiting_viewer" => Some(("orders", "waiting_viewer")),
         "orders.waiting_operator" => Some(("orders", "waiting_operator")),
         "orders.trade_link_required" => Some(("orders", "trade_link_required")),
-        "orders.steam_account_action" => Some(("orders", "steam_account_action")),
         "orders.insufficient_funds" => Some(("orders", "insufficient_funds")),
         "orders.unavailable" => Some(("orders", "unavailable")),
-        "orders.retry_available" => Some(("orders", "retry_available")),
         "orders.reconciliation_required" => Some(("orders", "reconciliation_required")),
         "orders.refunded" => Some(("orders", "refunded")),
         "market_errors.unknown" => Some(("market_errors", "unknown")),
@@ -569,7 +565,7 @@ pub fn parse_custom_messages(val: serde_json::Value) -> HashMap<String, HashMap<
                 let cat_map = result.entry(cat.clone()).or_default();
                 for (k, v) in sub_obj {
                     if let Some(s) = v.as_str() {
-                        if !s.trim().is_empty() && !(cat == "market_errors" && is_legacy_market_default(k, s)) {
+                        if !s.trim().is_empty() && !is_obsolete_copied_default(cat, k, s) {
                             cat_map.insert(k.clone(), s.to_string());
                         }
                     }
@@ -581,7 +577,7 @@ pub fn parse_custom_messages(val: serde_json::Value) -> HashMap<String, HashMap<
             if let Some(s) = v.as_str() {
                 if !s.trim().is_empty() {
                     if let Some((cat, subkey)) = resolve_category_and_key(k) {
-                        if !(cat == "market_errors" && is_legacy_market_default(subkey, s)) {
+                        if !is_obsolete_copied_default(cat, subkey, s) {
                             result.entry(cat.to_string()).or_default().insert(subkey.to_string(), s.to_string());
                         }
                     }
@@ -634,7 +630,6 @@ mod tests {
         assert_eq!(defaults.get_message(MSG_ORDERS_CREATED).unwrap(), &defaults.orders.created);
         assert_eq!(defaults.get_message("order_created").unwrap(), &defaults.orders.created);
         assert_eq!(defaults.get_message(MSG_MARKET_ERR_INVENTORY_HIDDEN).unwrap(), &defaults.market_errors.inventory_hidden);
-        assert_eq!(defaults.get_message(MSG_ORDERS_STEAM_ACCOUNT_ACTION).unwrap(), &defaults.orders.steam_account_action);
         assert_eq!(defaults.get_message(MSG_TRADES_ACCEPTED).unwrap(), &defaults.trades.accepted);
         assert_eq!(defaults.get_message(MSG_CHAT_REQ_FAILED_MESSAGES_REFUND).unwrap(), &defaults.chat_requirements.messages_refund);
         assert_eq!(defaults.get_message(MSG_LIMITS_USER_LIMIT_REACHED).unwrap(), &defaults.limits.user_limit_reached);
@@ -647,8 +642,7 @@ mod tests {
         for key in [
             MSG_ORDERS_WAITING_VIEWER, MSG_ORDERS_WAITING_OPERATOR,
             MSG_ORDERS_TRADE_LINK_REQUIRED, MSG_ORDERS_INSUFFICIENT_FUNDS,
-            MSG_ORDERS_STEAM_ACCOUNT_ACTION,
-            MSG_ORDERS_UNAVAILABLE, MSG_ORDERS_RETRY_AVAILABLE,
+            MSG_ORDERS_UNAVAILABLE,
             MSG_ORDERS_RECONCILIATION_REQUIRED, MSG_ORDERS_REFUNDED,
             MSG_MARKET_ERR_UNKNOWN, MSG_MARKET_ERR_TRADE_LINK_CHECK_FAILED,
             MSG_MARKET_ERR_INVENTORY_HIDDEN, MSG_MARKET_ERR_STEAM_BANNED,
@@ -669,6 +663,7 @@ mod tests {
             assert!(allowed.contains(&"buyer".to_string()), "{key}");
             assert!(allowed.contains(&"item".to_string()), "{key}");
         }
+        assert!(placeholders.orders.get("unavailable").unwrap().contains(&"price".to_string()));
         let custom = serde_json::json!({"orders": {"waiting_viewer": "Custom {item}"}});
         let parsed: CategorizedChatMessages = serde_json::from_value(custom).unwrap();
         assert_eq!(parsed.get_message(MSG_ORDERS_WAITING_VIEWER), Some("Custom {item}"));
@@ -745,7 +740,7 @@ mod tests {
         let defaults = CategorizedChatMessages::default();
         let visible = serde_json::to_value(&defaults).unwrap();
         assert!(visible.get("market_errors").is_some());
-        for key in ["pool_created", "failed_no_money_refund", "failed_no_money_penalty", "failed_filter_exhausted", "retrying", "manual_hold"] {
+        for key in ["pool_created", "failed_no_money_refund", "failed_no_money_penalty", "failed_filter_exhausted", "retrying", "manual_hold", "steam_account_action", "retry_available"] {
             assert!(visible["orders"].get(key).is_none(), "{key}");
             assert!(defaults.get_message(&format!("orders.{key}")).is_none(), "{key}");
         }
@@ -773,5 +768,20 @@ mod tests {
             &HashMap::from([("market_errors".to_string(), HashMap::from([("inventory_hidden".to_string(), custom.to_string())]))]),
         );
         assert_eq!(merged_custom.get_message(MSG_MARKET_ERR_INVENTORY_HIDDEN), Some(custom));
+    }
+
+    #[test]
+    fn copied_obsolete_order_defaults_yield_to_corrected_messages() {
+        let old = "@{buyer} Market's status for {item} is being checked. Please do not start another order or refund until it is resolved; your points remain pending.";
+        let parsed = parse_custom_messages(serde_json::json!({"orders": {"reconciliation_required": old}}));
+        assert!(parsed.get("orders").and_then(|m| m.get("reconciliation_required")).is_none());
+        let merged = CategorizedChatMessages::merge_with_overrides(
+            &CategorizedChatMessages::default(),
+            &HashMap::from([("orders".to_string(), HashMap::from([("reconciliation_required".to_string(), old.to_string())]))]),
+        );
+        assert!(merged.orders.reconciliation_required.contains("may still deliver"));
+        let obsolete_price = "@{buyer} Market could not order {item} at its fixed price. Your points remain pending; you can retry later or request a refund from your inventory.";
+        assert!(is_obsolete_copied_default("orders", "unavailable", obsolete_price));
+        assert!(!is_obsolete_copied_default("orders", "unavailable", "Custom text {price}"));
     }
 }
