@@ -90,6 +90,10 @@ failures, and explicit refunds use separate templates that describe the current
 points state. These notices are best effort: chat failure never rolls back a
 persisted fulfillment transition. Database transitions suppress repeat notices
 from duplicate redemptions, concurrent watchers, and repeated polls.
+The channel message settings expose only templates used by the current
+fulfillment flow. Obsolete Market refund, penalty, automatic retry, and
+filter fallback templates are ignored. No migration deletes historical custom
+JSON; a later channel settings save may drop those ignored keys.
 
 ## Migration and follow-up tracking
 
