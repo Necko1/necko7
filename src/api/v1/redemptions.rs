@@ -284,7 +284,7 @@ pub async fn refund_redemption(
     }
 
     if state.db.inventory_exists(redemption_id).await? {
-        let result = crate::processor::inventory_fulfillment::refund(&state, redemption_id).await
+        let result = crate::processor::inventory_fulfillment::refund(&state, redemption_id, false).await
             .map_err(|message| ApiError::Internal { message })?;
         if result != "REFUNDED" {
             return Err(ApiError::UnprocessableEntity { message: format!("Refund is not safe: {result}"), param: "redemption_id".into() });

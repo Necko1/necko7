@@ -229,7 +229,7 @@ impl Db {
         sqlx::query(
             "UPDATE redemptions SET status = 'ORDER_CREATED', market_paid_price = $1, market_item_name = COALESCE($2, market_item_name), retry_count = $3, fail_cause = NULL, fail_description = NULL, updated_at = NOW()
              WHERE twitch_redemption_id = $4 AND status IN ('PENDING','ORDER_CREATED')
-               AND EXISTS (SELECT 1 FROM inventory_items i WHERE i.redemption_id = $4 AND i.lifecycle_status IN ('ORDER_PENDING','TRADE_WAITING'))"
+               AND EXISTS (SELECT 1 FROM inventory_items i WHERE i.redemption_id = $4 AND i.lifecycle_status IN ('ORDER_PENDING','TRADE_WAITING','TRADE_ACCEPTED'))"
         )
         .bind(market_paid_price)
         .bind(market_item_name)

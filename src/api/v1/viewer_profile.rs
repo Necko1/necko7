@@ -89,7 +89,7 @@ pub async fn request_viewer_inventory_refund(
 ) -> Result<Json<InventoryActionResult>, ApiError> {
     let redemption_id = state.db.viewer_inventory_redemption(inventory_id, &user_id).await?
         .ok_or_else(|| ApiError::NotFound { message: "Inventory item not found".into() })?;
-    let result = crate::processor::inventory_fulfillment::refund(&state, redemption_id).await
+    let result = crate::processor::inventory_fulfillment::refund(&state, redemption_id, true).await
         .map_err(|message| ApiError::Internal { message })?;
     action_result(result)
 }
@@ -115,7 +115,7 @@ pub async fn request_operator_inventory_refund(
     debug_assert_eq!(channel_id, auth.channel_id);
     let redemption_id = state.db.operator_inventory_redemption(inventory_id, &user_id, &auth.channel_id).await?
         .ok_or_else(|| ApiError::NotFound { message: "Inventory item not found".into() })?;
-    let result = crate::processor::inventory_fulfillment::refund(&state, redemption_id).await
+    let result = crate::processor::inventory_fulfillment::refund(&state, redemption_id, false).await
         .map_err(|message| ApiError::Internal { message })?;
     action_result(result)
 }

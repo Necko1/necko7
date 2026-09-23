@@ -84,21 +84,13 @@ where
     }
 }
 
-fn deserialize_refund_opt<'de, D>(deserializer: D) -> Result<Option<Refund>, D::Error>
+fn deserialize_refund_opt<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    #[allow(dead_code)]
-    enum RefundValue {
-        Refund(Refund),
-        Bool(bool),
-    }
-
-    match Option::<RefundValue>::deserialize(deserializer)? {
-        Some(RefundValue::Refund(r)) => Ok(Some(r)),
-        Some(RefundValue::Bool(_)) | None => Ok(None),
+    match Option::<serde_json::Value>::deserialize(deserializer)? {
+        Some(serde_json::Value::Bool(false) | serde_json::Value::Null) | None => Ok(None),
+        value => Ok(value),
     }
 }
 
@@ -132,19 +124,6 @@ pub struct MarketBuyForResponse {
     pub price: Option<i64>, // in minor
 }
 
-#[derive(Debug, Deserialize)]
-pub struct RefundInfo {
-    pub amount: f64,
-    pub currency: String,
-    pub refund_id: i64,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Refund {
-    pub seller: RefundInfo,
-    pub market: RefundInfo,
-}
-
 #[serde_as]
 #[derive(Debug, Deserialize)]
 pub struct GetBuyInfoData {
@@ -163,7 +142,7 @@ pub struct GetBuyInfoData {
     pub causer: Option<String>,
     pub paid: f64,
     #[serde(default, deserialize_with = "deserialize_refund_opt")]
-    pub refund: Option<Refund>,
+    pub refund: Option<serde_json::Value>,
     pub currency: String,
     #[serde(default, rename = "for")]
     pub r#for: Option<String>,
@@ -178,11 +157,11 @@ pub struct GetBuyInfoData {
 
 impl GetBuyInfoData {
     pub fn is_claimed(&self) -> bool {
-        self.settlement.is_some_and(|s| s > DateTime::UNIX_EPOCH) || self.stage == "2"
+        self.stage == "2"
     }
 
     pub fn is_failed(&self) -> bool {
-        self.stage == "5" || self.causer.is_some()
+        self.stage == "5"
     }
 
     pub fn has_active_trade(&self) -> bool {
@@ -348,7 +327,7 @@ mod tests {
         assert!(res.success);
         let data = res.data.expect("data should be Some");
         assert_eq!(data.trade_id, None);
-        assert!(data.is_claimed(), "Trade with settlement timestamp should be recognized as claimed");
+        assert!(!data.is_claimed(), "settlement at stage 1 is not final delivery");
         assert!(!data.is_failed());
     }
 

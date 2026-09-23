@@ -59,9 +59,16 @@ pub async fn start_background_tasks(state: Arc<AppState>) {
         recover_unclaimed_inventory_orders(state_pending_inventory).await;
     });
 
-    let state_ambiguous = state.clone();
+    let state_market = state.clone();
+    let market_token = state.shutdown_token.clone();
     state.spawn_task(async move {
-        recover_ambiguous_inventory_attempts(state_ambiguous).await;
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+        loop {
+            tokio::select! {
+                _ = market_token.cancelled() => return,
+                _ = interval.tick() => poll_due_inventory_attempts(state_market.clone()).await,
+            }
+        }
     });
 
     let state_twitch = state.clone();
@@ -221,21 +228,26 @@ async fn recover_unclaimed_inventory_orders(state: Arc<AppState>) {
     }
 }
 
-async fn recover_ambiguous_inventory_attempts(state: Arc<AppState>) {
-    let attempts = match state.db.get_unresolved_inventory_attempts().await {
+async fn poll_due_inventory_attempts(state: Arc<AppState>) {
+    let due = match state.db.claim_due_market_attempts().await {
         Ok(rows) => rows,
-        Err(e) => { error!(error = %e, "Cannot load ambiguous inventory attempts"); return; }
+        Err(e) => { error!(error = %e, "Cannot claim Market attempts due for tracking"); return; }
     };
-    for (redemption_id, custom_id) in attempts {
+    let mut running = tokio::task::JoinSet::new();
+    for (redemption_id, custom_id) in due {
         if state.shutdown_token.is_cancelled() { return; }
-        let result = inventory_fulfillment::reconcile(&state, redemption_id, &custom_id).await;
-        if matches!(result, Ok(true)) { continue; }
-        let resolved = state.db.latest_inventory_attempt(redemption_id).await.ok().flatten()
-            .is_some_and(|attempt| matches!(attempt.status.as_str(), "ORDER_CREATED" | "TRADE_WAITING" | "DELIVERED" | "SELLER_FAILED" | "BUYER_FAILED"));
-        if !resolved {
-            let _ = state.db.require_inventory_reconciliation(redemption_id, &custom_id).await;
-        }
+        let worker_state = state.clone();
+        running.spawn(async move {
+            if let Err(e) = inventory_fulfillment::reconcile(&worker_state, redemption_id, &custom_id).await {
+                warn!(error = %e, %custom_id, "Market attempt observation failed");
+            }
+            if let Err(e) = worker_state.db.schedule_market_attempt_poll(&custom_id).await {
+                error!(error = %e, %custom_id, "Could not schedule next Market observation");
+            }
+        });
+        if running.len() >= 8 { let _ = running.join_next().await; }
     }
+    while running.join_next().await.is_some() {}
 }
 
 async fn recover_active_orders(state: Arc<AppState>) {
@@ -257,6 +269,14 @@ async fn recover_active_orders(state: Arc<AppState>) {
         if state.shutdown_token.is_cancelled() {
             info!("Shutdown in progress, stopping order recovery");
             break;
+        }
+
+        // Live inventory attempts are resumed by the database-backed poller.
+        // Old orders without a trusted attempt retain their legacy watcher.
+        match state.db.get_inventory_core(order.twitch_redemption_id).await {
+            Ok(Some(item)) if item.4 != "LEGACY_REVIEW" => continue,
+            Ok(_) => {},
+            Err(e) => { warn!(error = %e, "Cannot classify recovered order"); continue; }
         }
 
         let reward = match state.db.get_reward_by_twitch_id(order.twitch_reward_id).await {
@@ -303,7 +323,7 @@ async fn recover_active_orders(state: Arc<AppState>) {
                 redemption_id: order.twitch_redemption_id,
                 custom_id,
                 reward_id: order.twitch_reward_id,
-                user_login: order.user_login,
+                activated_at: order.updated_at,
             },
         );
 

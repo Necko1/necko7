@@ -2,13 +2,13 @@ use std::sync::Arc;
 use tracing::{error, warn};
 use uuid::Uuid;
 
-use crate::processor::order_watcher::{OrderWatcher, WatcherRedemptionData};
 use crate::messages::{
     MSG_MARKET_ERR_UNKNOWN,
     MSG_ORDERS_CREATED, MSG_ORDERS_INSUFFICIENT_FUNDS, MSG_ORDERS_RECONCILIATION_REQUIRED,
     MSG_ORDERS_TRADE_LINK_REQUIRED, MSG_ORDERS_UNAVAILABLE,
     MSG_ORDERS_REFUNDED, MSG_TRADES_ACCEPTED, MSG_TRADES_CREATED,
     MSG_TRADES_FAILED_BUYER, MSG_TRADES_FAILED_SELLER,
+    MSG_TRADES_REVERTED_BUYER, MSG_TRADES_REVERTED_SELLER,
 };
 use crate::state::AppState;
 use crate::steam::market::errors::{classify_market_buy_for_error, MarketBuyForErrorKind};
@@ -45,6 +45,19 @@ fn format_inventory_price(amount: i64, currency: &str) -> String {
     }
 }
 
+fn attempt_result(status: &str) -> &'static str {
+    match status {
+        "DELIVERED" => "DELIVERED",
+        "SELLER_FAILED" | "BUYER_FAILED" => "RETRY_AVAILABLE",
+        "TERMINAL_UNCLASSIFIED" => "OPERATOR_REVIEW",
+        "TRADE_WAITING" => "TRADE_WAITING",
+        "TRADE_ACCEPTED" => "TRADE_ACCEPTED",
+        "ORDER_CREATED" => "ORDER_CREATED",
+        "REJECTED" => "RETRY_AVAILABLE",
+        _ => "RECONCILIATION_REQUIRED",
+    }
+}
+
 /// Chat is informational. A Twitch chat failure must not undo a persisted
 /// inventory or Market transition, and callers only invoke this on a new event.
 pub async fn send_inventory_chat(
@@ -59,8 +72,23 @@ pub async fn send_inventory_chat(
     }
 }
 
-pub fn terminal_trade_template(buyer_fault: bool) -> &'static str {
-    if buyer_fault { MSG_TRADES_FAILED_BUYER } else { MSG_TRADES_FAILED_SELLER }
+async fn send_attempt_chat(state: &Arc<AppState>, custom_id: &str, channel_id: &str,
+    template: &str, buyer: &str, item: &str, extra: &[(&str, &str)]) {
+    match state.db.claim_inventory_attempt_chat(custom_id, template).await {
+        Ok(true) => send_inventory_chat(state, channel_id, template, buyer, item, extra).await,
+        Ok(false) => {},
+        Err(e) => warn!(error = %e, %custom_id, %template, "Cannot claim attempt chat event"),
+    }
+}
+
+pub fn terminal_trade_template(kind: &str) -> Option<&'static str> {
+    match kind {
+        "buyer_not_accepted" => Some(MSG_TRADES_FAILED_BUYER),
+        "seller_not_sent" | "seller_cancelled" => Some(MSG_TRADES_FAILED_SELLER),
+        "buyer_reverted" => Some(MSG_TRADES_REVERTED_BUYER),
+        "seller_reverted" => Some(MSG_TRADES_REVERTED_SELLER),
+        _ => None,
+    }
 }
 
 pub async fn announce_trade(
@@ -88,7 +116,7 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
     if inventory.4 == "LEGACY_REVIEW" { return Ok("RECONCILIATION_REQUIRED"); }
 
     if let Some(previous) = state.db.latest_inventory_attempt(redemption_id).await.map_err(|e| e.to_string())? {
-        if previous.status != "REJECTED" {
+        if matches!(previous.status.as_str(), "CALLING" | "ORDER_CREATED" | "TRADE_WAITING" | "TRADE_ACCEPTED" | "RECONCILIATION_REQUIRED") {
             if !reconcile(state, redemption_id, &previous.custom_id).await? { return Ok("RECONCILIATION_REQUIRED"); }
         }
     }
@@ -122,16 +150,26 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
                 .and_then(|n| n.parse::<i32>().ok()).unwrap_or(0);
             state.db.set_redemption_order_created(redemption_id, response.price.unwrap_or(inventory.2), Some(&inventory.1), retry_count).await.map_err(|e| e.to_string())?;
             crate::processor::redemption::check_and_pause_if_global_limit_reached(state, &reward.streamer_id, redemption.twitch_reward_id).await;
-            send_inventory_chat(state, &reward.streamer_id, MSG_ORDERS_CREATED,
-                &redemption.user_login, &inventory.1, &[]).await;
-            spawn_watcher(state, redemption_id, redemption.twitch_reward_id, &reward.streamer_id, &redemption.user_login, &setting.market_api_key, custom_id);
-            Ok("ORDER_CREATED")
+            let current = state.db.latest_inventory_attempt(redemption_id).await.map_err(|e| e.to_string())?
+                .ok_or("Market attempt disappeared after order creation")?;
+            if current.custom_id != custom_id { return Ok("RECONCILIATION_REQUIRED"); }
+            if matches!(current.status.as_str(), "ORDER_CREATED" | "TRADE_WAITING" | "TRADE_ACCEPTED") {
+                send_attempt_chat(state, &custom_id, &reward.streamer_id, MSG_ORDERS_CREATED,
+                    &redemption.user_login, &inventory.1, &[]).await;
+            }
+            Ok(attempt_result(&current.status))
         }
         Ok(response) => {
             let detail = response.error.unwrap_or_else(|| "Market rejected purchase".to_string());
             let kind = classify_market_buy_for_error(response.code.unwrap_or(0), &detail);
             if !is_definitive_rejection(kind, response.id.as_deref()) {
                 state.db.mark_attempt_ambiguous(redemption_id, &custom_id, &detail).await.map_err(|e| e.to_string())?;
+                let current = state.db.latest_inventory_attempt(redemption_id).await.map_err(|e| e.to_string())?;
+                if let Some(ref current) = current {
+                    if current.custom_id == custom_id && current.status != "RECONCILIATION_REQUIRED" {
+                        return Ok(attempt_result(&current.status));
+                    }
+                }
                 let template = if response.id.is_none() && kind == MarketBuyForErrorKind::Unknown {
                     MSG_MARKET_ERR_UNKNOWN
                 } else {
@@ -148,6 +186,19 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
                 _ => "market_rejected",
             };
             let changed = state.db.mark_attempt_rejected(redemption_id, &custom_id, label, &detail).await.map_err(|e| e.to_string())?;
+            if !changed {
+                if let Some(current) = state.db.latest_inventory_attempt(redemption_id).await.map_err(|e| e.to_string())? {
+                    if current.status == "REJECTED" {
+                        return Ok(match current.outcome_kind.as_deref() {
+                            Some("no_money") => "INSUFFICIENT_FUNDS",
+                            Some("trade_link") => "TRADE_LINK_REQUIRED",
+                            _ => "RETRY_AVAILABLE",
+                        });
+                    }
+                    return Ok(attempt_result(&current.status));
+                }
+                return Ok("RECONCILIATION_REQUIRED");
+            }
             if changed {
                 if let Some(template) = rejected_order_template(kind) {
                     let price = format_inventory_price(inventory.2, &inventory.3);
@@ -162,6 +213,11 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
         Err(e) => {
             warn!(error = %e, %redemption_id, "Market buy-for outcome is unknown; no automatic retry");
             state.db.mark_attempt_ambiguous(redemption_id, &custom_id, &e.to_string()).await.map_err(|e| e.to_string())?;
+            if let Some(current) = state.db.latest_inventory_attempt(redemption_id).await.map_err(|e| e.to_string())? {
+                if current.custom_id == custom_id && current.status != "RECONCILIATION_REQUIRED" {
+                    return Ok(attempt_result(&current.status));
+                }
+            }
             send_inventory_chat(state, &reward.streamer_id, MSG_ORDERS_RECONCILIATION_REQUIRED,
                 &redemption.user_login, &inventory.1, &[]).await;
             Ok("RECONCILIATION_REQUIRED")
@@ -185,53 +241,49 @@ pub async fn reconcile(state: &Arc<AppState>, redemption_id: Uuid, custom_id: &s
         state.db.require_inventory_reconciliation(redemption_id, custom_id).await.map_err(|e| e.to_string())?;
         return Ok(false);
     }
-    if data.is_claimed() {
-        state.db.attach_inventory_order(redemption_id, custom_id, Some(&data.item_id), &data.market_hash_name).await.map_err(|e| e.to_string())?;
-        if state.db.mark_inventory_delivered(redemption_id, custom_id).await.map_err(|e| e.to_string())? {
-            send_inventory_chat(state, &reward.streamer_id, MSG_TRADES_ACCEPTED,
-                &redemption.user_login, &inventory.1, &[]).await;
-        }
-        if let Err(e) = fulfill_delivered_twitch(state, redemption_id).await {
-            error!(error = %e, %redemption_id, "Twitch fulfillment remains pending for recovery");
-        }
-        return Ok(false);
-    }
-    if data.stage == "5" {
-        let buyer = data.causer.as_deref() == Some("buyer");
-        state.db.attach_inventory_order(redemption_id, custom_id, Some(&data.item_id), &data.market_hash_name).await.map_err(|e| e.to_string())?;
-        if state.db.set_terminal_trade_failure(redemption_id, custom_id, buyer, data.causer.as_deref(), data.cancellation_reason.as_deref()).await.map_err(|e| e.to_string())? {
-            send_inventory_chat(state, &reward.streamer_id, terminal_trade_template(buyer),
-                &redemption.user_login, &inventory.1, &[]).await;
-        }
-        return Ok(true);
-    }
-    if data.causer.is_some() {
+    if !matches!(data.stage.as_str(), "1" | "2" | "5") {
         state.db.require_inventory_reconciliation(redemption_id, custom_id).await.map_err(|e| e.to_string())?;
         return Ok(false);
     }
-    state.db.attach_inventory_order(redemption_id, custom_id, Some(&data.item_id), &data.market_hash_name).await.map_err(|e| e.to_string())?;
-    if redemption.status == crate::db::redemptions::RedemptionStatus::Pending {
+    let transition = state.db.observe_market_attempt(redemption_id, custom_id, &data).await.map_err(|e| e.to_string())?;
+    if transition.chat_eligible && transition.order_created && data.stage == "1" {
         let retry_count = custom_id.strip_prefix(&format!("{redemption_id}-")).and_then(|n| n.parse::<i32>().ok()).unwrap_or(0);
         state.db.set_redemption_order_created(redemption_id, crate::steam::market::major_to_minor(data.paid, &inventory.3), Some(&inventory.1), retry_count).await.map_err(|e| e.to_string())?;
-        send_inventory_chat(state, &reward.streamer_id, MSG_ORDERS_CREATED,
+        send_attempt_chat(state, custom_id, &reward.streamer_id, MSG_ORDERS_CREATED,
             &redemption.user_login, &inventory.1, &[]).await;
-        spawn_watcher(state, redemption_id, redemption.twitch_reward_id, &reward.streamer_id, &redemption.user_login, &setting.market_api_key, custom_id.to_string());
     }
-    if data.has_active_trade() {
-        if state.db.set_trade_waiting(redemption_id, custom_id, data.trade_id.as_deref(), data.send_until, data.receive_until).await.map_err(|e| e.to_string())? {
-            if let Some(trade_id) = data.trade_id.as_deref() {
-                announce_trade(state, &reward.streamer_id, &redemption.user_login, &inventory.1,
-                    trade_id, data.receive_until).await;
-            }
+    if transition.chat_eligible && transition.trade_created {
+        if let Some(trade_id) = data.trade_id.as_deref() {
+            use crate::datetime::DateTimeExt;
+            let tradeoffer = format!("https://steamcommunity.com/tradeoffer/{trade_id}/");
+            let remaining = data.receive_until.map(|at| at.remaining_pretty()).unwrap_or_else(|| "a limited time".to_string());
+            send_attempt_chat(state, custom_id, &reward.streamer_id, MSG_TRADES_CREATED,
+                &redemption.user_login, &inventory.1,
+                &[("tradeoffer", &tradeoffer), ("remaining", &remaining)]).await;
         }
     }
-    Ok(false)
+    if transition.chat_eligible && transition.trade_accepted {
+        send_attempt_chat(state, custom_id, &reward.streamer_id, MSG_TRADES_ACCEPTED,
+            &redemption.user_login, &inventory.1, &[]).await;
+    }
+    if data.stage == "2" {
+        if let Err(e) = fulfill_delivered_twitch(state, redemption_id).await {
+            error!(error = %e, %redemption_id, "Twitch fulfillment remains pending for recovery");
+        }
+    }
+    if let Some(kind) = transition.terminal_kind.as_deref().filter(|_| transition.chat_eligible) {
+        if let Some(template) = terminal_trade_template(kind) {
+            send_attempt_chat(state, custom_id, &reward.streamer_id, template,
+                &redemption.user_login, &inventory.1, &[]).await;
+        }
+    }
+    Ok(data.stage == "5")
 }
 
 /// Retry only the Twitch status update for an already delivered item. This never
 /// creates another Market order or changes the inventory economic snapshot.
 pub async fn fulfill_delivered_twitch(state: &Arc<AppState>, redemption_id: Uuid) -> Result<(), String> {
-    if !state.db.inventory_twitch_fulfillment_pending(redemption_id).await.map_err(|e| e.to_string())? { return Ok(()); }
+    if !state.db.claim_inventory_twitch_fulfillment(redemption_id).await.map_err(|e| e.to_string())? { return Ok(()); }
     let redemption = state.db.get_redemption(redemption_id).await.map_err(|e| e.to_string())?
         .ok_or("Redemption not found")?;
     let reward = state.db.get_reward_by_twitch_id(redemption.twitch_reward_id).await.map_err(|e| e.to_string())?
@@ -244,16 +296,17 @@ pub async fn fulfill_delivered_twitch(state: &Arc<AppState>, redemption_id: Uuid
     Ok(())
 }
 
-pub async fn refund(state: &Arc<AppState>, redemption_id: Uuid) -> Result<&'static str, String> {
+pub async fn refund(state: &Arc<AppState>, redemption_id: Uuid, viewer_action: bool) -> Result<&'static str, String> {
     let redemption = state.db.get_redemption(redemption_id).await.map_err(|e| e.to_string())?.ok_or("Redemption not found")?;
     let reward = state.db.get_reward_by_twitch_id(redemption.twitch_reward_id).await.map_err(|e| e.to_string())?.ok_or("Reward not found")?;
     let inventory = state.db.get_inventory_core(redemption_id).await.map_err(|e| e.to_string())?.ok_or("Inventory item not found")?;
     if let Some(latest) = state.db.latest_inventory_attempt(redemption_id).await.map_err(|e| e.to_string())? {
-        if latest.status != "REJECTED" && !reconcile(state, redemption_id, &latest.custom_id).await? {
+        if matches!(latest.status.as_str(), "CALLING" | "ORDER_CREATED" | "TRADE_WAITING" | "TRADE_ACCEPTED" | "RECONCILIATION_REQUIRED")
+            && !reconcile(state, redemption_id, &latest.custom_id).await? {
             return Ok("RECONCILIATION_REQUIRED");
         }
     }
-    if !state.db.reserve_inventory_refund(redemption_id).await.map_err(|e| e.to_string())? {
+    if !state.db.reserve_inventory_refund(redemption_id, viewer_action).await.map_err(|e| e.to_string())? {
         return Ok("BLOCKED");
     }
     let result = state.with_broadcaster_token(&reward.streamer_id, async |token| {
@@ -272,14 +325,6 @@ pub async fn refund(state: &Arc<AppState>, redemption_id: Uuid) -> Result<&'stat
     }
 }
 
-pub fn spawn_watcher(state: &Arc<AppState>, redemption_id: Uuid, reward_id: Uuid, channel_id: &str, user_login: &str, api_key: &str, custom_id: String) {
-    let watcher = OrderWatcher::new(state.clone(), api_key.to_string(), channel_id.to_string(), WatcherRedemptionData {
-        redemption_id, custom_id, reward_id, user_login: user_login.to_string(),
-    });
-    let token = state.shutdown_token.clone();
-    state.spawn_task(async move { watcher.track_redemption(token).await; });
-}
-
 #[cfg(test)]
 mod tests {
     use super::{format_inventory_price, is_definitive_rejection, rejected_order_template, resolve_trade_link, terminal_trade_template};
@@ -295,6 +340,12 @@ mod tests {
 
     #[test]
     fn chat_templates_match_persisted_fulfillment_outcomes() {
+        let accepted = &crate::messages::CategorizedChatMessages::default().trades.accepted;
+        assert!(accepted.contains("still confirming"));
+        assert!(!accepted.contains("Enjoy your skin"));
+        let buyer_revert = &crate::messages::CategorizedChatMessages::default().trades.reverted_buyer;
+        assert!(buyer_revert.contains("contact the channel operator"));
+        assert!(!buyer_revert.contains("available actions"));
         assert_eq!(rejected_order_template(MarketBuyForErrorKind::NotEnoughFunds), Some(MSG_ORDERS_INSUFFICIENT_FUNDS));
         assert_eq!(rejected_order_template(MarketBuyForErrorKind::PriceOrChanceDeviation), Some(MSG_ORDERS_UNAVAILABLE));
         assert_eq!(rejected_order_template(MarketBuyForErrorKind::InvalidTradeLink), Some(MSG_MARKET_ERR_TRADE_LINK_INVALID));
@@ -307,8 +358,11 @@ mod tests {
         assert_eq!(rejected_order_template(MarketBuyForErrorKind::InventoryFull), Some(MSG_MARKET_ERR_INVENTORY_FULL));
         assert_eq!(rejected_order_template(MarketBuyForErrorKind::Unknown), None);
         assert_eq!(rejected_order_template(MarketBuyForErrorKind::Other), None);
-        assert_eq!(terminal_trade_template(true), MSG_TRADES_FAILED_BUYER);
-        assert_eq!(terminal_trade_template(false), MSG_TRADES_FAILED_SELLER);
+        assert_eq!(terminal_trade_template("buyer_not_accepted"), Some(MSG_TRADES_FAILED_BUYER));
+        assert_eq!(terminal_trade_template("seller_cancelled"), Some(MSG_TRADES_FAILED_SELLER));
+        assert_eq!(terminal_trade_template("buyer_reverted"), Some(crate::messages::MSG_TRADES_REVERTED_BUYER));
+        assert_eq!(terminal_trade_template("seller_reverted"), Some(crate::messages::MSG_TRADES_REVERTED_SELLER));
+        assert_eq!(terminal_trade_template("terminal_unclassified"), None);
     }
 
     #[test]

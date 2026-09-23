@@ -43,6 +43,8 @@ pub const MSG_TRADES_CREATED: &str = "trades.created";
 pub const MSG_TRADES_ACCEPTED: &str = "trades.accepted";
 pub const MSG_TRADES_FAILED_BUYER: &str = "trades.failed_buyer";
 pub const MSG_TRADES_FAILED_SELLER: &str = "trades.failed_seller";
+pub const MSG_TRADES_REVERTED_BUYER: &str = "trades.reverted_buyer";
+pub const MSG_TRADES_REVERTED_SELLER: &str = "trades.reverted_seller";
 
 // ── Chat Requirements Message Keys ─────────────────────────────────────────
 pub const MSG_CHAT_REQ_FAILED_MESSAGES_REFUND: &str = "chat_requirements.messages_refund";
@@ -144,7 +146,8 @@ pub(crate) fn is_obsolete_copied_default(category: &str, key: &str, value: &str)
     matches!((category, key, value),
         ("orders", "unavailable", "@{buyer} Market could not order {item} at its fixed price. Your points remain pending; you can retry later or request a refund from your inventory.") |
         ("orders", "reconciliation_required", "@{buyer} Market's status for {item} is being checked. Please do not start another order or refund until it is resolved; your points remain pending.") |
-        ("market_errors", "unknown", "@{buyer} Market returned an uncertain result for {item}. We are checking whether an order exists; your points remain pending. Do not retry or refund yet.")
+        ("market_errors", "unknown", "@{buyer} Market returned an uncertain result for {item}. We are checking whether an order exists; your points remain pending. Do not retry or refund yet.") |
+        ("trades", "accepted", "@{buyer} Trade offer accepted. Enjoy your skin!")
     )
 }
 
@@ -154,15 +157,19 @@ pub struct TradesMessages {
     pub accepted: String,
     pub failed_buyer: String,
     pub failed_seller: String,
+    pub reverted_buyer: String,
+    pub reverted_seller: String,
 }
 
 impl Default for TradesMessages {
     fn default() -> Self {
         Self {
             created: "@{buyer} Trade offer created. You have {remaining} to accept it: {tradeoffer}".to_string(),
-            accepted: "@{buyer} Trade offer accepted. Enjoy your skin!".to_string(),
+            accepted: "@{buyer} The trade for {item} was accepted. Market is still confirming its final outcome; your points remain pending.".to_string(),
             failed_buyer: "@{buyer} The Steam trade for {item} ended without delivery on the buyer side. Your points remain pending; check your inventory for available actions.".to_string(),
             failed_seller: "@{buyer} The Market trade for {item} ended without delivery. Your points remain pending; check your inventory to retry or request a refund.".to_string(),
+            reverted_buyer: "@{buyer} You reverted the accepted trade for {item}. Your points remain pending; contact the channel operator for help.".to_string(),
+            reverted_seller: "@{buyer} The seller reverted the accepted trade for {item}. It is available in your inventory to try delivery again; your points remain pending.".to_string(),
         }
     }
 }
@@ -255,6 +262,8 @@ impl From<serde_json::Value> for CategorizedChatMessages {
                 if let Some(v) = t_val.get("accepted").and_then(|s| s.as_str()) { result.trades.accepted = v.to_string(); }
                 if let Some(v) = t_val.get("failed_buyer").and_then(|s| s.as_str()) { result.trades.failed_buyer = v.to_string(); }
                 if let Some(v) = t_val.get("failed_seller").and_then(|s| s.as_str()) { result.trades.failed_seller = v.to_string(); }
+                if let Some(v) = t_val.get("reverted_buyer").and_then(|s| s.as_str()) { result.trades.reverted_buyer = v.to_string(); }
+                if let Some(v) = t_val.get("reverted_seller").and_then(|s| s.as_str()) { result.trades.reverted_seller = v.to_string(); }
             }
             if let Some(c_val) = obj.get("chat_requirements").and_then(|v| v.as_object()) {
                 if let Some(v) = c_val.get("messages_refund").and_then(|s| s.as_str()) { result.chat_requirements.messages_refund = v.to_string(); }
@@ -302,6 +311,8 @@ impl From<serde_json::Value> for CategorizedChatMessages {
                     ("trades", "accepted") => result.trades.accepted = val_str,
                     ("trades", "failed_buyer") => result.trades.failed_buyer = val_str,
                     ("trades", "failed_seller") => result.trades.failed_seller = val_str,
+                    ("trades", "reverted_buyer") => result.trades.reverted_buyer = val_str,
+                    ("trades", "reverted_seller") => result.trades.reverted_seller = val_str,
 
                     ("chat_requirements", "messages_refund") => result.chat_requirements.messages_refund = val_str,
                     ("chat_requirements", "messages_penalty") => result.chat_requirements.messages_penalty = val_str,
@@ -365,6 +376,8 @@ impl CategorizedChatMessages {
                 "accepted" => Some(&self.trades.accepted),
                 "failed_buyer" => Some(&self.trades.failed_buyer),
                 "failed_seller" => Some(&self.trades.failed_seller),
+                "reverted_buyer" => Some(&self.trades.reverted_buyer),
+                "reverted_seller" => Some(&self.trades.reverted_seller),
                 _ => None,
             },
             "chat_requirements" => match key {
@@ -430,6 +443,8 @@ impl CategorizedChatMessages {
                     ("trades", "accepted") => merged.trades.accepted = trimmed.to_string(),
                     ("trades", "failed_buyer") => merged.trades.failed_buyer = trimmed.to_string(),
                     ("trades", "failed_seller") => merged.trades.failed_seller = trimmed.to_string(),
+                    ("trades", "reverted_buyer") => merged.trades.reverted_buyer = trimmed.to_string(),
+                    ("trades", "reverted_seller") => merged.trades.reverted_seller = trimmed.to_string(),
 
                     ("chat_requirements", "messages_refund") => merged.chat_requirements.messages_refund = trimmed.to_string(),
                     ("chat_requirements", "messages_penalty") => merged.chat_requirements.messages_penalty = trimmed.to_string(),
@@ -462,7 +477,7 @@ impl CategorizedChatMessages {
         let mut trades = HashMap::new();
         trades.insert("created".to_string(), vec!["buyer".to_string(), "remaining".to_string(), "tradeoffer".to_string(), "item".to_string()]);
         trades.insert("accepted".to_string(), vec!["buyer".to_string(), "item".to_string()]);
-        for key in ["failed_buyer", "failed_seller"] {
+        for key in ["failed_buyer", "failed_seller", "reverted_buyer", "reverted_seller"] {
             trades.insert(key.to_string(), vec!["buyer".to_string(), "item".to_string()]);
         }
 
@@ -517,6 +532,8 @@ pub fn resolve_category_and_key(message_id: &str) -> Option<(&'static str, &'sta
         "trades.accepted" => Some(("trades", "accepted")),
         "trades.failed_buyer" => Some(("trades", "failed_buyer")),
         "trades.failed_seller" => Some(("trades", "failed_seller")),
+        "trades.reverted_buyer" => Some(("trades", "reverted_buyer")),
+        "trades.reverted_seller" => Some(("trades", "reverted_seller")),
 
         "chat_requirements.messages_refund" => Some(("chat_requirements", "messages_refund")),
         "chat_requirements.messages_penalty" => Some(("chat_requirements", "messages_penalty")),
@@ -749,6 +766,16 @@ mod tests {
         }
         assert!(visible["chat_requirements"].get("messages_refund").is_some());
         assert!(visible["chat_requirements"].get("messages_penalty").is_some());
+    }
+
+    #[test]
+    fn copied_old_acceptance_default_cannot_announce_final_delivery_at_settlement() {
+        let defaults = CategorizedChatMessages::default();
+        let overrides = HashMap::from([("trades".to_string(), HashMap::from([
+            ("accepted".to_string(), "@{buyer} Trade offer accepted. Enjoy your skin!".to_string()),
+        ]))]);
+        let merged = CategorizedChatMessages::merge_with_overrides(&defaults, &overrides);
+        assert_eq!(merged.trades.accepted, defaults.trades.accepted);
     }
 
     #[test]
