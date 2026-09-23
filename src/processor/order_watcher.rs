@@ -5,6 +5,8 @@ use tracing::{error, warn};
 use uuid::Uuid;
 
 use crate::db::redemptions::RedemptionStatus;
+use crate::messages::{MSG_ORDERS_RECONCILIATION_REQUIRED, MSG_TRADES_ACCEPTED};
+use crate::processor::inventory_fulfillment::{announce_trade, send_inventory_chat, terminal_trade_template};
 use crate::state::AppState;
 
 pub struct WatcherRedemptionData {
@@ -37,8 +39,15 @@ impl OrderWatcher {
             }
             if started.elapsed() > Duration::from_secs(30 * 60) {
                 // A local polling deadline does not prove the Market order ended.
-                if let Err(e) = self.state.db.require_inventory_reconciliation(self.redemption.redemption_id, &self.redemption.custom_id).await {
-                    error!(error = %e, "Could not persist watcher timeout uncertainty");
+                match self.state.db.require_inventory_reconciliation(self.redemption.redemption_id, &self.redemption.custom_id).await {
+                    Ok(true) => {
+                        if let Ok(Some(item)) = self.state.db.get_inventory_core(self.redemption.redemption_id).await {
+                            send_inventory_chat(&self.state, &self.broadcaster_id, MSG_ORDERS_RECONCILIATION_REQUIRED,
+                                &self.redemption.user_login, &item.1, &[]).await;
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(e) => error!(error = %e, "Could not persist watcher timeout uncertainty"),
                 }
                 return;
             }
@@ -78,6 +87,10 @@ impl OrderWatcher {
                     let _ = self.state.db.mark_legacy_inventory_delivered(self.redemption.redemption_id).await;
                 }
                 if managed_inventory {
+                    if newly_delivered {
+                        send_inventory_chat(&self.state, &self.broadcaster_id, MSG_TRADES_ACCEPTED,
+                            &self.redemption.user_login, &trade.market_hash_name, &[]).await;
+                    }
                     if let Err(e) = crate::processor::inventory_fulfillment::fulfill_delivered_twitch(&self.state, self.redemption.redemption_id).await {
                         error!(error = %e, "Twitch delivery fulfillment remains pending for recovery");
                     }
@@ -97,10 +110,13 @@ impl OrderWatcher {
                     return;
                 }
                 if managed_inventory {
-                    if let Err(e) = self.state.db.set_terminal_trade_failure(self.redemption.redemption_id, &self.redemption.custom_id,
+                    match self.state.db.set_terminal_trade_failure(self.redemption.redemption_id, &self.redemption.custom_id,
                         trade.causer.as_deref() == Some("buyer"), trade.causer.as_deref(), trade.cancellation_reason.as_deref()).await {
-                        error!(error = %e, "Could not persist terminal Market failure");
-                        continue;
+                        Ok(true) => send_inventory_chat(&self.state, &self.broadcaster_id,
+                            terminal_trade_template(trade.causer.as_deref() == Some("buyer")),
+                            &self.redemption.user_login, &trade.market_hash_name, &[]).await,
+                        Ok(false) => {}
+                        Err(e) => { error!(error = %e, "Could not persist terminal Market failure"); continue; }
                     }
                 } else {
                     let _ = self.state.db.set_redemption_manual_hold(self.redemption.redemption_id, "market_terminal_failure", trade.cancellation_reason.as_deref()).await;
@@ -111,9 +127,16 @@ impl OrderWatcher {
                 let _ = self.state.db.attach_inventory_order(self.redemption.redemption_id, &self.redemption.custom_id,
                     Some(&trade.item_id), &trade.market_hash_name).await;
                 if trade.has_active_trade() {
-                    if let Err(e) = self.state.db.set_trade_waiting(self.redemption.redemption_id, &self.redemption.custom_id,
+                    match self.state.db.set_trade_waiting(self.redemption.redemption_id, &self.redemption.custom_id,
                         trade.trade_id.as_deref(), trade.send_until, trade.receive_until).await {
-                        error!(error = %e, "Could not persist Steam trade state");
+                        Ok(true) => {
+                            if let Some(trade_id) = trade.trade_id.as_deref() {
+                                announce_trade(&self.state, &self.broadcaster_id, &self.redemption.user_login,
+                                    &trade.market_hash_name, trade_id, trade.receive_until).await;
+                            }
+                        }
+                        Ok(false) => {}
+                        Err(e) => error!(error = %e, "Could not persist Steam trade state"),
                     }
                 }
             }

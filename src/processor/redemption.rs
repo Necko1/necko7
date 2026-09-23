@@ -9,6 +9,7 @@ use crate::messages::{
     MSG_CHAT_REQ_FAILED_CHARACTERS_REFUND, MSG_CHAT_REQ_FAILED_CHARACTERS_PENALTY,
     MSG_CHAT_REQ_FAILED_BOTH_REFUND, MSG_CHAT_REQ_FAILED_BOTH_PENALTY,
     MSG_USER_PURCHASE_LIMIT_REACHED, MSG_GLOBAL_PURCHASE_LIMIT_REACHED,
+    MSG_ORDERS_WAITING_VIEWER, MSG_ORDERS_WAITING_OPERATOR,
 };
 use crate::processor::model::EventSubNotification;
 use crate::state::AppState;
@@ -522,12 +523,27 @@ async fn process_redemption_inner(
     };
     let mode = if !reward_data.market_autobuy { "OPERATOR" }
         else if viewer_settings.auto_buy_enabled { "AUTO" } else { "VIEWER" };
-    if let Err(e) = state.db.create_inventory_item(redemption_id, &item_name, fixed_price as i64,
+    let created = match state.db.create_inventory_item(redemption_id, &item_name, fixed_price as i64,
         mode, reward_data.retry_on_buyer_failure).await {
-        error!(error = %e, %redemption_id, "Cannot persist inventory item");
-        return;
-    }
+        Ok(created) => created,
+        Err(e) => {
+            error!(error = %e, %redemption_id, "Cannot persist inventory item");
+            return;
+        }
+    };
     let actual_mode = state.db.get_inventory_core(redemption_id).await.ok().flatten().map(|item| item.4);
+    if created {
+        let template = match actual_mode.as_deref() {
+            Some("VIEWER") => Some(MSG_ORDERS_WAITING_VIEWER),
+            Some("OPERATOR") => Some(MSG_ORDERS_WAITING_OPERATOR),
+            _ => None,
+        };
+        if let Some(template) = template {
+            crate::processor::inventory_fulfillment::send_inventory_chat(
+                &state, &reward_data.streamer_id, template, &event.user_login, &item_name, &[],
+            ).await;
+        }
+    }
     if actual_mode.as_deref() == Some("AUTO") {
         if let Err(e) = crate::processor::inventory_fulfillment::purchase(&state, redemption_id, false, false).await {
             error!(error = %e, %redemption_id, "Initial Market attempt could not complete locally");

@@ -3,6 +3,12 @@ use tracing::{error, warn};
 use uuid::Uuid;
 
 use crate::processor::order_watcher::{OrderWatcher, WatcherRedemptionData};
+use crate::messages::{
+    MSG_ORDERS_CREATED, MSG_ORDERS_INSUFFICIENT_FUNDS, MSG_ORDERS_RECONCILIATION_REQUIRED,
+    MSG_ORDERS_RETRY_AVAILABLE, MSG_ORDERS_TRADE_LINK_REQUIRED, MSG_ORDERS_UNAVAILABLE,
+    MSG_ORDERS_STEAM_ACCOUNT_ACTION, MSG_ORDERS_REFUNDED, MSG_TRADES_ACCEPTED, MSG_TRADES_CREATED,
+    MSG_TRADES_FAILED_BUYER, MSG_TRADES_FAILED_SELLER,
+};
 use crate::state::AppState;
 use crate::steam::market::errors::{classify_market_buy_for_error, MarketBuyForErrorKind};
 use crate::steam::trade_link::TradeLink;
@@ -17,6 +23,50 @@ fn resolve_trade_link(message: &str, saved: Option<&str>, use_saved_link: bool) 
 
 fn is_definitive_rejection(kind: MarketBuyForErrorKind, order_id: Option<&str>) -> bool {
     order_id.is_none() && !matches!(kind, MarketBuyForErrorKind::Unknown | MarketBuyForErrorKind::Other)
+}
+
+fn rejected_order_template(kind: MarketBuyForErrorKind) -> &'static str {
+    match kind {
+        MarketBuyForErrorKind::NotEnoughFunds => MSG_ORDERS_INSUFFICIENT_FUNDS,
+        MarketBuyForErrorKind::PriceOrChanceDeviation => MSG_ORDERS_UNAVAILABLE,
+        MarketBuyForErrorKind::InvalidTradeLink |
+        MarketBuyForErrorKind::TradeLinkCheckFailed |
+        MarketBuyForErrorKind::OfflineTradesDisabled => MSG_ORDERS_TRADE_LINK_REQUIRED,
+        MarketBuyForErrorKind::InventoryHidden |
+        MarketBuyForErrorKind::SteamBanned |
+        MarketBuyForErrorKind::NoMobileAuth |
+        MarketBuyForErrorKind::InventoryFull => MSG_ORDERS_STEAM_ACCOUNT_ACTION,
+        _ => MSG_ORDERS_RETRY_AVAILABLE,
+    }
+}
+
+/// Chat is informational. A Twitch chat failure must not undo a persisted
+/// inventory or Market transition, and callers only invoke this on a new event.
+pub async fn send_inventory_chat(
+    state: &Arc<AppState>, channel_id: &str, template: &str, buyer: &str, item: &str,
+    extra: &[(&str, &str)],
+) {
+    let mut vars = vec![("buyer", buyer), ("item", item)];
+    vars.extend_from_slice(extra);
+    let message = state.render_chat_message(channel_id, template, &vars);
+    if let Err(e) = state.send_chat_message(channel_id, &message, None).await {
+        warn!(error = %e, %channel_id, %template, "Could not send inventory status to channel chat");
+    }
+}
+
+pub fn terminal_trade_template(buyer_fault: bool) -> &'static str {
+    if buyer_fault { MSG_TRADES_FAILED_BUYER } else { MSG_TRADES_FAILED_SELLER }
+}
+
+pub async fn announce_trade(
+    state: &Arc<AppState>, channel_id: &str, buyer: &str, item: &str,
+    trade_id: &str, receive_until: Option<chrono::DateTime<chrono::Utc>>,
+) {
+    use crate::datetime::DateTimeExt;
+    let tradeoffer = format!("https://steamcommunity.com/tradeoffer/{trade_id}/");
+    let remaining = receive_until.map(|at| at.remaining_pretty()).unwrap_or_else(|| "a limited time".to_string());
+    send_inventory_chat(state, channel_id, MSG_TRADES_CREATED, buyer, item,
+        &[("tradeoffer", &tradeoffer), ("remaining", &remaining)]).await;
 }
 
 /// A new order is only made by initial auto-buy or an explicit authorized action.
@@ -41,7 +91,10 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
     let viewer_settings = state.db.get_viewer_settings(&redemption.user_id).await.map_err(|e| e.to_string())?;
     let parsed = resolve_trade_link(&redemption.user_trade_link, viewer_settings.trade_link.as_deref(), use_saved_link);
     let Some(trade_link) = parsed else {
-        state.db.require_inventory_trade_link(redemption_id).await.map_err(|e| e.to_string())?;
+        if state.db.require_inventory_trade_link(redemption_id).await.map_err(|e| e.to_string())? {
+            send_inventory_chat(state, &reward.streamer_id, MSG_ORDERS_TRADE_LINK_REQUIRED,
+                &redemption.user_login, &inventory.1, &[]).await;
+        }
         return Ok("TRADE_LINK_REQUIRED");
     };
     let trade_link_text = format!("https://steamcommunity.com/tradeoffer/new/?partner={}&token={}", trade_link.partner, trade_link.token);
@@ -64,6 +117,8 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
                 .and_then(|n| n.parse::<i32>().ok()).unwrap_or(0);
             state.db.set_redemption_order_created(redemption_id, response.price.unwrap_or(inventory.2), Some(&inventory.1), retry_count).await.map_err(|e| e.to_string())?;
             crate::processor::redemption::check_and_pause_if_global_limit_reached(state, &reward.streamer_id, redemption.twitch_reward_id).await;
+            send_inventory_chat(state, &reward.streamer_id, MSG_ORDERS_CREATED,
+                &redemption.user_login, &inventory.1, &[]).await;
             spawn_watcher(state, redemption_id, redemption.twitch_reward_id, &reward.streamer_id, &redemption.user_login, &setting.market_api_key, custom_id);
             Ok("ORDER_CREATED")
         }
@@ -72,6 +127,8 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
             let kind = classify_market_buy_for_error(response.code.unwrap_or(0), &detail);
             if !is_definitive_rejection(kind, response.id.as_deref()) {
                 state.db.mark_attempt_ambiguous(redemption_id, &custom_id, &detail).await.map_err(|e| e.to_string())?;
+                send_inventory_chat(state, &reward.streamer_id, MSG_ORDERS_RECONCILIATION_REQUIRED,
+                    &redemption.user_login, &inventory.1, &[]).await;
                 return Ok("RECONCILIATION_REQUIRED");
             }
             let label = match kind {
@@ -80,12 +137,18 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
                 k if k.is_buyer_terminal_error() => "trade_link",
                 _ => "market_rejected",
             };
-            state.db.mark_attempt_rejected(redemption_id, &custom_id, label, &detail).await.map_err(|e| e.to_string())?;
+            let changed = state.db.mark_attempt_rejected(redemption_id, &custom_id, label, &detail).await.map_err(|e| e.to_string())?;
+            if changed {
+                send_inventory_chat(state, &reward.streamer_id, rejected_order_template(kind),
+                    &redemption.user_login, &inventory.1, &[]).await;
+            }
             Ok(match label { "no_money" => "INSUFFICIENT_FUNDS", "trade_link" => "TRADE_LINK_REQUIRED", _ => "RETRY_AVAILABLE" })
         }
         Err(e) => {
             warn!(error = %e, %redemption_id, "Market buy-for outcome is unknown; no automatic retry");
             state.db.mark_attempt_ambiguous(redemption_id, &custom_id, &e.to_string()).await.map_err(|e| e.to_string())?;
+            send_inventory_chat(state, &reward.streamer_id, MSG_ORDERS_RECONCILIATION_REQUIRED,
+                &redemption.user_login, &inventory.1, &[]).await;
             Ok("RECONCILIATION_REQUIRED")
         }
     }
@@ -109,7 +172,10 @@ pub async fn reconcile(state: &Arc<AppState>, redemption_id: Uuid, custom_id: &s
     }
     if data.is_claimed() {
         state.db.attach_inventory_order(redemption_id, custom_id, Some(&data.item_id), &data.market_hash_name).await.map_err(|e| e.to_string())?;
-        state.db.mark_inventory_delivered(redemption_id, custom_id).await.map_err(|e| e.to_string())?;
+        if state.db.mark_inventory_delivered(redemption_id, custom_id).await.map_err(|e| e.to_string())? {
+            send_inventory_chat(state, &reward.streamer_id, MSG_TRADES_ACCEPTED,
+                &redemption.user_login, &inventory.1, &[]).await;
+        }
         if let Err(e) = fulfill_delivered_twitch(state, redemption_id).await {
             error!(error = %e, %redemption_id, "Twitch fulfillment remains pending for recovery");
         }
@@ -118,7 +184,10 @@ pub async fn reconcile(state: &Arc<AppState>, redemption_id: Uuid, custom_id: &s
     if data.stage == "5" {
         let buyer = data.causer.as_deref() == Some("buyer");
         state.db.attach_inventory_order(redemption_id, custom_id, Some(&data.item_id), &data.market_hash_name).await.map_err(|e| e.to_string())?;
-        state.db.set_terminal_trade_failure(redemption_id, custom_id, buyer, data.causer.as_deref(), data.cancellation_reason.as_deref()).await.map_err(|e| e.to_string())?;
+        if state.db.set_terminal_trade_failure(redemption_id, custom_id, buyer, data.causer.as_deref(), data.cancellation_reason.as_deref()).await.map_err(|e| e.to_string())? {
+            send_inventory_chat(state, &reward.streamer_id, terminal_trade_template(buyer),
+                &redemption.user_login, &inventory.1, &[]).await;
+        }
         return Ok(true);
     }
     if data.causer.is_some() {
@@ -129,10 +198,17 @@ pub async fn reconcile(state: &Arc<AppState>, redemption_id: Uuid, custom_id: &s
     if redemption.status == crate::db::redemptions::RedemptionStatus::Pending {
         let retry_count = custom_id.strip_prefix(&format!("{redemption_id}-")).and_then(|n| n.parse::<i32>().ok()).unwrap_or(0);
         state.db.set_redemption_order_created(redemption_id, crate::steam::market::major_to_minor(data.paid, &inventory.3), Some(&inventory.1), retry_count).await.map_err(|e| e.to_string())?;
+        send_inventory_chat(state, &reward.streamer_id, MSG_ORDERS_CREATED,
+            &redemption.user_login, &inventory.1, &[]).await;
         spawn_watcher(state, redemption_id, redemption.twitch_reward_id, &reward.streamer_id, &redemption.user_login, &setting.market_api_key, custom_id.to_string());
     }
     if data.has_active_trade() {
-        state.db.set_trade_waiting(redemption_id, custom_id, data.trade_id.as_deref(), data.send_until, data.receive_until).await.map_err(|e| e.to_string())?;
+        if state.db.set_trade_waiting(redemption_id, custom_id, data.trade_id.as_deref(), data.send_until, data.receive_until).await.map_err(|e| e.to_string())? {
+            if let Some(trade_id) = data.trade_id.as_deref() {
+                announce_trade(state, &reward.streamer_id, &redemption.user_login, &inventory.1,
+                    trade_id, data.receive_until).await;
+            }
+        }
     }
     Ok(false)
 }
@@ -156,6 +232,7 @@ pub async fn fulfill_delivered_twitch(state: &Arc<AppState>, redemption_id: Uuid
 pub async fn refund(state: &Arc<AppState>, redemption_id: Uuid) -> Result<&'static str, String> {
     let redemption = state.db.get_redemption(redemption_id).await.map_err(|e| e.to_string())?.ok_or("Redemption not found")?;
     let reward = state.db.get_reward_by_twitch_id(redemption.twitch_reward_id).await.map_err(|e| e.to_string())?.ok_or("Reward not found")?;
+    let inventory = state.db.get_inventory_core(redemption_id).await.map_err(|e| e.to_string())?.ok_or("Inventory item not found")?;
     if let Some(latest) = state.db.latest_inventory_attempt(redemption_id).await.map_err(|e| e.to_string())? {
         if latest.status != "REJECTED" && !reconcile(state, redemption_id, &latest.custom_id).await? {
             return Ok("RECONCILIATION_REQUIRED");
@@ -170,7 +247,14 @@ pub async fn refund(state: &Arc<AppState>, redemption_id: Uuid) -> Result<&'stat
     }).await;
     let succeeded = result.is_ok();
     state.db.finish_inventory_refund(redemption_id, succeeded).await.map_err(|e| e.to_string())?;
-    match result { Ok(_) => Ok("REFUNDED"), Err(e) => Err(format!("Twitch refund result must be reconciled: {e}")) }
+    match result {
+        Ok(_) => {
+            send_inventory_chat(state, &reward.streamer_id, MSG_ORDERS_REFUNDED,
+                &redemption.user_login, &inventory.1, &[]).await;
+            Ok("REFUNDED")
+        }
+        Err(e) => Err(format!("Twitch refund result must be reconciled: {e}")),
+    }
 }
 
 pub fn spawn_watcher(state: &Arc<AppState>, redemption_id: Uuid, reward_id: Uuid, channel_id: &str, user_login: &str, api_key: &str, custom_id: String) {
@@ -183,8 +267,24 @@ pub fn spawn_watcher(state: &Arc<AppState>, redemption_id: Uuid, reward_id: Uuid
 
 #[cfg(test)]
 mod tests {
-    use super::{is_definitive_rejection, resolve_trade_link};
+    use super::{is_definitive_rejection, rejected_order_template, resolve_trade_link, terminal_trade_template};
+    use crate::messages::{
+        MSG_ORDERS_INSUFFICIENT_FUNDS, MSG_ORDERS_RETRY_AVAILABLE,
+        MSG_ORDERS_STEAM_ACCOUNT_ACTION, MSG_ORDERS_TRADE_LINK_REQUIRED, MSG_ORDERS_UNAVAILABLE,
+        MSG_TRADES_FAILED_BUYER, MSG_TRADES_FAILED_SELLER,
+    };
     use crate::steam::market::errors::MarketBuyForErrorKind;
+
+    #[test]
+    fn chat_templates_match_persisted_fulfillment_outcomes() {
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::NotEnoughFunds), MSG_ORDERS_INSUFFICIENT_FUNDS);
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::PriceOrChanceDeviation), MSG_ORDERS_UNAVAILABLE);
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::InvalidTradeLink), MSG_ORDERS_TRADE_LINK_REQUIRED);
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::InventoryHidden), MSG_ORDERS_STEAM_ACCOUNT_ACTION);
+        assert_eq!(rejected_order_template(MarketBuyForErrorKind::CheckBotBanned), MSG_ORDERS_RETRY_AVAILABLE);
+        assert_eq!(terminal_trade_template(true), MSG_TRADES_FAILED_BUYER);
+        assert_eq!(terminal_trade_template(false), MSG_TRADES_FAILED_SELLER);
+    }
 
     #[test]
     fn message_link_has_priority_and_saved_link_requires_explicit_override() {

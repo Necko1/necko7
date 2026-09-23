@@ -79,6 +79,18 @@ lock afterward. A successful Twitch refund closes the item as `REFUNDED` and
 the redemption as `FAILED_REFUND`. An uncertain Twitch refund leaves
 `RECONCILIATION_REQUIRED` for review, so it cannot be retried blindly.
 
+## Channel chat
+
+The reward's channel chat receives customizable inventory status messages.
+New inventory snapshots announce either viewer action or operator review when
+auto-buy is off. A successful Market response announces an order; detecting a
+Steam trade announces its offer link; confirmed delivery announces acceptance.
+Missing links, definitive rejections, ambiguous Market outcomes, terminal trade
+failures, and explicit refunds use separate templates that describe the current
+points state. These notices are best effort: chat failure never rolls back a
+persisted fulfillment transition. Database transitions suppress repeat notices
+from duplicate redemptions, concurrent watchers, and repeated polls.
+
 ## Migration and follow-up tracking
 
 There is no historical inventory backfill: old redemption/paid-price rows do

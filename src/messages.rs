@@ -19,6 +19,15 @@ pub const ALL_CATEGORIES: [&str; 5] = [
 
 // ── Orders Message Keys ────────────────────────────────────────────────────
 pub const MSG_ORDERS_CREATED: &str = "orders.created";
+pub const MSG_ORDERS_WAITING_VIEWER: &str = "orders.waiting_viewer";
+pub const MSG_ORDERS_WAITING_OPERATOR: &str = "orders.waiting_operator";
+pub const MSG_ORDERS_TRADE_LINK_REQUIRED: &str = "orders.trade_link_required";
+pub const MSG_ORDERS_STEAM_ACCOUNT_ACTION: &str = "orders.steam_account_action";
+pub const MSG_ORDERS_INSUFFICIENT_FUNDS: &str = "orders.insufficient_funds";
+pub const MSG_ORDERS_UNAVAILABLE: &str = "orders.unavailable";
+pub const MSG_ORDERS_RETRY_AVAILABLE: &str = "orders.retry_available";
+pub const MSG_ORDERS_RECONCILIATION_REQUIRED: &str = "orders.reconciliation_required";
+pub const MSG_ORDERS_REFUNDED: &str = "orders.refunded";
 pub const MSG_ORDERS_POOL_CREATED: &str = "orders.pool_created";
 pub const MSG_ORDERS_FAILED: &str = "orders.failed";
 pub const MSG_ORDERS_FAILED_NO_MONEY_REFUND: &str = "orders.failed_no_money_refund";
@@ -43,6 +52,8 @@ pub const MSG_MARKET_ERR_INVENTORY_FULL: &str = "market_errors.inventory_full";
 // ── Trades Message Keys ────────────────────────────────────────────────────
 pub const MSG_TRADES_CREATED: &str = "trades.created";
 pub const MSG_TRADES_ACCEPTED: &str = "trades.accepted";
+pub const MSG_TRADES_FAILED_BUYER: &str = "trades.failed_buyer";
+pub const MSG_TRADES_FAILED_SELLER: &str = "trades.failed_seller";
 pub const MSG_TRADES_FAILED_BUYER_REFUND: &str = "trades.failed_buyer_refund";
 pub const MSG_TRADES_FAILED_BUYER_PENALTY: &str = "trades.failed_buyer_penalty";
 pub const MSG_TRADES_FAILED_SELLER_REFUND: &str = "trades.failed_seller_refund";
@@ -88,6 +99,15 @@ pub const MSG_CHAT_REQ_FAILED_BOTH: &str = MSG_CHAT_REQ_FAILED_BOTH_REFUND;
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 pub struct OrdersMessages {
     pub created: String,
+    pub waiting_viewer: String,
+    pub waiting_operator: String,
+    pub trade_link_required: String,
+    pub steam_account_action: String,
+    pub insufficient_funds: String,
+    pub unavailable: String,
+    pub retry_available: String,
+    pub reconciliation_required: String,
+    pub refunded: String,
     pub pool_created: String,
     pub failed: String,
     pub failed_no_money_refund: String,
@@ -102,7 +122,16 @@ pub struct OrdersMessages {
 impl Default for OrdersMessages {
     fn default() -> Self {
         Self {
-            created: "@{buyer} Market order created. Please wait for the trade offer (up to 5 minutes).".to_string(),
+            created: "@{buyer} Market order created for {item}. Watch for the Steam trade offer; you can follow delivery in your inventory.".to_string(),
+            waiting_viewer: "@{buyer} {item} is in your inventory. Your auto-buy preference is off, so no Market order was placed. Start delivery or refund your points from your inventory.".to_string(),
+            waiting_operator: "@{buyer} {item} is in your inventory. Auto-buy is off for this reward, so no Market order was placed. The channel team will review delivery.".to_string(),
+            trade_link_required: "@{buyer} {item} needs a valid Steam trade link. Check the link in your reward message or profile, then start delivery from your inventory; your points remain pending.".to_string(),
+            steam_account_action: "@{buyer} Market could not order {item} because of Steam account or inventory settings. Check trading restrictions, Steam Guard and inventory visibility or capacity. Your points remain pending.".to_string(),
+            insufficient_funds: "@{buyer} Market could not order {item} because the channel account has insufficient balance. Your points remain pending; try again later or request a refund from your inventory.".to_string(),
+            unavailable: "@{buyer} Market could not order {item} at its fixed price. Your points remain pending; you can retry later or request a refund from your inventory.".to_string(),
+            retry_available: "@{buyer} Market did not create an order for {item}. Your points remain pending; check your inventory to retry or request a refund.".to_string(),
+            reconciliation_required: "@{buyer} Market's status for {item} is being checked. Please do not start another order or refund until it is resolved; your points remain pending.".to_string(),
+            refunded: "@{buyer} Your channel points for {item} were refunded. Inventory fulfillment is closed.".to_string(),
             pool_created: "@{buyer} Rolled skin {item} (chance: {chance})! Market order created. Please wait for the trade offer (up to 5 minutes).".to_string(),
             failed: "@{buyer} Failed to create market order. Channel points refunded. Error {code}: {error}".to_string(),
             failed_no_money_refund: "@{buyer} Insufficient bot balance to purchase the item. Channel points refunded.".to_string(),
@@ -149,6 +178,8 @@ impl Default for MarketErrorsMessages {
 pub struct TradesMessages {
     pub created: String,
     pub accepted: String,
+    pub failed_buyer: String,
+    pub failed_seller: String,
     pub failed_buyer_refund: String,
     pub failed_buyer_penalty: String,
     pub failed_seller_refund: String,
@@ -160,6 +191,8 @@ impl Default for TradesMessages {
         Self {
             created: "@{buyer} Trade offer created. You have {remaining} to accept it: {tradeoffer}".to_string(),
             accepted: "@{buyer} Trade offer accepted. Enjoy your skin!".to_string(),
+            failed_buyer: "@{buyer} The Steam trade for {item} ended without delivery on the buyer side. Your points remain pending; check your inventory for available actions.".to_string(),
+            failed_seller: "@{buyer} The Market trade for {item} ended without delivery. Your points remain pending; check your inventory to retry or request a refund.".to_string(),
             failed_buyer_refund: "@{buyer} Trade offer failed or was declined. Channel points refunded.".to_string(),
             failed_buyer_penalty: "@{buyer} Trade offer failed or was declined. Channel points are not refunded per streamer settings.".to_string(),
             failed_seller_refund: "@{buyer} Seller failed to send the item. Channel points refunded.".to_string(),
@@ -232,6 +265,15 @@ impl From<serde_json::Value> for CategorizedChatMessages {
         if is_nested {
             if let Some(orders_val) = obj.get("orders").and_then(|v| v.as_object()) {
                 if let Some(v) = orders_val.get("created").and_then(|s| s.as_str()) { result.orders.created = v.to_string(); }
+                if let Some(v) = orders_val.get("waiting_viewer").and_then(|s| s.as_str()) { result.orders.waiting_viewer = v.to_string(); }
+                if let Some(v) = orders_val.get("waiting_operator").and_then(|s| s.as_str()) { result.orders.waiting_operator = v.to_string(); }
+                if let Some(v) = orders_val.get("trade_link_required").and_then(|s| s.as_str()) { result.orders.trade_link_required = v.to_string(); }
+                if let Some(v) = orders_val.get("steam_account_action").and_then(|s| s.as_str()) { result.orders.steam_account_action = v.to_string(); }
+                if let Some(v) = orders_val.get("insufficient_funds").and_then(|s| s.as_str()) { result.orders.insufficient_funds = v.to_string(); }
+                if let Some(v) = orders_val.get("unavailable").and_then(|s| s.as_str()) { result.orders.unavailable = v.to_string(); }
+                if let Some(v) = orders_val.get("retry_available").and_then(|s| s.as_str()) { result.orders.retry_available = v.to_string(); }
+                if let Some(v) = orders_val.get("reconciliation_required").and_then(|s| s.as_str()) { result.orders.reconciliation_required = v.to_string(); }
+                if let Some(v) = orders_val.get("refunded").and_then(|s| s.as_str()) { result.orders.refunded = v.to_string(); }
                 if let Some(v) = orders_val.get("pool_created").and_then(|s| s.as_str()) { result.orders.pool_created = v.to_string(); }
                 if let Some(v) = orders_val.get("failed").and_then(|s| s.as_str()) { result.orders.failed = v.to_string(); }
                 if let Some(v) = orders_val.get("failed_no_money_refund").and_then(|s| s.as_str()) { result.orders.failed_no_money_refund = v.to_string(); }
@@ -256,6 +298,8 @@ impl From<serde_json::Value> for CategorizedChatMessages {
             if let Some(t_val) = obj.get("trades").and_then(|v| v.as_object()) {
                 if let Some(v) = t_val.get("created").and_then(|s| s.as_str()) { result.trades.created = v.to_string(); }
                 if let Some(v) = t_val.get("accepted").and_then(|s| s.as_str()) { result.trades.accepted = v.to_string(); }
+                if let Some(v) = t_val.get("failed_buyer").and_then(|s| s.as_str()) { result.trades.failed_buyer = v.to_string(); }
+                if let Some(v) = t_val.get("failed_seller").and_then(|s| s.as_str()) { result.trades.failed_seller = v.to_string(); }
                 if let Some(v) = t_val.get("failed_buyer_refund").and_then(|s| s.as_str()) { result.trades.failed_buyer_refund = v.to_string(); }
                 if let Some(v) = t_val.get("failed_buyer_penalty").and_then(|s| s.as_str()) { result.trades.failed_buyer_penalty = v.to_string(); }
                 if let Some(v) = t_val.get("failed_seller_refund").and_then(|s| s.as_str()) { result.trades.failed_seller_refund = v.to_string(); }
@@ -285,6 +329,15 @@ impl From<serde_json::Value> for CategorizedChatMessages {
             if let Some((cat, key)) = resolve_category_and_key(k) {
                 match (cat, key) {
                     ("orders", "created") => result.orders.created = val_str,
+                    ("orders", "waiting_viewer") => result.orders.waiting_viewer = val_str,
+                    ("orders", "waiting_operator") => result.orders.waiting_operator = val_str,
+                    ("orders", "trade_link_required") => result.orders.trade_link_required = val_str,
+                    ("orders", "steam_account_action") => result.orders.steam_account_action = val_str,
+                    ("orders", "insufficient_funds") => result.orders.insufficient_funds = val_str,
+                    ("orders", "unavailable") => result.orders.unavailable = val_str,
+                    ("orders", "retry_available") => result.orders.retry_available = val_str,
+                    ("orders", "reconciliation_required") => result.orders.reconciliation_required = val_str,
+                    ("orders", "refunded") => result.orders.refunded = val_str,
                     ("orders", "pool_created") => result.orders.pool_created = val_str,
                     ("orders", "failed") => result.orders.failed = val_str,
                     ("orders", "failed_no_money_refund") => result.orders.failed_no_money_refund = val_str,
@@ -307,6 +360,8 @@ impl From<serde_json::Value> for CategorizedChatMessages {
 
                     ("trades", "created") => result.trades.created = val_str,
                     ("trades", "accepted") => result.trades.accepted = val_str,
+                    ("trades", "failed_buyer") => result.trades.failed_buyer = val_str,
+                    ("trades", "failed_seller") => result.trades.failed_seller = val_str,
                     ("trades", "failed_buyer_refund") => result.trades.failed_buyer_refund = val_str,
                     ("trades", "failed_buyer_penalty") => result.trades.failed_buyer_penalty = val_str,
                     ("trades", "failed_seller_refund") => result.trades.failed_seller_refund = val_str,
@@ -348,6 +403,15 @@ impl CategorizedChatMessages {
         match cat {
             "orders" => match key {
                 "created" => Some(&self.orders.created),
+                "waiting_viewer" => Some(&self.orders.waiting_viewer),
+                "waiting_operator" => Some(&self.orders.waiting_operator),
+                "trade_link_required" => Some(&self.orders.trade_link_required),
+                "steam_account_action" => Some(&self.orders.steam_account_action),
+                "insufficient_funds" => Some(&self.orders.insufficient_funds),
+                "unavailable" => Some(&self.orders.unavailable),
+                "retry_available" => Some(&self.orders.retry_available),
+                "reconciliation_required" => Some(&self.orders.reconciliation_required),
+                "refunded" => Some(&self.orders.refunded),
                 "pool_created" => Some(&self.orders.pool_created),
                 "failed" => Some(&self.orders.failed),
                 "failed_no_money_refund" => Some(&self.orders.failed_no_money_refund),
@@ -374,6 +438,8 @@ impl CategorizedChatMessages {
             "trades" => match key {
                 "created" => Some(&self.trades.created),
                 "accepted" => Some(&self.trades.accepted),
+                "failed_buyer" => Some(&self.trades.failed_buyer),
+                "failed_seller" => Some(&self.trades.failed_seller),
                 "failed_buyer_refund" => Some(&self.trades.failed_buyer_refund),
                 "failed_buyer_penalty" => Some(&self.trades.failed_buyer_penalty),
                 "failed_seller_refund" => Some(&self.trades.failed_seller_refund),
@@ -418,6 +484,15 @@ impl CategorizedChatMessages {
                 }
                 match (cat.as_str(), key.as_str()) {
                     ("orders", "created") => merged.orders.created = trimmed.to_string(),
+                    ("orders", "waiting_viewer") => merged.orders.waiting_viewer = trimmed.to_string(),
+                    ("orders", "waiting_operator") => merged.orders.waiting_operator = trimmed.to_string(),
+                    ("orders", "trade_link_required") => merged.orders.trade_link_required = trimmed.to_string(),
+                    ("orders", "steam_account_action") => merged.orders.steam_account_action = trimmed.to_string(),
+                    ("orders", "insufficient_funds") => merged.orders.insufficient_funds = trimmed.to_string(),
+                    ("orders", "unavailable") => merged.orders.unavailable = trimmed.to_string(),
+                    ("orders", "retry_available") => merged.orders.retry_available = trimmed.to_string(),
+                    ("orders", "reconciliation_required") => merged.orders.reconciliation_required = trimmed.to_string(),
+                    ("orders", "refunded") => merged.orders.refunded = trimmed.to_string(),
                     ("orders", "pool_created") => merged.orders.pool_created = trimmed.to_string(),
                     ("orders", "failed") => merged.orders.failed = trimmed.to_string(),
                     ("orders", "failed_no_money_refund") => merged.orders.failed_no_money_refund = trimmed.to_string(),
@@ -440,6 +515,8 @@ impl CategorizedChatMessages {
 
                     ("trades", "created") => merged.trades.created = trimmed.to_string(),
                     ("trades", "accepted") => merged.trades.accepted = trimmed.to_string(),
+                    ("trades", "failed_buyer") => merged.trades.failed_buyer = trimmed.to_string(),
+                    ("trades", "failed_seller") => merged.trades.failed_seller = trimmed.to_string(),
                     ("trades", "failed_buyer_refund") => merged.trades.failed_buyer_refund = trimmed.to_string(),
                     ("trades", "failed_buyer_penalty") => merged.trades.failed_buyer_penalty = trimmed.to_string(),
                     ("trades", "failed_seller_refund") => merged.trades.failed_seller_refund = trimmed.to_string(),
@@ -465,6 +542,9 @@ impl CategorizedChatMessages {
     pub fn all_placeholders() -> CategorizedPlaceholders {
         let mut orders = HashMap::new();
         orders.insert("created".to_string(), vec!["buyer".to_string(), "item".to_string()]);
+        for key in ["waiting_viewer", "waiting_operator", "trade_link_required", "steam_account_action", "insufficient_funds", "unavailable", "retry_available", "reconciliation_required", "refunded"] {
+            orders.insert(key.to_string(), vec!["buyer".to_string(), "item".to_string()]);
+        }
         orders.insert("pool_created".to_string(), vec!["buyer".to_string(), "item".to_string(), "chance".to_string()]);
         orders.insert("failed".to_string(), vec!["buyer".to_string(), "code".to_string(), "error".to_string(), "item".to_string()]);
         orders.insert("failed_no_money_refund".to_string(), vec!["buyer".to_string(), "item".to_string()]);
@@ -489,6 +569,9 @@ impl CategorizedChatMessages {
         let mut trades = HashMap::new();
         trades.insert("created".to_string(), vec!["buyer".to_string(), "remaining".to_string(), "tradeoffer".to_string(), "item".to_string()]);
         trades.insert("accepted".to_string(), vec!["buyer".to_string(), "item".to_string()]);
+        for key in ["failed_buyer", "failed_seller"] {
+            trades.insert(key.to_string(), vec!["buyer".to_string(), "item".to_string()]);
+        }
         trades.insert("failed_buyer_refund".to_string(), vec!["buyer".to_string(), "item".to_string()]);
         trades.insert("failed_buyer_penalty".to_string(), vec!["buyer".to_string(), "item".to_string()]);
         trades.insert("failed_seller_refund".to_string(), vec!["buyer".to_string(), "item".to_string()]);
@@ -525,6 +608,15 @@ pub fn resolve_category_and_key(message_id: &str) -> Option<(&'static str, &'sta
     match message_id {
         // Dot-notation
         "orders.created" => Some(("orders", "created")),
+        "orders.waiting_viewer" => Some(("orders", "waiting_viewer")),
+        "orders.waiting_operator" => Some(("orders", "waiting_operator")),
+        "orders.trade_link_required" => Some(("orders", "trade_link_required")),
+        "orders.steam_account_action" => Some(("orders", "steam_account_action")),
+        "orders.insufficient_funds" => Some(("orders", "insufficient_funds")),
+        "orders.unavailable" => Some(("orders", "unavailable")),
+        "orders.retry_available" => Some(("orders", "retry_available")),
+        "orders.reconciliation_required" => Some(("orders", "reconciliation_required")),
+        "orders.refunded" => Some(("orders", "refunded")),
         "orders.pool_created" => Some(("orders", "pool_created")),
         "orders.failed" => Some(("orders", "failed")),
         "orders.failed_no_money_refund" => Some(("orders", "failed_no_money_refund")),
@@ -547,6 +639,8 @@ pub fn resolve_category_and_key(message_id: &str) -> Option<(&'static str, &'sta
 
         "trades.created" => Some(("trades", "created")),
         "trades.accepted" => Some(("trades", "accepted")),
+        "trades.failed_buyer" => Some(("trades", "failed_buyer")),
+        "trades.failed_seller" => Some(("trades", "failed_seller")),
         "trades.failed_buyer_refund" => Some(("trades", "failed_buyer_refund")),
         "trades.failed_buyer_penalty" => Some(("trades", "failed_buyer_penalty")),
         "trades.failed_seller_refund" => Some(("trades", "failed_seller_refund")),
@@ -679,6 +773,39 @@ mod tests {
         assert_eq!(defaults.get_message(MSG_TRADES_ACCEPTED).unwrap(), &defaults.trades.accepted);
         assert_eq!(defaults.get_message(MSG_CHAT_REQ_FAILED_MESSAGES_REFUND).unwrap(), &defaults.chat_requirements.messages_refund);
         assert_eq!(defaults.get_message(MSG_LIMITS_USER_LIMIT_REACHED).unwrap(), &defaults.limits.user_limit_reached);
+    }
+
+    #[test]
+    fn inventory_chat_templates_are_customizable_and_have_their_placeholders() {
+        let defaults = CategorizedChatMessages::default();
+        let placeholders = CategorizedChatMessages::all_placeholders();
+        for key in [
+            MSG_ORDERS_WAITING_VIEWER, MSG_ORDERS_WAITING_OPERATOR,
+            MSG_ORDERS_TRADE_LINK_REQUIRED, MSG_ORDERS_INSUFFICIENT_FUNDS,
+            MSG_ORDERS_STEAM_ACCOUNT_ACTION,
+            MSG_ORDERS_UNAVAILABLE, MSG_ORDERS_RETRY_AVAILABLE,
+            MSG_ORDERS_RECONCILIATION_REQUIRED, MSG_ORDERS_REFUNDED,
+            MSG_TRADES_FAILED_BUYER, MSG_TRADES_FAILED_SELLER,
+        ] {
+            let (category, name) = resolve_category_and_key(key).unwrap();
+            let template = defaults.get_message(key).unwrap();
+            assert!(!template.contains("points refunded") || key == MSG_ORDERS_REFUNDED, "{key}");
+            let allowed = match category {
+                "orders" => placeholders.orders.get(name).unwrap(),
+                "trades" => placeholders.trades.get(name).unwrap(),
+                _ => unreachable!(),
+            };
+            assert!(allowed.contains(&"buyer".to_string()), "{key}");
+            assert!(allowed.contains(&"item".to_string()), "{key}");
+        }
+        let custom = serde_json::json!({"orders": {"waiting_viewer": "Custom {item}"}});
+        let parsed: CategorizedChatMessages = serde_json::from_value(custom).unwrap();
+        assert_eq!(parsed.get_message(MSG_ORDERS_WAITING_VIEWER), Some("Custom {item}"));
+        let merged = CategorizedChatMessages::merge_with_overrides(
+            &defaults,
+            &HashMap::from([("trades".to_string(), HashMap::from([("failed_seller".to_string(), "Custom seller".to_string())]))]),
+        );
+        assert_eq!(merged.get_message(MSG_TRADES_FAILED_SELLER), Some("Custom seller"));
     }
 
     #[test]
