@@ -84,7 +84,7 @@ pub struct OrdersMessages {
 impl Default for OrdersMessages {
     fn default() -> Self {
         Self {
-            redeemed: "@{buyer} Reward redeemed: {item}. Your request is being prepared.".to_string(),
+            redeemed: "@{buyer} {item} has been added to your inventory. Follow delivery in your profile.".to_string(),
             created: "@{buyer} Market order created for {item}. Watch for the Steam trade offer; you can follow delivery in your inventory.".to_string(),
             waiting_viewer: "@{buyer} {item} is in your inventory. Your auto-buy preference is off, so no Market order was placed. Start delivery or refund your points from your inventory.".to_string(),
             waiting_operator: "@{buyer} {item} is in your inventory. Auto-buy is off for this reward, so no Market order was placed. The channel team will review delivery.".to_string(),

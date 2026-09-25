@@ -93,12 +93,13 @@ the redemption as `FAILED_REFUND`. An uncertain Twitch refund leaves
 ## Channel chat
 
 The reward's channel chat receives customizable inventory status messages.
-A new redemption announces the reward claim through `orders.redeemed` without
-claiming a Market order exists. `orders.created` is sent separately only after
-an actual Market order is attached or recovered for an attempt.
-New inventory snapshots announce either viewer action or operator review when
-auto-buy is off. A successful Market response announces an order; detecting a
-Steam trade announces its offer link; observed settlement announces acceptance
+After a concrete inventory item is persisted, chat announces its addition through
+`orders.redeemed` for auto-buy, or the existing viewer-action/operator-review
+template when auto-buy is off. The `orders.redeemed` key remains for saved-template
+compatibility; it no longer fires merely because Twitch reported a redemption.
+`orders.created` is sent separately only after an actual Market order is attached
+or recovered for an attempt. Detecting a Steam trade announces its offer link;
+observed settlement announces acceptance
 while explicitly stating that Market has not yet confirmed the final outcome.
 Missing links, definitive rejections, ambiguous Market outcomes, terminal trade
 failures, and explicit refunds use separate templates that describe the current

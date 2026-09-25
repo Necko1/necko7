@@ -131,13 +131,7 @@ async fn process_redemption_inner(
         status: RedemptionStatus::Pending,
         market_item_name: initial_item_name.clone(),
     }, event.redeemed_at).await {
-        Ok(Some((_, decision))) => {
-            crate::processor::inventory_fulfillment::send_inventory_chat(
-                &state, &broadcaster_user_id, MSG_ORDERS_REDEEMED,
-                &event.user_login, &event.reward.title, &[],
-            ).await;
-            decision
-        },
+        Ok(Some((_, decision))) => decision,
         Ok(None) => {
             info!(redemption_id = %redemption_id, "Redemption is already being processed, ignoring duplicate");
             return;
@@ -451,21 +445,25 @@ async fn process_redemption_inner(
     };
     let actual_mode = state.db.get_inventory_core(redemption_id).await.ok().flatten().map(|item| item.4);
     if created {
-        let template = match actual_mode.as_deref() {
-            Some("VIEWER") => Some(MSG_ORDERS_WAITING_VIEWER),
-            Some("OPERATOR") => Some(MSG_ORDERS_WAITING_OPERATOR),
-            _ => None,
-        };
-        if let Some(template) = template {
-            crate::processor::inventory_fulfillment::send_inventory_chat(
-                &state, &reward_data.streamer_id, template, &event.user_login, &item_name, &[],
-            ).await;
-        }
+        // One chat message for the newly persisted item. Waiting-mode templates
+        // already announce the inventory addition and explain the next action.
+        let template = inventory_added_chat_template(actual_mode.as_deref().unwrap_or(mode));
+        crate::processor::inventory_fulfillment::send_inventory_chat(
+            &state, &reward_data.streamer_id, template, &event.user_login, &item_name, &[],
+        ).await;
     }
     if actual_mode.as_deref() == Some("AUTO") {
         if let Err(e) = crate::processor::inventory_fulfillment::purchase(&state, redemption_id, false, false, None).await {
             error!(error = %e, %redemption_id, "Initial Market attempt could not complete locally");
         }
+    }
+}
+
+fn inventory_added_chat_template(mode: &str) -> &'static str {
+    match mode {
+        "VIEWER" => MSG_ORDERS_WAITING_VIEWER,
+        "OPERATOR" => MSG_ORDERS_WAITING_OPERATOR,
+        _ => MSG_ORDERS_REDEEMED,
     }
 }
 
@@ -659,6 +657,16 @@ async fn update_redemption_status_failed(
 mod tests {
     use super::*;
     use crate::db::rewards::PoolItemConfig;
+
+    #[test]
+    fn inventory_added_chat_uses_one_message_for_each_fulfillment_mode() {
+        assert_eq!(inventory_added_chat_template("AUTO"), MSG_ORDERS_REDEEMED);
+        assert_eq!(inventory_added_chat_template("VIEWER"), MSG_ORDERS_WAITING_VIEWER);
+        assert_eq!(inventory_added_chat_template("OPERATOR"), MSG_ORDERS_WAITING_OPERATOR);
+        let default = crate::messages::CategorizedChatMessages::default();
+        assert!(default.orders.redeemed.contains("added to your inventory"));
+        assert!(!default.orders.redeemed.contains("Reward redeemed"));
+    }
 
     #[test]
     fn test_pick_pool_item_empty() {
