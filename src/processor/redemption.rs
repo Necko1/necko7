@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use tracing::{error, info, warn};
 use uuid::Uuid;
-use crate::db::redemptions::{NewRedemption, RedemptionStatus};
+use crate::db::redemptions::{NewRedemption, PurchaseLimitDecision, RedemptionStatus};
 use crate::db::rewards::{PauseReason, RewardType};
 use crate::helix::api::custom_rewards::model::UpdateCustomReward;
 use crate::messages::{
@@ -112,7 +112,15 @@ async fn process_redemption_inner(
         }
     }};
 
-    if !resuming { match state.db.insert_redemption_if_new(&NewRedemption {
+    let limit_decision = if resuming {
+        match state.db.get_redemption_purchase_limit_decision(redemption_id).await {
+            Ok(decision) => decision,
+            Err(e) => {
+                error!(error = %e, redemption_id = %redemption_id, "Failed to load persisted purchase limit decision");
+                return;
+            }
+        }
+    } else { match state.db.insert_redemption_with_limits(&NewRedemption {
         twitch_redemption_id: redemption_id,
         twitch_reward_id: reward_id,
         user_id: event.user_id.clone(),
@@ -122,12 +130,13 @@ async fn process_redemption_inner(
         currency: reward_data.currency.clone(),
         status: RedemptionStatus::Pending,
         market_item_name: initial_item_name.clone(),
-    }).await {
-        Ok(Some(_)) => {
+    }, event.redeemed_at).await {
+        Ok(Some((_, decision))) => {
             crate::processor::inventory_fulfillment::send_inventory_chat(
                 &state, &broadcaster_user_id, MSG_ORDERS_REDEEMED,
                 &event.user_login, &event.reward.title, &[],
             ).await;
+            decision
         },
         Ok(None) => {
             info!(redemption_id = %redemption_id, "Redemption is already being processed, ignoring duplicate");
@@ -137,7 +146,7 @@ async fn process_redemption_inner(
             error!(error = %e, redemption_id = %redemption_id, reward_id = %reward_id, "DB error inserting new redemption record");
             return;
         }
-    }}
+    }};
 
     let broadcaster_setting = match state.db.get_broadcaster_setting(&broadcaster_user_id).await {
         Ok(Some(s)) => s,
@@ -326,145 +335,49 @@ async fn process_redemption_inner(
         }
     }
 
-    if let Some(limits) = reward_data.purchase_limits.as_ref().map(|j| &j.0) {
-        if !limits.is_empty() {
-            // 1. Check global limits first
-            for rule in &limits.global {
-                match state.db.count_reward_redemptions(reward_id, None, rule.window_hours, Some(redemption_id)).await {
-                    Ok(count) => {
-                        if count >= rule.max_redemptions as i64 {
-                            warn!(
-                                redemption_id = %redemption_id,
-                                reward_id = %reward_id,
-                                window_hours = ?rule.window_hours,
-                                max_redemptions = rule.max_redemptions,
-                                current_count = count,
-                                "Global purchase limit reached for reward; auto-pausing and refunding"
-                            );
-
-                            pause_reward_on_twitch_and_db(
-                                &state,
-                                &broadcaster_user_id,
-                                reward_id,
-                                PauseReason::LimitReached,
-                            ).await;
-
-                            state.channel_logger.log_reward_paused(
-                                &broadcaster_user_id,
-                                &reward_id.to_string(),
-                                &event.reward.title,
-                                "LIMIT_REACHED",
-                                Some(serde_json::json!({
-                                    "limit_type": "global",
-                                    "window_hours": rule.window_hours,
-                                    "max_redemptions": rule.max_redemptions,
-                                    "current_count": count,
-                                })),
-                            );
-
-                            state.channel_logger.log_purchase_limit_reached(
-                                &broadcaster_user_id,
-                                &redemption_id.to_string(),
-                                &event.user_login,
-                                "global reward limit",
-                            );
-
-                            update_redemption_status_failed(
-                                state.clone(),
-                                &broadcaster_user_id,
-                                reward_id,
-                                redemption_id,
-                                &event.user_login,
-                                initial_item_name.as_deref(),
-                                true,
-                                "global_limit_reached",
-                                Some("Global reward purchase limit reached"),
-                            ).await;
-
-                            let limit_str = rule.max_redemptions.to_string();
-                            let hours_str = rule.window_hours.map(|h| h.to_string()).unwrap_or_else(|| "all-time".to_string());
-                            let period_str = format_limit_period(rule.window_hours);
-                            let msg = state.render_chat_message(
-                                &broadcaster_user_id,
-                                MSG_GLOBAL_PURCHASE_LIMIT_REACHED,
-                                &[
-                                    ("buyer", event.user_login.as_str()),
-                                    ("limit", limit_str.as_str()),
-                                    ("period", period_str.as_str()),
-                                    ("item", reward_data.twitch_title.as_str()),
-                                    ("hours", hours_str.as_str()),
-                                ],
-                            );
-                            let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await;
-
-                            return;
-                        }
-                    }
-                    Err(e) => {
-                        error!(error = %e, reward_id = %reward_id, "Failed to query global purchase counts from DB");
-                    }
-                }
-            }
-
-            // 2. Check user limits
-            for rule in &limits.user {
-                match state.db.count_reward_redemptions(reward_id, Some(&event.user_id), rule.window_hours, Some(redemption_id)).await {
-                    Ok(count) => {
-                        if count >= rule.max_redemptions as i64 {
-                            warn!(
-                                redemption_id = %redemption_id,
-                                reward_id = %reward_id,
-                                user_id = %event.user_id,
-                                user_login = %event.user_login,
-                                window_hours = ?rule.window_hours,
-                                max_redemptions = rule.max_redemptions,
-                                current_count = count,
-                                "User purchase limit reached for reward; refunding"
-                            );
-
-                            state.channel_logger.log_purchase_limit_reached(
-                                &broadcaster_user_id,
-                                &redemption_id.to_string(),
-                                &event.user_login,
-                                "user redemption limit",
-                            );
-
-                            update_redemption_status_failed(
-                                state.clone(),
-                                &broadcaster_user_id,
-                                reward_id,
-                                redemption_id,
-                                &event.user_login,
-                                initial_item_name.as_deref(),
-                                true,
-                                "user_limit_reached",
-                                Some("User reward purchase limit reached"),
-                            ).await;
-
-                            let limit_str = rule.max_redemptions.to_string();
-                            let hours_str = rule.window_hours.map(|h| h.to_string()).unwrap_or_else(|| "all-time".to_string());
-                            let period_str = format_limit_period(rule.window_hours);
-                            let msg = state.render_chat_message(
-                                &broadcaster_user_id,
-                                MSG_USER_PURCHASE_LIMIT_REACHED,
-                                &[
-                                    ("buyer", event.user_login.as_str()),
-                                    ("limit", limit_str.as_str()),
-                                    ("period", period_str.as_str()),
-                                    ("item", reward_data.twitch_title.as_str()),
-                                    ("hours", hours_str.as_str()),
-                                ],
-                            );
-                            let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await;
-
-                            return;
-                        }
-                    }
-                    Err(e) => {
-                        error!(error = %e, reward_id = %reward_id, "Failed to query user purchase counts from DB");
-                    }
-                }
-            }
+    match limit_decision {
+        PurchaseLimitDecision::Admitted => {}
+        PurchaseLimitDecision::GlobalRejected { count, max_redemptions, window_hours } => {
+            warn!(%redemption_id, %reward_id, count, max_redemptions, ?window_hours,
+                "Global purchase limit reached for reward; auto-pausing and refunding");
+            pause_reward_on_twitch_and_db(&state, &broadcaster_user_id, reward_id,
+                PauseReason::LimitReached).await;
+            state.channel_logger.log_reward_paused(&broadcaster_user_id,
+                &reward_id.to_string(), &event.reward.title, "LIMIT_REACHED",
+                Some(serde_json::json!({"limit_type":"global", "window_hours":window_hours,
+                    "max_redemptions":max_redemptions, "current_count":count})));
+            state.channel_logger.log_purchase_limit_reached(&broadcaster_user_id,
+                &redemption_id.to_string(), &event.user_login, "global reward limit");
+            update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id,
+                redemption_id, &event.user_login, initial_item_name.as_deref(), true,
+                "global_limit_reached", Some("Global reward purchase limit reached")).await;
+            let limit = max_redemptions.to_string();
+            let hours = window_hours.map(|h| h.to_string()).unwrap_or_else(|| "all-time".into());
+            let period = format_limit_period(window_hours);
+            let msg = state.render_chat_message(&broadcaster_user_id,
+                MSG_GLOBAL_PURCHASE_LIMIT_REACHED,
+                &[("buyer", &event.user_login), ("limit", &limit), ("period", &period),
+                    ("item", &reward_data.twitch_title), ("hours", &hours)]);
+            let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await;
+            return;
+        }
+        PurchaseLimitDecision::UserRejected { count, max_redemptions, window_hours } => {
+            warn!(%redemption_id, %reward_id, user_id = %event.user_id, count,
+                max_redemptions, ?window_hours, "User purchase limit reached for reward; refunding");
+            state.channel_logger.log_purchase_limit_reached(&broadcaster_user_id,
+                &redemption_id.to_string(), &event.user_login, "user redemption limit");
+            update_redemption_status_failed(state.clone(), &broadcaster_user_id, reward_id,
+                redemption_id, &event.user_login, initial_item_name.as_deref(), true,
+                "user_limit_reached", Some("User reward purchase limit reached")).await;
+            let limit = max_redemptions.to_string();
+            let hours = window_hours.map(|h| h.to_string()).unwrap_or_else(|| "all-time".into());
+            let period = format_limit_period(window_hours);
+            let msg = state.render_chat_message(&broadcaster_user_id,
+                MSG_USER_PURCHASE_LIMIT_REACHED,
+                &[("buyer", &event.user_login), ("limit", &limit), ("period", &period),
+                    ("item", &reward_data.twitch_title), ("hours", &hours)]);
+            let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await;
+            return;
         }
     }
 

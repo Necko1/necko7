@@ -2,7 +2,16 @@ use sqlx::FromRow;
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use crate::db::error::DbResult;
+use crate::db::rewards::RewardPurchaseLimitsConfig;
 use super::Db;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PurchaseLimitDecision {
+    Admitted,
+    GlobalRejected { count: i64, max_redemptions: i32, window_hours: Option<i32> },
+    UserRejected { count: i64, max_redemptions: i32, window_hours: Option<i32> },
+}
 
 #[derive(Debug, Clone, Copy, sqlx::Type, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[sqlx(type_name = "VARCHAR", rename_all = "SCREAMING_SNAKE_CASE")]
@@ -79,6 +88,84 @@ macro_rules! redemption_insert_returning {
 }
 
 impl Db {
+    /// Serializes admissions for one reward. The count and insertion commit as one
+    /// transaction, so simultaneous EventSub deliveries cannot all claim the last slot.
+    pub async fn insert_redemption_with_limits(
+        &self,
+        new: &NewRedemption,
+        redeemed_at: DateTime<Utc>,
+    ) -> DbResult<Option<(Redemption, PurchaseLimitDecision)>> {
+        let mut tx = self.pool.begin().await?;
+        let limits: Option<sqlx::types::Json<RewardPurchaseLimitsConfig>> = sqlx::query_scalar(
+            "SELECT purchase_limits FROM rewards WHERE twitch_id = $1 FOR UPDATE"
+        ).bind(new.twitch_reward_id).fetch_one(&mut *tx).await?;
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM redemptions WHERE twitch_redemption_id = $1)"
+        ).bind(new.twitch_redemption_id).fetch_one(&mut *tx).await?;
+        if exists {
+            tx.commit().await?;
+            return Ok(None);
+        }
+
+        let mut decision = PurchaseLimitDecision::Admitted;
+        if let Some(limits) = limits.as_ref().map(|j| &j.0) {
+            for rule in &limits.global {
+                let since = rule.window_hours.map(|h| Utc::now() - chrono::Duration::hours(h as i64));
+                let count: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*)::BIGINT FROM redemptions WHERE twitch_reward_id = $1
+                     AND status IN ('COMPLETED', 'ORDER_CREATED', 'PENDING', 'MANUAL_HOLD')
+                     AND purchase_limit_decision->>'kind' = 'admitted'
+                     AND ($2::TIMESTAMPTZ IS NULL OR created_at >= $2)"
+                ).bind(new.twitch_reward_id).bind(since).fetch_one(&mut *tx).await?;
+                if count >= rule.max_redemptions as i64 {
+                    decision = PurchaseLimitDecision::GlobalRejected {
+                        count, max_redemptions: rule.max_redemptions, window_hours: rule.window_hours,
+                    };
+                    break;
+                }
+            }
+            if decision == PurchaseLimitDecision::Admitted {
+                for rule in &limits.user {
+                    let since = rule.window_hours.map(|h| Utc::now() - chrono::Duration::hours(h as i64));
+                    let count: i64 = sqlx::query_scalar(
+                        "SELECT COUNT(*)::BIGINT FROM redemptions WHERE twitch_reward_id = $1
+                         AND user_id = $2 AND status IN ('COMPLETED', 'ORDER_CREATED', 'PENDING', 'MANUAL_HOLD')
+                         AND purchase_limit_decision->>'kind' = 'admitted'
+                         AND ($3::TIMESTAMPTZ IS NULL OR created_at >= $3)"
+                    ).bind(new.twitch_reward_id).bind(&new.user_id).bind(since)
+                        .fetch_one(&mut *tx).await?;
+                    if count >= rule.max_redemptions as i64 {
+                        decision = PurchaseLimitDecision::UserRejected {
+                            count, max_redemptions: rule.max_redemptions, window_hours: rule.window_hours,
+                        };
+                        break;
+                    }
+                }
+            }
+        }
+
+        let redemption = sqlx::query_as::<_, Redemption>(redemption_insert_returning!(
+            "INSERT INTO redemptions (twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, retry_count, market_item_name, purchase_limit_decision, inventory_resolution_claimed_at, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, NULL, NULL, 0, $9, $10, NOW(), $11, NOW()) ON CONFLICT (twitch_redemption_id) DO NOTHING"
+        ))
+        .bind(new.twitch_redemption_id).bind(new.twitch_reward_id)
+        .bind(&new.user_id).bind(&new.user_login).bind(&new.user_trade_link)
+        .bind(new.twitch_points_cost).bind(&new.currency).bind(&new.status)
+        .bind(&new.market_item_name).bind(sqlx::types::Json(&decision)).bind(redeemed_at)
+        .fetch_optional(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(redemption.map(|row| (row, decision)))
+    }
+
+    pub async fn get_redemption_purchase_limit_decision(
+        &self, redemption_id: Uuid,
+    ) -> DbResult<PurchaseLimitDecision> {
+        let decision: sqlx::types::Json<PurchaseLimitDecision> = sqlx::query_scalar(
+            "SELECT purchase_limit_decision FROM redemptions WHERE twitch_redemption_id = $1"
+        ).bind(redemption_id).fetch_one(&self.pool).await?;
+        Ok(decision.0)
+    }
+
     /// Only redemptions inserted by the inventory-era EventSub path are claimed.
     /// A stale claim can be resumed after a worker exits before item creation.
     pub async fn claim_pending_inventory_resolution(&self) -> DbResult<Vec<Uuid>> {
@@ -387,11 +474,13 @@ impl Db {
         Ok(new_count)
     }
 
-    /// Count successful or in-progress redemptions for a reward.
+    /// Count admitted, successful or in-progress redemptions for a reward.
+    /// PENDING, ORDER_CREATED, MANUAL_HOLD and COMPLETED occupy a slot;
+    /// limit-rejected and refunded redemptions do not.
     /// - If `user_id` is Some, counts only for that user. If None, counts globally.
     /// - If `window_hours` is Some, counts within the rolling window (`created_at >= NOW() - window_hours`).
     ///   If None, counts across all-time.
-    /// - If `exclude_redemption_id` is Some, excludes that specific redemption (e.g. the currently incoming pending redemption).
+    /// - If `exclude_redemption_id` is Some, excludes that specific redemption.
     pub async fn count_reward_redemptions(
         &self,
         reward_id: Uuid,
@@ -405,7 +494,8 @@ impl Db {
             "SELECT COUNT(*)::BIGINT
              FROM redemptions
              WHERE twitch_reward_id = $1
-               AND status IN ('COMPLETED', 'ORDER_CREATED', 'PENDING')
+               AND status IN ('COMPLETED', 'ORDER_CREATED', 'PENDING', 'MANUAL_HOLD')
+               AND purchase_limit_decision->>'kind' = 'admitted'
                AND ($2::VARCHAR IS NULL OR user_id = $2)
                AND ($3::TIMESTAMPTZ IS NULL OR created_at >= $3)
                AND ($4::UUID IS NULL OR twitch_redemption_id != $4)"
@@ -599,6 +689,103 @@ pub struct ViewerRedemptionStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::rewards::PurchaseLimitRule;
+
+    async fn insert_limit_test_reward(db: &Db, channel: &str,
+        limits: &RewardPurchaseLimitsConfig, reward: Uuid) {
+        sqlx::query("INSERT INTO rewards (twitch_id, is_paused, streamer_id, market_item_name, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, purchase_limits, created_at, updated_at) VALUES ($1,false,$2,'AK-47 | Redline','Redline','',2500,10,0,0,0,0,$3,NOW(),NOW())")
+            .bind(reward).bind(channel).bind(sqlx::types::Json(limits))
+            .execute(db.pool()).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable PostgreSQL database in TEST_DATABASE_URL"]
+    async fn pending_redemptions_take_both_slots_and_concurrent_admission_is_atomic() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL is required");
+        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let db = Db { pool };
+        let channel = format!("limit-test-{}", Uuid::new_v4());
+        let viewer = format!("viewer-{}", Uuid::new_v4());
+        let limits = RewardPurchaseLimitsConfig {
+            global: vec![],
+            user: vec![PurchaseLimitRule { window_hours: Some(8), max_redemptions: 2 }],
+        };
+        sqlx::query("INSERT INTO users (twitch_id, login) VALUES ($1, $1)")
+            .bind(&channel).execute(db.pool()).await.unwrap();
+        sqlx::query("INSERT INTO broadcasters (channel_id, channel_login, user_access_token, refresh_token, created_at, updated_at) VALUES ($1,$1,'test','test',NOW(),NOW())")
+            .bind(&channel).execute(db.pool()).await.unwrap();
+        let make_redemption = |reward: Uuid| NewRedemption {
+            twitch_redemption_id: Uuid::new_v4(), twitch_reward_id: reward,
+            user_id: viewer.clone(), user_login: "viewer".into(),
+            user_trade_link: String::new(), twitch_points_cost: 100,
+            currency: "RUB".into(), status: RedemptionStatus::Pending,
+            market_item_name: Some("AK-47 | Redline".into()),
+        };
+
+        let reward = Uuid::new_v4();
+        insert_limit_test_reward(&db, &channel, &limits, reward).await;
+        let first = make_redemption(reward);
+        let second = make_redemption(reward);
+        let third = make_redemption(reward);
+        assert!(matches!(db.insert_redemption_with_limits(&first, Utc::now()).await.unwrap().unwrap().1,
+            PurchaseLimitDecision::Admitted));
+        assert!(matches!(db.insert_redemption_with_limits(&second, Utc::now()).await.unwrap().unwrap().1,
+            PurchaseLimitDecision::Admitted));
+        assert_eq!(db.get_redemption(first.twitch_redemption_id).await.unwrap().unwrap().status,
+            RedemptionStatus::Pending);
+        assert_eq!(db.get_redemption(second.twitch_redemption_id).await.unwrap().unwrap().status,
+            RedemptionStatus::Pending);
+        assert!(matches!(db.insert_redemption_with_limits(&third, Utc::now()).await.unwrap().unwrap().1,
+            PurchaseLimitDecision::UserRejected { count: 2, max_redemptions: 2, window_hours: Some(8) }));
+        assert_eq!(db.count_reward_redemptions(reward, Some(&viewer), Some(8), None).await.unwrap(), 2);
+        assert!(db.insert_redemption_with_limits(&third, Utc::now()).await.unwrap().is_none(),
+            "duplicate EventSub delivery must not reserve another slot");
+
+        // Existing semantics: an actually refunded redemption no longer occupies a slot.
+        sqlx::query("UPDATE redemptions SET status = 'FAILED_REFUND' WHERE twitch_redemption_id = $1")
+            .bind(first.twitch_redemption_id).execute(db.pool()).await.unwrap();
+        let fourth = make_redemption(reward);
+        assert!(matches!(db.insert_redemption_with_limits(&fourth, Utc::now()).await.unwrap().unwrap().1,
+            PurchaseLimitDecision::Admitted));
+
+        let concurrent_reward = Uuid::new_v4();
+        insert_limit_test_reward(&db, &channel, &limits, concurrent_reward).await;
+        let a = make_redemption(concurrent_reward);
+        let b = make_redemption(concurrent_reward);
+        let c = make_redemption(concurrent_reward);
+        let (a_result, b_result, c_result) = tokio::join!(
+            db.insert_redemption_with_limits(&a, Utc::now()),
+            db.insert_redemption_with_limits(&b, Utc::now()),
+            db.insert_redemption_with_limits(&c, Utc::now()),
+        );
+        let decisions = [a_result.unwrap().unwrap().1, b_result.unwrap().unwrap().1,
+            c_result.unwrap().unwrap().1];
+        assert_eq!(decisions.iter().filter(|d| matches!(d, PurchaseLimitDecision::Admitted)).count(), 2);
+        assert_eq!(decisions.iter().filter(|d| matches!(d, PurchaseLimitDecision::UserRejected { .. })).count(), 1);
+        assert_eq!(db.count_reward_redemptions(concurrent_reward, Some(&viewer), Some(8), None).await.unwrap(), 2);
+
+        let ids = [a.twitch_redemption_id, b.twitch_redemption_id, c.twitch_redemption_id];
+        let admitted_index = decisions.iter().position(|d| matches!(d, PurchaseLimitDecision::Admitted)).unwrap();
+        sqlx::query("UPDATE redemptions SET status = 'MANUAL_HOLD' WHERE twitch_redemption_id = $1")
+            .bind(ids[admitted_index]).execute(db.pool()).await.unwrap();
+        assert_eq!(db.count_reward_redemptions(concurrent_reward, Some(&viewer), Some(8), None).await.unwrap(), 2,
+            "an unresolved manual hold must still occupy its slot");
+
+        let window_reward = Uuid::new_v4();
+        insert_limit_test_reward(&db, &channel, &limits, window_reward).await;
+        let old = make_redemption(window_reward);
+        let old_time = Utc::now() - chrono::Duration::hours(9);
+        assert!(matches!(db.insert_redemption_with_limits(&old, old_time).await.unwrap().unwrap().1,
+            PurchaseLimitDecision::Admitted));
+        assert!((db.get_redemption(old.twitch_redemption_id).await.unwrap().unwrap().created_at
+            - old_time).num_seconds().abs() <= 1);
+        let recent = make_redemption(window_reward);
+        assert!(matches!(db.insert_redemption_with_limits(&recent, Utc::now()).await.unwrap().unwrap().1,
+            PurchaseLimitDecision::Admitted));
+        assert_eq!(db.count_reward_redemptions(window_reward, Some(&viewer), Some(8), None).await.unwrap(), 1,
+            "the rolling window uses redemption creation time, not fulfillment time");
+    }
 
     #[test]
     fn test_redemption_status_serde() {
