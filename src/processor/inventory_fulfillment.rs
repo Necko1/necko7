@@ -104,7 +104,8 @@ pub async fn announce_trade(
 
 /// A new order is only made by initial auto-buy or an explicit authorized action.
 /// The durable CALLING row is deliberately treated as ambiguous after a crash.
-pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action: bool, use_saved_link: bool) -> Result<&'static str, String> {
+pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action: bool, use_saved_link: bool,
+    actor_user_id: Option<&str>) -> Result<&'static str, String> {
     let redemption = state.db.get_redemption(redemption_id).await.map_err(|e| e.to_string())?
         .ok_or("Redemption not found")?;
     let inventory = state.db.get_inventory_core(redemption_id).await.map_err(|e| e.to_string())?
@@ -132,7 +133,13 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
     };
     let trade_link_text = format!("https://steamcommunity.com/tradeoffer/new/?partner={}&token={}", trade_link.partner, trade_link.token);
     let max_price = i32::try_from(inventory.2).map_err(|_| "Inventory fixed price exceeds Market request range")?;
-    let Some(custom_id) = state.db.begin_inventory_attempt(redemption_id, &trade_link_text, viewer_action).await.map_err(|e| e.to_string())? else {
+    let initiator = match (viewer_action, actor_user_id) {
+        (true, Some(_)) => "viewer",
+        (false, Some(_)) => "operator",
+        _ => "system",
+    };
+    let Some(custom_id) = state.db.begin_inventory_attempt_as(redemption_id, &trade_link_text, viewer_action,
+        initiator, actor_user_id).await.map_err(|e| e.to_string())? else {
         return Ok("BLOCKED");
     };
 
@@ -296,7 +303,8 @@ pub async fn fulfill_delivered_twitch(state: &Arc<AppState>, redemption_id: Uuid
     Ok(())
 }
 
-pub async fn refund(state: &Arc<AppState>, redemption_id: Uuid, viewer_action: bool) -> Result<&'static str, String> {
+pub async fn refund(state: &Arc<AppState>, redemption_id: Uuid, viewer_action: bool,
+    actor_user_id: Option<&str>) -> Result<&'static str, String> {
     let redemption = state.db.get_redemption(redemption_id).await.map_err(|e| e.to_string())?.ok_or("Redemption not found")?;
     let reward = state.db.get_reward_by_twitch_id(redemption.twitch_reward_id).await.map_err(|e| e.to_string())?.ok_or("Reward not found")?;
     let inventory = state.db.get_inventory_core(redemption_id).await.map_err(|e| e.to_string())?.ok_or("Inventory item not found")?;
@@ -306,7 +314,7 @@ pub async fn refund(state: &Arc<AppState>, redemption_id: Uuid, viewer_action: b
             return Ok("RECONCILIATION_REQUIRED");
         }
     }
-    if !state.db.reserve_inventory_refund(redemption_id, viewer_action).await.map_err(|e| e.to_string())? {
+    if !state.db.reserve_inventory_refund_as(redemption_id, viewer_action, actor_user_id).await.map_err(|e| e.to_string())? {
         return Ok("BLOCKED");
     }
     let result = state.with_broadcaster_token(&reward.streamer_id, async |token| {

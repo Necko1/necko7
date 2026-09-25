@@ -93,6 +93,9 @@ the redemption as `FAILED_REFUND`. An uncertain Twitch refund leaves
 ## Channel chat
 
 The reward's channel chat receives customizable inventory status messages.
+A new redemption announces the reward claim through `orders.redeemed` without
+claiming a Market order exists. `orders.created` is sent separately only after
+an actual Market order is attached or recovered for an attempt.
 New inventory snapshots announce either viewer action or operator review when
 auto-buy is off. A successful Market response announces an order; detecting a
 Steam trade announces its offer link; observed settlement announces acceptance
@@ -117,6 +120,25 @@ messages from concurrent polling or restart; chat remains best effort.
 An exact copied old `trades.accepted` default that said to enjoy the skin is
 ignored, so settlement cannot accidentally announce final delivery; separately
 customized channel wording remains intact.
+
+## Owner lifecycle history
+
+The owner transaction list combines the redemption with its current inventory
+and latest attempt state. This exposes Steam trade creation, acceptance awaiting
+final Market confirmation, delivery, and classified terminal outcomes without
+mistaking a still-pending Twitch redemption for an unchanged Market order.
+
+`fulfillment_audit_events` is an append-only, channel-authorized history. Its
+unique event keys deduplicate observations and retries of the same transition.
+Database triggers write reward, inventory, attempt, trade, delivery, and Twitch
+outcome events in the same transaction as the corresponding state transition.
+The attempt records whether system, viewer, or operator initiated it and stores
+the authenticated user ID for manual actions. Safe refund reservation similarly
+records the requester. The owner `Recorded history` renders these factual events
+in insertion order; retained technical logs remain a separate detail section.
+The migration does not reconstruct old events from current statuses, since their
+past sequence and actors are not reliably known. Chat delivery itself remains
+best effort and is not proof of a persisted lifecycle transition.
 
 ## Durable Market tracking and migration
 

@@ -101,7 +101,51 @@ pub struct InventoryAttempt {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, FromRow, Serialize, ToSchema)]
+pub struct FulfillmentAuditEvent {
+    pub id: i64,
+    pub event_key: String,
+    pub redemption_id: Uuid,
+    pub inventory_id: Option<Uuid>,
+    pub attempt_custom_id: Option<String>,
+    pub event_type: String,
+    pub actor_kind: String,
+    pub actor_user_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+pub struct RedemptionInventoryState {
+    pub redemption_id: Uuid,
+    pub lifecycle_status: String,
+    pub latest_attempt_status: Option<String>,
+    pub latest_attempt_outcome_kind: Option<String>,
+}
+
 impl Db {
+    pub async fn get_redemption_inventory_states(&self, redemption_ids: &[Uuid]) -> DbResult<Vec<RedemptionInventoryState>> {
+        Ok(sqlx::query_as::<_, RedemptionInventoryState>(
+            "SELECT i.redemption_id, i.lifecycle_status,
+                    a.status AS latest_attempt_status, a.outcome_kind AS latest_attempt_outcome_kind
+             FROM inventory_items i
+             LEFT JOIN LATERAL (SELECT status, outcome_kind FROM inventory_order_attempts
+                                WHERE inventory_id = i.id ORDER BY attempt_id DESC LIMIT 1) a ON TRUE
+             WHERE i.redemption_id = ANY($1)"
+        ).bind(redemption_ids).fetch_all(&self.pool).await?)
+    }
+    pub async fn get_fulfillment_audit(&self, redemption_id: Uuid, channel_id: &str) -> DbResult<Option<Vec<FulfillmentAuditEvent>>> {
+        let authorized: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM redemptions r JOIN rewards rw ON rw.twitch_id = r.twitch_reward_id
+             WHERE r.twitch_redemption_id = $1 AND rw.streamer_id = $2)"
+        ).bind(redemption_id).bind(channel_id).fetch_one(&self.pool).await?;
+        if !authorized { return Ok(None); }
+        Ok(Some(sqlx::query_as::<_, FulfillmentAuditEvent>(
+            "SELECT id, event_key, redemption_id, inventory_id, attempt_custom_id, event_type,
+                    actor_kind, actor_user_id, created_at FROM fulfillment_audit_events
+             WHERE redemption_id = $1 ORDER BY id"
+        ).bind(redemption_id).fetch_all(&self.pool).await?))
+    }
+
     pub async fn get_delivered_inventory_awaiting_twitch(&self) -> DbResult<Vec<Uuid>> {
         Ok(sqlx::query_scalar(
             "SELECT redemption_id FROM inventory_items WHERE lifecycle_status = 'DELIVERED'
@@ -196,7 +240,14 @@ impl Db {
 
     /// The inventory row serializes purchase, refund and delivery decisions.
     /// A claimed external call remains unsafe until a definitive result is saved.
+    #[cfg(test)]
     pub async fn begin_inventory_attempt(&self, redemption_id: Uuid, trade_link: &str, viewer_action: bool) -> DbResult<Option<String>> {
+        self.begin_inventory_attempt_as(redemption_id, trade_link, viewer_action,
+            if viewer_action { "viewer" } else { "operator" }, None).await
+    }
+
+    pub async fn begin_inventory_attempt_as(&self, redemption_id: Uuid, trade_link: &str, viewer_action: bool,
+        initiator_kind: &str, initiator_user_id: Option<&str>) -> DbResult<Option<String>> {
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query(
             "SELECT id, lifecycle_status, fulfillment_mode, buyer_retry_allowed, last_action_at
@@ -239,9 +290,10 @@ impl Db {
         let item: (String, i64) = sqlx::query_as("SELECT item_name, fixed_price FROM inventory_items WHERE id = $1")
             .bind(inventory_id).fetch_one(&mut *tx).await?;
         sqlx::query(
-            "INSERT INTO inventory_order_attempts (custom_id, inventory_id, item_name, max_price, trade_link, status, next_poll_at)
-             VALUES ($1, $2, $3, $4, $5, 'CALLING', NOW())"
-        ).bind(&custom_id).bind(inventory_id).bind(&item.0).bind(item.1).bind(trade_link).execute(&mut *tx).await?;
+            "INSERT INTO inventory_order_attempts (custom_id, inventory_id, item_name, max_price, trade_link, status, next_poll_at, initiator_kind, initiator_user_id)
+             VALUES ($1, $2, $3, $4, $5, 'CALLING', NOW(), $6, $7)"
+        ).bind(&custom_id).bind(inventory_id).bind(&item.0).bind(item.1).bind(trade_link)
+            .bind(initiator_kind).bind(initiator_user_id).execute(&mut *tx).await?;
         sqlx::query("UPDATE inventory_items SET lifecycle_status = 'ORDER_PENDING', last_action_at = NOW(), market_custom_id = $2, market_order_id = NULL WHERE id = $1")
             .bind(inventory_id).bind(&custom_id).execute(&mut *tx).await?;
         tx.commit().await?;
@@ -517,7 +569,12 @@ impl Db {
         Ok(true)
     }
 
+    #[cfg(test)]
     pub async fn reserve_inventory_refund(&self, redemption_id: Uuid, viewer_action: bool) -> DbResult<bool> {
+        self.reserve_inventory_refund_as(redemption_id, viewer_action, None).await
+    }
+
+    pub async fn reserve_inventory_refund_as(&self, redemption_id: Uuid, viewer_action: bool, actor_user_id: Option<&str>) -> DbResult<bool> {
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query("SELECT id, lifecycle_status FROM inventory_items WHERE redemption_id = $1 FOR UPDATE")
             .bind(redemption_id).fetch_optional(&mut *tx).await?;
@@ -540,6 +597,13 @@ impl Db {
         if unsafe_attempt { return Ok(false); }
         sqlx::query("UPDATE inventory_items SET lifecycle_status = 'REFUNDING' WHERE id = $1")
             .bind(id).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO fulfillment_audit_events (event_key, redemption_id, inventory_id, event_type, actor_kind, actor_user_id)
+                     VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING")
+            .bind(format!("inventory:{id}:refund-requested"))
+            .bind(redemption_id).bind(id)
+            .bind(if viewer_action { "viewer_refund_requested" } else { "operator_refund_requested" })
+            .bind(if viewer_action { "viewer" } else { "operator" })
+            .bind(actor_user_id).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(true)
     }
@@ -711,6 +775,12 @@ mod tests {
         assert_eq!(accepted.lifecycle_status, "TRADE_ACCEPTED");
         assert!(accepted.latest_settlement.is_some());
         assert!(!db.inventory_twitch_fulfillment_pending(delivered).await.unwrap());
+        let audit = db.get_fulfillment_audit(delivered, &channel).await.unwrap().unwrap();
+        assert_eq!(audit.iter().filter(|e| e.event_type == "market_order_created").count(), 1);
+        assert_eq!(audit.iter().filter(|e| e.event_type == "steam_trade_created").count(), 1);
+        assert_eq!(audit.iter().filter(|e| e.event_type == "buyer_accepted_trade").count(), 1);
+        assert!(!audit.iter().any(|e| e.event_type == "market_stage_2_delivered"),
+            "settlement at stage 1 is not final delivery");
         sqlx::query("UPDATE inventory_order_attempts SET created_at = NOW() - INTERVAL '31 minutes' WHERE custom_id=$1")
             .bind(&delivered_custom).execute(db.pool()).await.unwrap();
         db.observe_market_attempt(delivered, &delivered_custom,
@@ -735,6 +805,9 @@ mod tests {
         assert_eq!(delivered_item.latest_market_stage.as_deref(), Some("2"));
         assert!(delivered_item.latest_settlement.is_some());
         assert_eq!(delivered_item.fixed_price, 2750);
+        let audit = db.get_fulfillment_audit(delivered, &channel).await.unwrap().unwrap();
+        assert_eq!(audit.iter().filter(|e| e.event_type == "market_stage_2_delivered").count(), 1);
+        assert_eq!(audit.iter().filter(|e| e.event_type == "twitch_fulfillment_pending").count(), 1);
 
         let (racing, racing_custom) = new_tracking_attempt(&db, reward, &viewer, false).await;
         db.observe_market_attempt(racing, &racing_custom, &order).await.unwrap();
@@ -783,6 +856,9 @@ mod tests {
             assert_eq!(item.latest_market_stage.as_deref(), Some("5"));
             assert_eq!(item.attempt_count, 1, "a terminal observation must not create another Market attempt");
             assert_eq!(item.latest_attempt_outcome_kind.as_deref(), Some(expected));
+            let audit = db.get_fulfillment_audit(redemption, &channel).await.unwrap().unwrap();
+            assert_eq!(audit.iter().filter(|e| e.event_type == expected).count(), 1,
+                "a repeated terminal poll must not duplicate the factual audit event");
             assert_eq!(item.has_buyer_revert, expected == "buyer_reverted");
             assert_eq!(item.latest_cancellation_reason.as_deref(), Some("cancelled"));
             assert_eq!(item.latest_causer.as_deref(), causer);
@@ -842,7 +918,10 @@ mod tests {
         db.observe_market_attempt(buyer_refund, &refund_custom,
             &market_observation("5", false, false, false, Some("buyer"), None)).await.unwrap();
         assert!(!db.reserve_inventory_refund(buyer_refund, true).await.unwrap());
-        assert!(db.reserve_inventory_refund(buyer_refund, false).await.unwrap(), "operator refund remains available after Market confirms termination");
+        assert!(db.reserve_inventory_refund_as(buyer_refund, false, Some("operator-123")).await.unwrap(), "operator refund remains available after Market confirms termination");
+        let audit = db.get_fulfillment_audit(buyer_refund, &channel).await.unwrap().unwrap();
+        assert_eq!(audit.iter().find(|e| e.event_type == "operator_refund_requested").unwrap().actor_user_id.as_deref(),
+            Some("operator-123"));
 
         let (seller_refund, first_custom) = new_tracking_attempt(&db, reward, &viewer, true).await;
         db.observe_market_attempt(seller_refund, &first_custom,
@@ -887,7 +966,10 @@ mod tests {
         let migration_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
         let mut files: Vec<_> = std::fs::read_dir(&migration_dir).unwrap().map(|entry| entry.unwrap().path()).collect();
         files.sort();
-        for path in files.iter().filter(|path| !path.to_string_lossy().contains("20260923140000")) {
+        for path in files.iter().filter(|path| {
+            let name = path.to_string_lossy();
+            !name.contains("20260923140000") && !name.contains("20260925120000")
+        }) {
             let sql = std::fs::read_to_string(path).unwrap();
             sqlx::raw_sql(sqlx::AssertSqlSafe(sql)).execute(&pool).await.unwrap();
         }
@@ -917,6 +999,11 @@ mod tests {
 
         let latest = migration_dir.join("20260923140000_durable_market_tracking.sql");
         sqlx::raw_sql(sqlx::AssertSqlSafe(std::fs::read_to_string(latest).unwrap())).execute(db.pool()).await.unwrap();
+        let audit_migration = migration_dir.join("20260925120000_fulfillment_audit.sql");
+        sqlx::raw_sql(sqlx::AssertSqlSafe(std::fs::read_to_string(audit_migration).unwrap())).execute(db.pool()).await.unwrap();
+        let invented_history: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM fulfillment_audit_events")
+            .fetch_one(db.pool()).await.unwrap();
+        assert_eq!(invented_history, 0, "migration must not reconstruct historical events from current state");
         let delivered_attempt = db.latest_inventory_attempt(premature).await.unwrap().unwrap();
         assert_eq!(delivered_attempt.status, "RECONCILIATION_REQUIRED");
         let delivered_item = db.get_viewer_inventory(&viewer, None, None, None, 10, 0).await.unwrap()
@@ -973,13 +1060,19 @@ mod tests {
             .bind(&viewer).fetch_one(db.pool()).await.unwrap());
         assert!(db.create_inventory_item(redemption, "AK-47 | Redline", 2750, "AUTO", false).await.unwrap());
         assert!(!db.create_inventory_item(redemption, "Different skin", 9900, "OPERATOR", true).await.unwrap());
+        let audit = db.get_fulfillment_audit(redemption, &channel).await.unwrap().unwrap();
+        assert_eq!(audit.iter().map(|e| e.event_type.as_str()).collect::<Vec<_>>(),
+            vec!["reward_redeemed", "inventory_created"]);
+        assert_eq!(audit[0].actor_kind, "viewer");
+        assert_eq!(audit[0].actor_user_id.as_deref(), Some(viewer.as_str()));
+        assert!(db.get_fulfillment_audit(redemption, "another-channel").await.unwrap().is_none());
         let unclaimed = db.get_pending_inventory_without_attempt().await.unwrap();
         assert_eq!(unclaimed.len(), 1);
         assert_eq!(unclaimed[0].redemption_id, redemption);
         assert_eq!(unclaimed[0].fixed_price, 2750);
         let (first, duplicate) = tokio::join!(
-            db.begin_inventory_attempt(redemption, "test-link", false),
-            db.begin_inventory_attempt(redemption, "test-link", false),
+            db.begin_inventory_attempt_as(redemption, "test-link", false, "operator", Some("operator-123")),
+            db.begin_inventory_attempt_as(redemption, "test-link", false, "operator", Some("operator-123")),
         );
         let first = first.unwrap();
         let duplicate = duplicate.unwrap();
@@ -992,6 +1085,11 @@ mod tests {
         assert_eq!(items[0].fixed_price, 2750);
         assert_eq!(items[0].attempt_count, 1);
         assert_eq!(items[0].latest_attempt_max_price, Some(2750));
+        let audit = db.get_fulfillment_audit(redemption, &channel).await.unwrap().unwrap();
+        assert_eq!(audit.iter().filter(|e| e.event_type == "operator_order_requested").count(), 1,
+            "concurrent initiation records one factual request");
+        assert_eq!(audit.iter().find(|e| e.event_type == "operator_order_requested").unwrap().actor_user_id.as_deref(),
+            Some("operator-123"));
         assert!(db.begin_inventory_attempt(redemption, "test-link", false).await.unwrap().is_none());
         assert!(db.mark_attempt_rejected(redemption, &custom_id, "no_money", "insufficient balance").await.unwrap());
         assert!(!db.mark_attempt_rejected(redemption, &custom_id, "no_money", "insufficient balance").await.unwrap());
@@ -1007,6 +1105,11 @@ mod tests {
         assert_ne!(retry_a.is_some(), retry_b.is_some());
         let retry_id = retry_a.or(retry_b).unwrap();
         assert_eq!(retry_id, format!("{}-1", redemption));
+        let retry_max_price: i64 = sqlx::query_scalar("SELECT max_price FROM inventory_order_attempts WHERE custom_id = $1")
+            .bind(&retry_id).fetch_one(db.pool()).await.unwrap();
+        assert_eq!(retry_max_price, 2750, "retry uses the original inventory ceiling");
+        let audit = db.get_fulfillment_audit(redemption, &channel).await.unwrap().unwrap();
+        assert_eq!(audit.iter().filter(|e| e.event_type == "retry_attempt_created").count(), 1);
         let in_flight = db.get_viewer_inventory(&viewer, None, None, None, 20, 0).await.unwrap();
         assert_eq!(in_flight[0].market_custom_id.as_deref(), Some(retry_id.as_str()));
         assert!(in_flight[0].market_order_id.is_none());
@@ -1027,6 +1130,7 @@ mod tests {
         db.attach_inventory_order(redemption, &custom_id, Some("market-123"), "AK-47 | Redline").await.unwrap();
         assert!(!db.reserve_inventory_refund(redemption, true).await.unwrap());
         db.attach_inventory_order(redemption, &retry_id, Some("market-456"), "AK-47 | Redline").await.unwrap();
+        db.set_redemption_order_created(redemption, 4321, Some("AK-47 | Redline"), 1).await.unwrap();
         db.attach_inventory_order(redemption, &custom_id, Some("market-123"), "AK-47 | Redline").await.unwrap();
         assert_eq!(db.get_viewer_inventory(&viewer, None, None, None, 20, 0).await.unwrap()[0].market_order_id.as_deref(), Some("market-456"));
         assert!(db.mark_inventory_delivered(redemption, &retry_id).await.unwrap());
@@ -1040,6 +1144,9 @@ mod tests {
             .bind(reward).execute(db.pool()).await.unwrap();
         let items = db.get_viewer_inventory(&viewer, None, None, None, 20, 0).await.unwrap();
         assert_eq!(items[0].fixed_price, 2750);
+        let actual_paid: Option<i64> = sqlx::query_scalar("SELECT market_paid_price FROM redemptions WHERE twitch_redemption_id = $1")
+            .bind(redemption).fetch_one(db.pool()).await.unwrap();
+        assert_eq!(actual_paid, Some(4321), "paid amount is separate from inventory fixed value");
         assert_eq!(items[0].market_order_id.as_deref(), Some("market-456"));
         assert_eq!(items[0].lifecycle_status, "DELIVERED");
         assert!(items[0].acquired_at.is_some());
@@ -1049,6 +1156,12 @@ mod tests {
         assert!(!db.claim_inventory_twitch_fulfillment(redemption).await.unwrap());
         db.mark_inventory_twitch_fulfilled(redemption).await.unwrap();
         assert!(!db.inventory_twitch_fulfillment_pending(redemption).await.unwrap());
+        let audit = db.get_fulfillment_audit(redemption, &channel).await.unwrap().unwrap();
+        assert_eq!(audit.iter().filter(|e| e.event_type == "market_order_created").count(), 1);
+        assert_eq!(audit.iter().filter(|e| e.event_type == "twitch_fulfillment_pending").count(), 1);
+        assert_eq!(audit.iter().filter(|e| e.event_type == "twitch_fulfillment_succeeded").count(), 1);
+        assert!(sqlx::query("DELETE FROM fulfillment_audit_events WHERE redemption_id = $1")
+            .bind(redemption).execute(db.pool()).await.is_err(), "audit is append-only");
         let settings = db.get_viewer_settings(&viewer).await.unwrap();
         assert!(settings.auto_buy_enabled);
         assert!(settings.trade_link.is_none());
@@ -1069,9 +1182,15 @@ mod tests {
         assert!(!db.get_pending_inventory_without_attempt().await.unwrap().iter().any(|i| i.redemption_id == waiting_id));
         assert!(db.require_inventory_trade_link(waiting_id).await.unwrap());
         assert!(!db.require_inventory_trade_link(waiting_id).await.unwrap());
-        assert!(db.reserve_inventory_refund(waiting_id, true).await.unwrap());
+        assert!(db.reserve_inventory_refund_as(waiting_id, true, Some(&viewer)).await.unwrap());
+        let audit = db.get_fulfillment_audit(waiting_id, &channel).await.unwrap().unwrap();
+        assert_eq!(audit.iter().filter(|e| e.event_type == "viewer_refund_requested").count(), 1);
+        assert_eq!(audit.iter().find(|e| e.event_type == "viewer_refund_requested").unwrap().actor_user_id.as_deref(),
+            Some(viewer.as_str()));
         assert!(db.begin_inventory_attempt(waiting_id, "test-link", true).await.unwrap().is_none());
         db.finish_inventory_refund(waiting_id, true).await.unwrap();
+        let audit = db.get_fulfillment_audit(waiting_id, &channel).await.unwrap().unwrap();
+        assert_eq!(audit.iter().filter(|e| e.event_type == "twitch_refund_succeeded").count(), 1);
         assert_eq!(db.get_viewer_inventory(&viewer, Some(&channel), Some("REFUNDED"), Some("Daimyo"), 20, 0).await.unwrap().len(), 1);
 
         let buyer_id = Uuid::new_v4();

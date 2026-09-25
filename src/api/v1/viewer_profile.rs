@@ -78,7 +78,7 @@ pub async fn request_viewer_inventory_attempt(
     if core.4 == "OPERATOR" || core.4 == "LEGACY_REVIEW" {
         return Err(ApiError::Forbidden { message: "This item requires operator review".into() });
     }
-    let result = crate::processor::inventory_fulfillment::purchase(&state, redemption_id, true, options.use_saved_link.unwrap_or(false)).await
+    let result = crate::processor::inventory_fulfillment::purchase(&state, redemption_id, true, options.use_saved_link.unwrap_or(false), Some(&user_id)).await
         .map_err(|message| ApiError::Internal { message })?;
     action_result(result)
 }
@@ -89,7 +89,7 @@ pub async fn request_viewer_inventory_refund(
 ) -> Result<Json<InventoryActionResult>, ApiError> {
     let redemption_id = state.db.viewer_inventory_redemption(inventory_id, &user_id).await?
         .ok_or_else(|| ApiError::NotFound { message: "Inventory item not found".into() })?;
-    let result = crate::processor::inventory_fulfillment::refund(&state, redemption_id, true).await
+    let result = crate::processor::inventory_fulfillment::refund(&state, redemption_id, true, Some(&user_id)).await
         .map_err(|message| ApiError::Internal { message })?;
     action_result(result)
 }
@@ -102,7 +102,7 @@ pub async fn request_operator_inventory_attempt(
     debug_assert_eq!(channel_id, auth.channel_id);
     let redemption_id = state.db.operator_inventory_redemption(inventory_id, &user_id, &auth.channel_id).await?
         .ok_or_else(|| ApiError::NotFound { message: "Inventory item not found".into() })?;
-    let result = crate::processor::inventory_fulfillment::purchase(&state, redemption_id, false, options.use_saved_link.unwrap_or(false)).await
+    let result = crate::processor::inventory_fulfillment::purchase(&state, redemption_id, false, options.use_saved_link.unwrap_or(false), Some(&auth.user_id)).await
         .map_err(|message| ApiError::Internal { message })?;
     action_result(result)
 }
@@ -115,7 +115,7 @@ pub async fn request_operator_inventory_refund(
     debug_assert_eq!(channel_id, auth.channel_id);
     let redemption_id = state.db.operator_inventory_redemption(inventory_id, &user_id, &auth.channel_id).await?
         .ok_or_else(|| ApiError::NotFound { message: "Inventory item not found".into() })?;
-    let result = crate::processor::inventory_fulfillment::refund(&state, redemption_id, false).await
+    let result = crate::processor::inventory_fulfillment::refund(&state, redemption_id, false, Some(&auth.user_id)).await
         .map_err(|message| ApiError::Internal { message })?;
     action_result(result)
 }

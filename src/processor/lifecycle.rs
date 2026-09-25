@@ -222,7 +222,7 @@ async fn recover_unclaimed_inventory_orders(state: Arc<AppState>) {
     for item in pending {
         if state.shutdown_token.is_cancelled() { return; }
         info!(redemption_id = %item.redemption_id, "Starting the single initial Market attempt after restart");
-        if let Err(e) = inventory_fulfillment::purchase(&state, item.redemption_id, false, false).await {
+        if let Err(e) = inventory_fulfillment::purchase(&state, item.redemption_id, false, false, None).await {
             error!(error = %e, redemption_id = %item.redemption_id, "Cannot recover initial purchase");
         }
     }

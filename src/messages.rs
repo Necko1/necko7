@@ -19,6 +19,7 @@ pub const ALL_CATEGORIES: [&str; 5] = [
 
 // ── Orders Message Keys ────────────────────────────────────────────────────
 pub const MSG_ORDERS_CREATED: &str = "orders.created";
+pub const MSG_ORDERS_REDEEMED: &str = "orders.redeemed";
 pub const MSG_ORDERS_WAITING_VIEWER: &str = "orders.waiting_viewer";
 pub const MSG_ORDERS_WAITING_OPERATOR: &str = "orders.waiting_operator";
 pub const MSG_ORDERS_TRADE_LINK_REQUIRED: &str = "orders.trade_link_required";
@@ -69,6 +70,7 @@ pub const MSG_CHAT_REQ_FAILED_BOTH: &str = MSG_CHAT_REQ_FAILED_BOTH_REFUND;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 pub struct OrdersMessages {
+    pub redeemed: String,
     pub created: String,
     pub waiting_viewer: String,
     pub waiting_operator: String,
@@ -82,6 +84,7 @@ pub struct OrdersMessages {
 impl Default for OrdersMessages {
     fn default() -> Self {
         Self {
+            redeemed: "@{buyer} Reward redeemed: {item}. Your request is being prepared.".to_string(),
             created: "@{buyer} Market order created for {item}. Watch for the Steam trade offer; you can follow delivery in your inventory.".to_string(),
             waiting_viewer: "@{buyer} {item} is in your inventory. Your auto-buy preference is off, so no Market order was placed. Start delivery or refund your points from your inventory.".to_string(),
             waiting_operator: "@{buyer} {item} is in your inventory. Auto-buy is off for this reward, so no Market order was placed. The channel team will review delivery.".to_string(),
@@ -237,6 +240,7 @@ impl From<serde_json::Value> for CategorizedChatMessages {
 
         if is_nested {
             if let Some(orders_val) = obj.get("orders").and_then(|v| v.as_object()) {
+                if let Some(v) = orders_val.get("redeemed").and_then(|s| s.as_str()) { result.orders.redeemed = v.to_string(); }
                 if let Some(v) = orders_val.get("created").and_then(|s| s.as_str()) { result.orders.created = v.to_string(); }
                 if let Some(v) = orders_val.get("waiting_viewer").and_then(|s| s.as_str()) { result.orders.waiting_viewer = v.to_string(); }
                 if let Some(v) = orders_val.get("waiting_operator").and_then(|s| s.as_str()) { result.orders.waiting_operator = v.to_string(); }
@@ -288,6 +292,7 @@ impl From<serde_json::Value> for CategorizedChatMessages {
             };
             if let Some((cat, key)) = resolve_category_and_key(k) {
                 match (cat, key) {
+                    ("orders", "redeemed") => result.orders.redeemed = val_str,
                     ("orders", "created") => result.orders.created = val_str,
                     ("orders", "waiting_viewer") => result.orders.waiting_viewer = val_str,
                     ("orders", "waiting_operator") => result.orders.waiting_operator = val_str,
@@ -349,6 +354,7 @@ impl CategorizedChatMessages {
         let (cat, key) = resolve_category_and_key(message_id)?;
         match cat {
             "orders" => match key {
+                "redeemed" => Some(&self.orders.redeemed),
                 "created" => Some(&self.orders.created),
                 "waiting_viewer" => Some(&self.orders.waiting_viewer),
                 "waiting_operator" => Some(&self.orders.waiting_operator),
@@ -420,6 +426,7 @@ impl CategorizedChatMessages {
                     continue;
                 }
                 match (cat.as_str(), key.as_str()) {
+                    ("orders", "redeemed") => merged.orders.redeemed = trimmed.to_string(),
                     ("orders", "created") => merged.orders.created = trimmed.to_string(),
                     ("orders", "waiting_viewer") => merged.orders.waiting_viewer = trimmed.to_string(),
                     ("orders", "waiting_operator") => merged.orders.waiting_operator = trimmed.to_string(),
@@ -465,6 +472,7 @@ impl CategorizedChatMessages {
     /// Return map of category -> { message_key -> [placeholders] }.
     pub fn all_placeholders() -> CategorizedPlaceholders {
         let mut orders = HashMap::new();
+        orders.insert("redeemed".to_string(), vec!["buyer".to_string(), "item".to_string()]);
         orders.insert("created".to_string(), vec!["buyer".to_string(), "item".to_string()]);
         for key in ["waiting_viewer", "waiting_operator", "trade_link_required", "insufficient_funds", "reconciliation_required", "refunded"] {
             orders.insert(key.to_string(), vec!["buyer".to_string(), "item".to_string()]);
@@ -511,6 +519,7 @@ impl CategorizedChatMessages {
 pub fn resolve_category_and_key(message_id: &str) -> Option<(&'static str, &'static str)> {
     match message_id {
         // Dot-notation
+        "orders.redeemed" => Some(("orders", "redeemed")),
         "orders.created" => Some(("orders", "created")),
         "orders.waiting_viewer" => Some(("orders", "waiting_viewer")),
         "orders.waiting_operator" => Some(("orders", "waiting_operator")),
@@ -644,6 +653,9 @@ mod tests {
     #[test]
     fn test_categorized_messages_defaults() {
         let defaults = CategorizedChatMessages::default();
+        assert_eq!(defaults.get_message(MSG_ORDERS_REDEEMED).unwrap(), &defaults.orders.redeemed);
+        assert_ne!(defaults.orders.redeemed, defaults.orders.created);
+        assert!(!defaults.orders.redeemed.to_ascii_lowercase().contains("order created"));
         assert_eq!(defaults.get_message(MSG_ORDERS_CREATED).unwrap(), &defaults.orders.created);
         assert_eq!(defaults.get_message("order_created").unwrap(), &defaults.orders.created);
         assert_eq!(defaults.get_message(MSG_MARKET_ERR_INVENTORY_HIDDEN).unwrap(), &defaults.market_errors.inventory_hidden);
@@ -657,6 +669,7 @@ mod tests {
         let defaults = CategorizedChatMessages::default();
         let placeholders = CategorizedChatMessages::all_placeholders();
         for key in [
+            MSG_ORDERS_REDEEMED, MSG_ORDERS_CREATED,
             MSG_ORDERS_WAITING_VIEWER, MSG_ORDERS_WAITING_OPERATOR,
             MSG_ORDERS_TRADE_LINK_REQUIRED, MSG_ORDERS_INSUFFICIENT_FUNDS,
             MSG_ORDERS_UNAVAILABLE,
@@ -681,9 +694,10 @@ mod tests {
             assert!(allowed.contains(&"item".to_string()), "{key}");
         }
         assert!(placeholders.orders.get("unavailable").unwrap().contains(&"price".to_string()));
-        let custom = serde_json::json!({"orders": {"waiting_viewer": "Custom {item}"}});
+        let custom = serde_json::json!({"orders": {"waiting_viewer": "Custom {item}", "redeemed": "Claimed {item}"}});
         let parsed: CategorizedChatMessages = serde_json::from_value(custom).unwrap();
         assert_eq!(parsed.get_message(MSG_ORDERS_WAITING_VIEWER), Some("Custom {item}"));
+        assert_eq!(parsed.get_message(MSG_ORDERS_REDEEMED), Some("Claimed {item}"));
         let merged = CategorizedChatMessages::merge_with_overrides(
             &defaults,
             &HashMap::from([("trades".to_string(), HashMap::from([("failed_seller".to_string(), "Custom seller".to_string())]))]),

@@ -46,6 +46,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         rewards::batch_rewards,
         rewards::preview_filter,
         redemptions::list_redemptions,
+        redemptions::get_redemption_audit,
         redemptions::retry_redemption,
         redemptions::refund_redemption,
         redemptions::penalty_redemption,
@@ -99,6 +100,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         rewards::PreviewFilterBody,
         rewards::PreviewFilterResponse,
         redemptions::RedemptionResponse,
+        crate::db::inventory::FulfillmentAuditEvent,
         redemptions::PaginatedRedemptionsResponse,
         redemptions::ListRedemptionsQuery,
         stats::StatsResponse,
@@ -211,6 +213,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/broadcasters/{channel_id}/rewards/{reward_id}", put(rewards::update_reward).delete(rewards::delete_reward))
         .route("/broadcasters/{channel_id}/rewards/{reward_id}/update-price", post(rewards::update_reward_price))
         .route("/broadcasters/{channel_id}/redemptions", get(redemptions::list_redemptions))
+        .route("/broadcasters/{channel_id}/redemptions/{redemption_id}/audit", get(redemptions::get_redemption_audit))
         .route("/broadcasters/{channel_id}/redemptions/{redemption_id}/retry", post(redemptions::retry_redemption))
         .route("/broadcasters/{channel_id}/redemptions/{redemption_id}/refund", post(redemptions::refund_redemption))
         .route("/broadcasters/{channel_id}/redemptions/{redemption_id}/penalty", post(redemptions::penalty_redemption))
@@ -320,6 +323,8 @@ mod tests {
         assert!(json.contains("/api/v1/broadcasters/{channel_id}/me/inventory"));
         assert!(json.contains("/api/v1/broadcasters/{channel_id}/chat/users/{user_id}/inventory"));
         assert!(json.contains("InventoryItem"));
+        assert!(json.contains("/api/v1/broadcasters/{channel_id}/redemptions/{redemption_id}/audit"));
+        assert!(json.contains("FulfillmentAuditEvent"));
     }
 }
 

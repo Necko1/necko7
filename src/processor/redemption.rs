@@ -9,7 +9,7 @@ use crate::messages::{
     MSG_CHAT_REQ_FAILED_CHARACTERS_REFUND, MSG_CHAT_REQ_FAILED_CHARACTERS_PENALTY,
     MSG_CHAT_REQ_FAILED_BOTH_REFUND, MSG_CHAT_REQ_FAILED_BOTH_PENALTY,
     MSG_USER_PURCHASE_LIMIT_REACHED, MSG_GLOBAL_PURCHASE_LIMIT_REACHED,
-    MSG_ORDERS_WAITING_VIEWER, MSG_ORDERS_WAITING_OPERATOR,
+    MSG_ORDERS_WAITING_VIEWER, MSG_ORDERS_WAITING_OPERATOR, MSG_ORDERS_REDEEMED,
 };
 use crate::processor::model::EventSubNotification;
 use crate::state::AppState;
@@ -123,7 +123,12 @@ async fn process_redemption_inner(
         status: RedemptionStatus::Pending,
         market_item_name: initial_item_name.clone(),
     }).await {
-        Ok(Some(_)) => {},
+        Ok(Some(_)) => {
+            crate::processor::inventory_fulfillment::send_inventory_chat(
+                &state, &broadcaster_user_id, MSG_ORDERS_REDEEMED,
+                &event.user_login, &event.reward.title, &[],
+            ).await;
+        },
         Ok(None) => {
             info!(redemption_id = %redemption_id, "Redemption is already being processed, ignoring duplicate");
             return;
@@ -545,7 +550,7 @@ async fn process_redemption_inner(
         }
     }
     if actual_mode.as_deref() == Some("AUTO") {
-        if let Err(e) = crate::processor::inventory_fulfillment::purchase(&state, redemption_id, false, false).await {
+        if let Err(e) = crate::processor::inventory_fulfillment::purchase(&state, redemption_id, false, false, None).await {
             error!(error = %e, %redemption_id, "Initial Market attempt could not complete locally");
         }
     }

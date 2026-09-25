@@ -36,6 +36,10 @@ pub struct RedemptionResponse {
     pub currency: String,
     /// Current redemption status
     pub status: RedemptionStatus,
+    /// Current inventory delivery state, when this redemption has an inventory item.
+    pub inventory_lifecycle_status: Option<String>,
+    pub latest_attempt_status: Option<String>,
+    pub latest_attempt_outcome_kind: Option<String>,
     /// Market item name redeemed/purchased (if known)
     pub market_item_name: Option<String>,
     /// Number of retry attempts
@@ -62,6 +66,9 @@ impl From<Redemption> for RedemptionResponse {
             market_paid_price: r.market_paid_price,
             currency: r.currency,
             status: r.status,
+            inventory_lifecycle_status: None,
+            latest_attempt_status: None,
+            latest_attempt_outcome_kind: None,
             market_item_name: r.market_item_name,
             retry_count: r.retry_count,
             fail_cause: r.fail_cause,
@@ -166,12 +173,37 @@ pub async fn list_redemptions(
         query.user_id.as_deref(),
     ).await?;
 
+    let mut items: Vec<RedemptionResponse> = redemptions.into_iter().map(RedemptionResponse::from).collect();
+    let ids: Vec<Uuid> = items.iter().map(|r| r.twitch_redemption_id).collect();
+    let states = state.db.get_redemption_inventory_states(&ids).await?;
+    let states: std::collections::HashMap<Uuid, _> = states.into_iter().map(|s| (s.redemption_id, s)).collect();
+    for item in &mut items {
+        if let Some(inventory) = states.get(&item.twitch_redemption_id) {
+            item.inventory_lifecycle_status = Some(inventory.lifecycle_status.clone());
+            item.latest_attempt_status = inventory.latest_attempt_status.clone();
+            item.latest_attempt_outcome_kind = inventory.latest_attempt_outcome_kind.clone();
+        }
+    }
     Ok(Json(PaginatedRedemptionsResponse {
-        items: redemptions.into_iter().map(RedemptionResponse::from).collect(),
+        items,
         total,
         offset,
         limit,
     }))
+}
+
+#[utoipa::path(get, path = "/api/v1/broadcasters/{channel_id}/redemptions/{redemption_id}/audit",
+    tag = "Redemptions", params(("channel_id" = String, Path), ("redemption_id" = Uuid, Path)),
+    responses((status = 200, body = Vec<crate::db::inventory::FulfillmentAuditEvent>)),
+    security(("session_id" = [])))]
+pub async fn get_redemption_audit(
+    auth: AuthorizedChannel,
+    State(state): State<Arc<AppState>>,
+    PathArg(path): PathArg<RedemptionPath>,
+) -> Result<Json<Vec<crate::db::inventory::FulfillmentAuditEvent>>, ApiError> {
+    let events = state.db.get_fulfillment_audit(path.redemption_id, &auth.channel_id).await?
+        .ok_or_else(|| ApiError::NotFound { message: "Redemption not found".into() })?;
+    Ok(Json(events))
 }
 
 #[utoipa::path(
@@ -225,7 +257,7 @@ pub async fn retry_redemption(
             param: "redemption_id".into(),
         });
     }
-    let result = crate::processor::inventory_fulfillment::purchase(&state, redemption_id, false, false).await
+    let result = crate::processor::inventory_fulfillment::purchase(&state, redemption_id, false, false, Some(&auth.user_id)).await
         .map_err(|message| ApiError::Internal { message })?;
     if result != "ORDER_CREATED" {
         return Err(ApiError::UnprocessableEntity {
@@ -235,7 +267,13 @@ pub async fn retry_redemption(
     let updated = state.db.get_redemption(redemption_id).await?.ok_or_else(|| ApiError::NotFound {
         message: "Redemption not found".into(),
     })?;
-    Ok(Json(RedemptionResponse::from(updated)))
+    let mut response = RedemptionResponse::from(updated);
+    if let Some(inventory) = state.db.get_redemption_inventory_states(&[redemption_id]).await?.pop() {
+        response.inventory_lifecycle_status = Some(inventory.lifecycle_status);
+        response.latest_attempt_status = inventory.latest_attempt_status;
+        response.latest_attempt_outcome_kind = inventory.latest_attempt_outcome_kind;
+    }
+    Ok(Json(response))
 }
 
 #[utoipa::path(
@@ -284,7 +322,7 @@ pub async fn refund_redemption(
     }
 
     if state.db.inventory_exists(redemption_id).await? {
-        let result = crate::processor::inventory_fulfillment::refund(&state, redemption_id, false).await
+        let result = crate::processor::inventory_fulfillment::refund(&state, redemption_id, false, Some(&auth.user_id)).await
             .map_err(|message| ApiError::Internal { message })?;
         if result != "REFUNDED" {
             return Err(ApiError::UnprocessableEntity { message: format!("Refund is not safe: {result}"), param: "redemption_id".into() });
