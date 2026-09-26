@@ -22,6 +22,49 @@ stores its own `item_name` and `max_price`. Neither reward price refresh nor
 Market rejection changes the inventory snapshot. There is no automatic
 candidate fallback or automatic new order after any Market failure.
 
+## Rolling per-viewer purchase limits
+
+For a rolling per-user rule, a concrete inventory item consumes exactly one
+slot within the original redemption-time window until that window expires. Refunds,
+failures, cancellations and reverts do not release this historical roll.
+Attempts/retries do not add slots. This applies to existing inventory too;
+no backfill, price update or external operation is needed.
+
+Before concrete selection, an admitted in-progress redemption reserves capacity
+from its EventSub redemption time. A pre-inventory eligibility failure releases
+that reservation. Admission and inventory creation both lock the same reward
+row; creation only converts an admitted pending redemption into inventory. The
+rolling window remains anchored to the EventSub redemption time, rather than
+starting again at delivery, refund or retry. Global, lifetime and non-inventory
+counting retain their existing status-based semantics.
+
+## Result notifications and profile history
+
+POOL uses the existing `orders.pool_created` configurable result template
+(`order_pool_created` legacy alias), with `{buyer}`, `{item}` and weighted
+`{chance}` percentage. A selected pool item's nonblank `custom_message` takes
+precedence. It is sent when the inventory snapshot is created; the default now
+describes that boundary rather than claiming an order exists. POOL never uses
+generic `orders.redeemed`; manual modes may additionally explain the waiting
+state. FIXED/FILTER keep their current generic inventory/waiting notification.
+Actual order creation and later trade messages remain separate.
+
+Global and channel profile history join the inventory and latest persisted
+attempt, using the same lifecycle/outcome labels as owner transactions. The
+redemption status remains a fallback for rows without inventory. Transactions
+expose operator delivery through the existing retry endpoint; the server reports
+eligibility using the current attempt/cooldown checks and rechecks under the
+inventory lock on action. Operator permissions, including buyer-revert review,
+are unchanged; viewer self-service remains blocked by buyer-reverted history.
+
+Twitch's [documented `prompt` limit](https://dev.twitch.tv/docs/api/reference#update-custom-reward)
+is 200 characters. The old backend accepted
+up to 500 and the database stores unrestricted text. Newly created/changed
+descriptions now use 200 consistently. An unchanged legacy longer description
+is retained and omitted from Twitch PATCH, allowing unrelated edits without
+truncation. The repository cannot establish how a particular old over-limit row
+was originally obtained or whether Twitch accepted that exact prompt.
+
 ## Fulfillment decisions
 
 The reward's `market_autobuy` and the viewer's `viewer_settings.auto_buy_enabled`

@@ -117,6 +117,8 @@ pub struct FulfillmentAuditEvent {
 #[derive(Debug, FromRow)]
 pub struct RedemptionInventoryState {
     pub redemption_id: Uuid,
+    pub inventory_id: Uuid,
+    pub operator_can_attempt: bool,
     pub lifecycle_status: String,
     pub latest_attempt_status: Option<String>,
     pub latest_attempt_outcome_kind: Option<String>,
@@ -125,9 +127,17 @@ pub struct RedemptionInventoryState {
 impl Db {
     pub async fn get_redemption_inventory_states(&self, redemption_ids: &[Uuid]) -> DbResult<Vec<RedemptionInventoryState>> {
         Ok(sqlx::query_as::<_, RedemptionInventoryState>(
-            "SELECT i.redemption_id, i.lifecycle_status,
+            "SELECT i.redemption_id, i.id AS inventory_id, i.lifecycle_status,
+                    (r.status = 'PENDING' AND i.fulfillment_mode != 'LEGACY_REVIEW'
+                     AND i.lifecycle_status IN ('WAITING_VIEWER','WAITING_OPERATOR','TRADE_LINK_REQUIRED','RETRY_AVAILABLE','INSUFFICIENT_FUNDS')
+                     AND (i.last_action_at IS NULL OR i.last_action_at <= NOW() - INTERVAL '30 seconds')
+                     AND (a.status IS NULL OR a.status IN ('REJECTED','SELLER_FAILED','BUYER_FAILED'))
+                     AND NOT EXISTS(SELECT 1 FROM inventory_order_attempts live WHERE live.inventory_id=i.id
+                                    AND live.status NOT IN ('REJECTED','SELLER_FAILED','BUYER_FAILED','DELIVERED')))
+                    AS operator_can_attempt,
                     a.status AS latest_attempt_status, a.outcome_kind AS latest_attempt_outcome_kind
              FROM inventory_items i
+             JOIN redemptions r ON r.twitch_redemption_id=i.redemption_id
              LEFT JOIN LATERAL (SELECT status, outcome_kind FROM inventory_order_attempts
                                 WHERE inventory_id = i.id ORDER BY attempt_id DESC LIMIT 1) a ON TRUE
              WHERE i.redemption_id = ANY($1)"
@@ -349,6 +359,21 @@ impl Db {
     /// INSERT commits before the caller is allowed to make any external purchase.
     /// The unique redemption constraint and DO NOTHING preserve the first snapshot.
     pub async fn create_inventory_item(&self, redemption_id: Uuid, item_name: &str, fixed_price: i64, fulfillment_mode: &str, buyer_retry_allowed: bool) -> DbResult<bool> {
+        let mut tx = self.pool.begin().await?;
+        let reward_id: Uuid = sqlx::query_scalar(
+            "SELECT twitch_reward_id FROM redemptions WHERE twitch_redemption_id = $1"
+        ).bind(redemption_id).fetch_one(&mut *tx).await?;
+        // Use the admission lock when converting a reservation into a permanent
+        // historical roll. Its window remains anchored to the redemption time.
+        let _: Uuid = sqlx::query_scalar(
+            "SELECT twitch_id FROM rewards WHERE twitch_id = $1 FOR UPDATE"
+        ).bind(reward_id).fetch_one(&mut *tx).await?;
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM inventory_items WHERE redemption_id=$1)")
+            .bind(redemption_id).fetch_one(&mut *tx).await?;
+        if exists { tx.commit().await?; return Ok(false); }
+        let admitted: bool = sqlx::query_scalar("SELECT purchase_limit_decision->>'kind' = 'admitted' AND status = 'PENDING' FROM redemptions WHERE twitch_redemption_id=$1")
+            .bind(redemption_id).fetch_one(&mut *tx).await?;
+        if !admitted { tx.commit().await?; return Ok(false); }
         let result = sqlx::query(
             "INSERT INTO inventory_items (id, redemption_id, viewer_id, item_name, fixed_price, currency, fulfillment_mode, buyer_retry_allowed, lifecycle_status)
              SELECT $2, r.twitch_redemption_id, r.user_id, $3, $4, r.currency, $5, $6,
@@ -358,7 +383,8 @@ impl Db {
         )
         .bind(redemption_id).bind(Uuid::new_v4()).bind(item_name).bind(fixed_price)
         .bind(fulfillment_mode).bind(buyer_retry_allowed)
-        .execute(&self.pool).await?;
+        .execute(&mut *tx).await?;
+        tx.commit().await?;
         Ok(result.rows_affected() > 0)
     }
 

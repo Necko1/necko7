@@ -9,7 +9,7 @@ use crate::messages::{
     MSG_CHAT_REQ_FAILED_CHARACTERS_REFUND, MSG_CHAT_REQ_FAILED_CHARACTERS_PENALTY,
     MSG_CHAT_REQ_FAILED_BOTH_REFUND, MSG_CHAT_REQ_FAILED_BOTH_PENALTY,
     MSG_USER_PURCHASE_LIMIT_REACHED, MSG_GLOBAL_PURCHASE_LIMIT_REACHED,
-    MSG_ORDERS_WAITING_VIEWER, MSG_ORDERS_WAITING_OPERATOR, MSG_ORDERS_REDEEMED,
+    MSG_ORDERS_WAITING_VIEWER, MSG_ORDERS_WAITING_OPERATOR, MSG_ORDERS_REDEEMED, MSG_ORDERS_POOL_CREATED,
 };
 use crate::processor::model::EventSubNotification;
 use crate::state::AppState;
@@ -445,12 +445,21 @@ async fn process_redemption_inner(
     };
     let actual_mode = state.db.get_inventory_core(redemption_id).await.ok().flatten().map(|item| item.4);
     if created {
-        // One chat message for the newly persisted item. Waiting-mode templates
-        // already announce the inventory addition and explain the next action.
-        let template = inventory_added_chat_template(actual_mode.as_deref().unwrap_or(mode));
-        crate::processor::inventory_fulfillment::send_inventory_chat(
-            &state, &reward_data.streamer_id, template, &event.user_login, &item_name, &[],
-        ).await;
+        // POOL announces the selected result with its own template; manual modes
+        // additionally explain the next action. Other types keep their existing notice.
+        let saved_mode = actual_mode.as_deref().unwrap_or(mode);
+        if reward_data.reward_type == RewardType::Pool {
+            let default = state.get_chat_message_template(&reward_data.streamer_id, MSG_ORDERS_POOL_CREATED);
+            if let Some(message) = reward_data.pool_items.as_ref().and_then(|pool|
+                render_pool_result(&pool.0, &item_name, &event.user_login, &default)) {
+                let _ = state.send_chat_message(&reward_data.streamer_id, &message, None).await;
+            }
+        }
+        if let Some(template) = inventory_added_chat_template(reward_data.reward_type, saved_mode) {
+            crate::processor::inventory_fulfillment::send_inventory_chat(
+                &state, &reward_data.streamer_id, template, &event.user_login, &item_name, &[],
+            ).await;
+        }
     }
     if actual_mode.as_deref() == Some("AUTO") {
         if let Err(e) = crate::processor::inventory_fulfillment::purchase(&state, redemption_id, false, false, None).await {
@@ -459,12 +468,30 @@ async fn process_redemption_inner(
     }
 }
 
-fn inventory_added_chat_template(mode: &str) -> &'static str {
+fn inventory_added_chat_template(reward_type: RewardType, mode: &str) -> Option<&'static str> {
     match mode {
-        "VIEWER" => MSG_ORDERS_WAITING_VIEWER,
-        "OPERATOR" => MSG_ORDERS_WAITING_OPERATOR,
-        _ => MSG_ORDERS_REDEEMED,
+        "VIEWER" => Some(MSG_ORDERS_WAITING_VIEWER),
+        "OPERATOR" => Some(MSG_ORDERS_WAITING_OPERATOR),
+        _ if reward_type == RewardType::Pool => None,
+        _ => Some(MSG_ORDERS_REDEEMED),
     }
+}
+
+fn render_pool_result(pool: &[crate::db::rewards::PoolItemConfig], item_name: &str,
+    buyer: &str, default_template: &str) -> Option<String> {
+    let item = pool.iter().find(|item| item.market_hash_name == item_name)?;
+    let total: f64 = pool.iter().map(|item| item.weight.max(0.0)).sum();
+    let chance = format_chance(if total > 0.0 { item.weight.max(0.0) / total * 100.0 } else { 0.0 });
+    let template = item.custom_message.as_deref().filter(|value| !value.trim().is_empty())
+        .unwrap_or(default_template);
+    Some(crate::messages::render_template(template, &[("buyer", buyer), ("item", item_name), ("chance", &chance)]))
+}
+
+pub fn format_chance(chance: f64) -> String {
+    if chance <= 0.0 { return "0%".into(); }
+    let value = if chance >= 0.01 { format!("{:.2}", (chance * 100.0).round() / 100.0) }
+        else { format!("{chance:.8}") };
+    format!("{}%", value.trim_end_matches('0').trim_end_matches('.'))
 }
 
 async fn pause_reward_on_twitch_and_db(
@@ -659,10 +686,38 @@ mod tests {
     use crate::db::rewards::PoolItemConfig;
 
     #[test]
+    fn pool_result_preserves_custom_default_and_chance_precedence() {
+        let mut pool = vec![
+            PoolItemConfig { market_hash_name: "Common".into(), weight: 3.0,
+                permissible_market_price_deviation: 0, current_market_price: 100, custom_message: None },
+            PoolItemConfig { market_hash_name: "Rare".into(), weight: 1.0,
+                permissible_market_price_deviation: 0, current_market_price: 500,
+                custom_message: Some("@{buyer} custom {item}: {chance}".into()) },
+        ];
+        let messages = crate::messages::CategorizedChatMessages::from(serde_json::json!({
+            "orders": {"redeemed": "GENERIC MUST NOT WIN", "pool_created": "pool {item} {chance}"}
+        }));
+        let default = messages.get_message(MSG_ORDERS_POOL_CREATED).unwrap();
+        assert_eq!(render_pool_result(&pool, "Rare", "viewer", default).unwrap(), "@viewer custom Rare: 25%");
+        assert_eq!(render_pool_result(&pool, "Common", "viewer", default).unwrap(), "pool Common 75%");
+        pool[1].custom_message = Some("  ".into());
+        assert_eq!(render_pool_result(&pool, "Rare", "viewer", default).unwrap(), "pool Rare 25%");
+        assert_eq!(format_chance(12.345), "12.35%");
+        assert_eq!(format_chance(0.000123), "0.000123%");
+        assert_eq!(crate::messages::resolve_category_and_key("order_pool_created"), Some(("orders", "pool_created")));
+        assert_eq!(inventory_added_chat_template(RewardType::Pool, "AUTO"), None,
+            "generic redeemed must never replace the pool result");
+        assert_eq!(inventory_added_chat_template(RewardType::Pool, "VIEWER"), Some(MSG_ORDERS_WAITING_VIEWER));
+        assert_eq!(inventory_added_chat_template(RewardType::Pool, "OPERATOR"), Some(MSG_ORDERS_WAITING_OPERATOR));
+        assert_eq!(inventory_added_chat_template(RewardType::Filter, "AUTO"), Some(MSG_ORDERS_REDEEMED),
+            "filter keeps the generic inventory notification");
+    }
+
+    #[test]
     fn inventory_added_chat_uses_one_message_for_each_fulfillment_mode() {
-        assert_eq!(inventory_added_chat_template("AUTO"), MSG_ORDERS_REDEEMED);
-        assert_eq!(inventory_added_chat_template("VIEWER"), MSG_ORDERS_WAITING_VIEWER);
-        assert_eq!(inventory_added_chat_template("OPERATOR"), MSG_ORDERS_WAITING_OPERATOR);
+        assert_eq!(inventory_added_chat_template(RewardType::Fixed, "AUTO"), Some(MSG_ORDERS_REDEEMED));
+        assert_eq!(inventory_added_chat_template(RewardType::Fixed, "VIEWER"), Some(MSG_ORDERS_WAITING_VIEWER));
+        assert_eq!(inventory_added_chat_template(RewardType::Fixed, "OPERATOR"), Some(MSG_ORDERS_WAITING_OPERATOR));
         let default = crate::messages::CategorizedChatMessages::default();
         assert!(default.orders.redeemed.contains("added to your inventory"));
         assert!(!default.orders.redeemed.contains("Reward redeemed"));

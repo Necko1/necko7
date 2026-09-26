@@ -13,6 +13,23 @@ pub enum PurchaseLimitDecision {
     UserRejected { count: i64, max_redemptions: i32, window_hours: Option<i32> },
 }
 
+pub(crate) async fn count_reward_redemptions_on_connection(
+    connection: &mut sqlx::PgConnection, reward_id: Uuid, user_id: Option<&str>,
+    window_hours: Option<i32>, exclude: Option<Uuid>,
+) -> DbResult<i64> {
+    let since = window_hours.map(|h| Utc::now() - chrono::Duration::hours(h as i64));
+    Ok(sqlx::query_scalar(
+        "SELECT COUNT(*)::BIGINT FROM redemptions r
+         LEFT JOIN inventory_items i ON i.redemption_id = r.twitch_redemption_id
+         WHERE r.twitch_reward_id = $1 AND ($2::VARCHAR IS NULL OR r.user_id = $2)
+           AND (($2::VARCHAR IS NOT NULL AND $3::TIMESTAMPTZ IS NOT NULL AND i.id IS NOT NULL)
+                OR (r.purchase_limit_decision->>'kind' = 'admitted'
+                    AND r.status IN ('COMPLETED','ORDER_CREATED','PENDING','MANUAL_HOLD')))
+           AND ($3::TIMESTAMPTZ IS NULL OR r.created_at >= $3)
+           AND ($4::UUID IS NULL OR r.twitch_redemption_id != $4)"
+    ).bind(reward_id).bind(user_id).bind(since).bind(exclude).fetch_one(connection).await?)
+}
+
 #[derive(Debug, Clone, Copy, sqlx::Type, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[sqlx(type_name = "VARCHAR", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RedemptionStatus {
@@ -110,13 +127,8 @@ impl Db {
         let mut decision = PurchaseLimitDecision::Admitted;
         if let Some(limits) = limits.as_ref().map(|j| &j.0) {
             for rule in &limits.global {
-                let since = rule.window_hours.map(|h| Utc::now() - chrono::Duration::hours(h as i64));
-                let count: i64 = sqlx::query_scalar(
-                    "SELECT COUNT(*)::BIGINT FROM redemptions WHERE twitch_reward_id = $1
-                     AND status IN ('COMPLETED', 'ORDER_CREATED', 'PENDING', 'MANUAL_HOLD')
-                     AND purchase_limit_decision->>'kind' = 'admitted'
-                     AND ($2::TIMESTAMPTZ IS NULL OR created_at >= $2)"
-                ).bind(new.twitch_reward_id).bind(since).fetch_one(&mut *tx).await?;
+                let count = count_reward_redemptions_on_connection(&mut tx,
+                    new.twitch_reward_id, None, rule.window_hours, None).await?;
                 if count >= rule.max_redemptions as i64 {
                     decision = PurchaseLimitDecision::GlobalRejected {
                         count, max_redemptions: rule.max_redemptions, window_hours: rule.window_hours,
@@ -126,14 +138,8 @@ impl Db {
             }
             if decision == PurchaseLimitDecision::Admitted {
                 for rule in &limits.user {
-                    let since = rule.window_hours.map(|h| Utc::now() - chrono::Duration::hours(h as i64));
-                    let count: i64 = sqlx::query_scalar(
-                        "SELECT COUNT(*)::BIGINT FROM redemptions WHERE twitch_reward_id = $1
-                         AND user_id = $2 AND status IN ('COMPLETED', 'ORDER_CREATED', 'PENDING', 'MANUAL_HOLD')
-                         AND purchase_limit_decision->>'kind' = 'admitted'
-                         AND ($3::TIMESTAMPTZ IS NULL OR created_at >= $3)"
-                    ).bind(new.twitch_reward_id).bind(&new.user_id).bind(since)
-                        .fetch_one(&mut *tx).await?;
+                    let count = count_reward_redemptions_on_connection(&mut tx,
+                        new.twitch_reward_id, Some(&new.user_id), rule.window_hours, None).await?;
                     if count >= rule.max_redemptions as i64 {
                         decision = PurchaseLimitDecision::UserRejected {
                             count, max_redemptions: rule.max_redemptions, window_hours: rule.window_hours,
@@ -476,7 +482,10 @@ impl Db {
 
     /// Count admitted, successful or in-progress redemptions for a reward.
     /// PENDING, ORDER_CREATED, MANUAL_HOLD and COMPLETED occupy a slot;
-    /// limit-rejected and refunded redemptions do not.
+    /// Rolling per-user rules also count every created inventory item, even after
+    /// refund/failure, within the original redemption-time window. Pre-inventory pending rows reserve
+    /// capacity until eligibility fails or the reservation expires. Global/lifetime
+    /// rules retain the status-based counting semantics.
     /// - If `user_id` is Some, counts only for that user. If None, counts globally.
     /// - If `window_hours` is Some, counts within the rolling window (`created_at >= NOW() - window_hours`).
     ///   If None, counts across all-time.
@@ -488,26 +497,9 @@ impl Db {
         window_hours: Option<i32>,
         exclude_redemption_id: Option<Uuid>,
     ) -> DbResult<i64> {
-        let window_since = window_hours.map(|h| chrono::Utc::now() - chrono::Duration::hours(h as i64));
-
-        let count = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*)::BIGINT
-             FROM redemptions
-             WHERE twitch_reward_id = $1
-               AND status IN ('COMPLETED', 'ORDER_CREATED', 'PENDING', 'MANUAL_HOLD')
-               AND purchase_limit_decision->>'kind' = 'admitted'
-               AND ($2::VARCHAR IS NULL OR user_id = $2)
-               AND ($3::TIMESTAMPTZ IS NULL OR created_at >= $3)
-               AND ($4::UUID IS NULL OR twitch_redemption_id != $4)"
-        )
-        .bind(reward_id)
-        .bind(user_id)
-        .bind(window_since)
-        .bind(exclude_redemption_id)
-        .fetch_one(&self.pool)
-        .await?;
-
-        Ok(count)
+        let mut connection = self.pool.acquire().await?;
+        count_reward_redemptions_on_connection(&mut connection, reward_id, user_id,
+            window_hours, exclude_redemption_id).await
     }
 
     pub async fn get_viewer_redemptions_on_channel(
@@ -526,6 +518,9 @@ impl Db {
                 r.market_paid_price,
                 r.currency,
                 r.status,
+                i.lifecycle_status AS inventory_lifecycle_status,
+                a.status AS latest_attempt_status,
+                a.outcome_kind AS latest_attempt_outcome_kind,
                 r.fail_cause,
                 r.fail_description,
                 r.market_item_name,
@@ -533,6 +528,9 @@ impl Db {
                 r.updated_at
              FROM redemptions r
              JOIN rewards rew ON rew.twitch_id = r.twitch_reward_id
+             LEFT JOIN inventory_items i ON i.redemption_id = r.twitch_redemption_id
+             LEFT JOIN LATERAL (SELECT status, outcome_kind FROM inventory_order_attempts
+                                WHERE inventory_id = i.id ORDER BY attempt_id DESC LIMIT 1) a ON TRUE
              WHERE rew.streamer_id = $1 AND r.user_id = $2
              ORDER BY r.created_at DESC
              LIMIT $3 OFFSET $4"
@@ -564,6 +562,9 @@ impl Db {
                 r.market_paid_price,
                 r.currency,
                 r.status,
+                i.lifecycle_status AS inventory_lifecycle_status,
+                a.status AS latest_attempt_status,
+                a.outcome_kind AS latest_attempt_outcome_kind,
                 r.fail_cause,
                 r.fail_description,
                 r.market_item_name,
@@ -571,6 +572,9 @@ impl Db {
                 r.updated_at
              FROM redemptions r
              JOIN rewards rew ON rew.twitch_id = r.twitch_reward_id
+             LEFT JOIN inventory_items i ON i.redemption_id = r.twitch_redemption_id
+             LEFT JOIN LATERAL (SELECT status, outcome_kind FROM inventory_order_attempts
+                                WHERE inventory_id = i.id ORDER BY attempt_id DESC LIMIT 1) a ON TRUE
              JOIN broadcasters b ON b.channel_id = rew.streamer_id
              WHERE r.user_id = $1
              ORDER BY r.created_at DESC
@@ -651,6 +655,9 @@ pub struct ViewerChannelRedemption {
     pub market_paid_price: Option<i64>,
     pub currency: String,
     pub status: RedemptionStatus,
+    pub inventory_lifecycle_status: Option<String>,
+    pub latest_attempt_status: Option<String>,
+    pub latest_attempt_outcome_kind: Option<String>,
     pub fail_cause: Option<String>,
     pub fail_description: Option<String>,
     pub market_item_name: Option<String>,
@@ -669,6 +676,9 @@ pub struct ViewerGlobalRedemption {
     pub market_paid_price: Option<i64>,
     pub currency: String,
     pub status: RedemptionStatus,
+    pub inventory_lifecycle_status: Option<String>,
+    pub latest_attempt_status: Option<String>,
+    pub latest_attempt_outcome_kind: Option<String>,
     pub fail_cause: Option<String>,
     pub fail_description: Option<String>,
     pub market_item_name: Option<String>,
@@ -742,7 +752,7 @@ mod tests {
         assert!(db.insert_redemption_with_limits(&third, Utc::now()).await.unwrap().is_none(),
             "duplicate EventSub delivery must not reserve another slot");
 
-        // Existing semantics: an actually refunded redemption no longer occupies a slot.
+        // A refunded pre-inventory redemption releases its provisional reservation.
         sqlx::query("UPDATE redemptions SET status = 'FAILED_REFUND' WHERE twitch_redemption_id = $1")
             .bind(first.twitch_redemption_id).execute(db.pool()).await.unwrap();
         let fourth = make_redemption(reward);
@@ -804,5 +814,98 @@ mod tests {
             let deserialized: RedemptionStatus = serde_json::from_str(&serialized).unwrap();
             assert_eq!(deserialized, status);
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable PostgreSQL database in TEST_DATABASE_URL"]
+    async fn inventory_rolls_survive_refund_and_are_atomic_at_creation() {
+        let pool = sqlx::PgPool::connect(&std::env::var("TEST_DATABASE_URL").unwrap()).await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let db = Db { pool };
+        let channel = format!("roll-test-{}", Uuid::new_v4());
+        let viewer = format!("roll-viewer-{}", Uuid::new_v4());
+        sqlx::query("INSERT INTO users (twitch_id, login) VALUES ($1,$1)")
+            .bind(&channel).execute(db.pool()).await.unwrap();
+        sqlx::query("INSERT INTO broadcasters (channel_id, channel_login, user_access_token, refresh_token, created_at, updated_at) VALUES ($1,$1,'test','test',NOW(),NOW())")
+            .bind(&channel).execute(db.pool()).await.unwrap();
+        let limits = RewardPurchaseLimitsConfig { global: vec![],
+            user: vec![PurchaseLimitRule { window_hours: Some(8), max_redemptions: 2 }] };
+        let reward = Uuid::new_v4();
+        insert_limit_test_reward(&db, &channel, &limits, reward).await;
+        let new = |reward| NewRedemption { twitch_redemption_id: Uuid::new_v4(), twitch_reward_id: reward,
+            user_id: viewer.clone(), user_login: "viewer".into(), user_trade_link: String::new(),
+            twitch_points_cost: 100, currency: "RUB".into(), status: RedemptionStatus::Pending,
+            market_item_name: None };
+
+        // Failed eligibility before selection consumes no lasting roll.
+        let eligibility = new(reward);
+        db.insert_redemption_with_limits(&eligibility, Utc::now()).await.unwrap();
+        db.update_redemption_status(eligibility.twitch_redemption_id, RedemptionStatus::FailedRefund,
+            Some("chat_requirements"), None).await.unwrap();
+        assert_eq!(db.count_reward_redemptions(reward, Some(&viewer), Some(8), None).await.unwrap(), 0);
+        assert!(!db.create_inventory_item(eligibility.twitch_redemption_id, "Not selected", 275, "VIEWER", false).await.unwrap());
+
+        let first = new(reward);
+        let second = new(reward);
+        for r in [&first, &second] {
+            assert!(matches!(db.insert_redemption_with_limits(r, Utc::now()).await.unwrap().unwrap().1, PurchaseLimitDecision::Admitted));
+            assert!(db.create_inventory_item(r.twitch_redemption_id, "Frozen skin", 275, "VIEWER", false).await.unwrap());
+            assert!(!db.create_inventory_item(r.twitch_redemption_id, "Frozen skin", 275, "VIEWER", false).await.unwrap());
+        }
+        let third = new(reward);
+        assert!(matches!(db.insert_redemption_with_limits(&third, Utc::now()).await.unwrap().unwrap().1, PurchaseLimitDecision::UserRejected { count: 2, .. }));
+        assert!(!db.create_inventory_item(third.twitch_redemption_id, "Frozen skin", 275, "VIEWER", false).await.unwrap());
+
+        // Attempts reuse one roll; failed attempt and retry do not add slots.
+        let states = db.get_redemption_inventory_states(&[first.twitch_redemption_id, second.twitch_redemption_id]).await.unwrap();
+        assert!(states.iter().all(|s| s.operator_can_attempt));
+        let custom = db.begin_inventory_attempt(second.twitch_redemption_id, "fixture-link", false).await.unwrap().unwrap();
+        assert!(!db.get_redemption_inventory_states(&[second.twitch_redemption_id]).await.unwrap()[0].operator_can_attempt);
+        db.mark_attempt_rejected(second.twitch_redemption_id, &custom, "no_money", "fixture").await.unwrap();
+        sqlx::query("UPDATE inventory_items SET last_action_at = NOW() - INTERVAL '1 minute' WHERE redemption_id=$1")
+            .bind(second.twitch_redemption_id).execute(db.pool()).await.unwrap();
+        assert!(db.get_redemption_inventory_states(&[second.twitch_redemption_id]).await.unwrap()[0].operator_can_attempt);
+        let retry = db.begin_inventory_attempt(second.twitch_redemption_id, "fixture-link", false).await.unwrap().unwrap();
+        db.mark_attempt_rejected(second.twitch_redemption_id, &retry, "unavailable", "fixture").await.unwrap();
+        assert_eq!(db.count_reward_redemptions(reward, Some(&viewer), Some(8), None).await.unwrap(), 2);
+
+        assert!(db.reserve_inventory_refund(first.twitch_redemption_id, true).await.unwrap());
+        db.finish_inventory_refund(first.twitch_redemption_id, true).await.unwrap();
+        assert_eq!(db.count_reward_redemptions(reward, Some(&viewer), Some(8), None).await.unwrap(), 2);
+        assert!(matches!(db.insert_redemption_with_limits(&new(reward), Utc::now()).await.unwrap().unwrap().1, PurchaseLimitDecision::UserRejected { .. }));
+        // Global and lifetime rules keep their prior refund semantics.
+        assert_eq!(db.count_reward_redemptions(reward, None, Some(8), None).await.unwrap(), 1);
+        assert_eq!(db.count_reward_redemptions(reward, Some(&viewer), None, None).await.unwrap(), 1);
+
+        // Both profile APIs expose the same persisted lifecycle and isolate ownership.
+        let global = db.get_viewer_redemptions_global(&viewer, 20, 0).await.unwrap();
+        let scoped = db.get_viewer_redemptions_on_channel(&channel, &viewer, 20, 0).await.unwrap();
+        let row = global.iter().find(|r| r.twitch_redemption_id == first.twitch_redemption_id).unwrap();
+        assert_eq!(row.inventory_lifecycle_status.as_deref(), Some("REFUNDED"));
+        let row = scoped.iter().find(|r| r.twitch_redemption_id == second.twitch_redemption_id).unwrap();
+        assert_eq!(row.latest_attempt_outcome_kind.as_deref(), Some("unavailable"));
+        assert!(db.get_viewer_redemptions_global("other-viewer", 20, 0).await.unwrap().is_empty());
+        assert!(db.get_viewer_redemptions_on_channel("other-channel", &viewer, 20, 0).await.unwrap().is_empty());
+
+        sqlx::query("UPDATE redemptions SET created_at = NOW() - INTERVAL '9 hours' WHERE twitch_redemption_id=$1")
+            .bind(first.twitch_redemption_id).execute(db.pool()).await.unwrap();
+        assert!(matches!(db.insert_redemption_with_limits(&new(reward), Utc::now()).await.unwrap().unwrap().1, PurchaseLimitDecision::Admitted));
+
+        // Concurrent admission and concrete creation allow exactly two rolls.
+        let concurrent_reward = Uuid::new_v4();
+        insert_limit_test_reward(&db, &channel, &limits, concurrent_reward).await;
+        let concurrent = [new(concurrent_reward), new(concurrent_reward), new(concurrent_reward)];
+        let (a,b,c) = tokio::join!(
+            db.insert_redemption_with_limits(&concurrent[0], Utc::now()),
+            db.insert_redemption_with_limits(&concurrent[1], Utc::now()),
+            db.insert_redemption_with_limits(&concurrent[2], Utc::now()));
+        assert_eq!([a.unwrap().unwrap().1,b.unwrap().unwrap().1,c.unwrap().unwrap().1].into_iter()
+            .filter(|decision| matches!(decision, PurchaseLimitDecision::Admitted)).count(), 2);
+        let (a,b,c) = tokio::join!(
+            db.create_inventory_item(concurrent[0].twitch_redemption_id, "Same skin", 100, "VIEWER", false),
+            db.create_inventory_item(concurrent[1].twitch_redemption_id, "Same skin", 100, "VIEWER", false),
+            db.create_inventory_item(concurrent[2].twitch_redemption_id, "Same skin", 100, "VIEWER", false));
+        assert_eq!([a.unwrap(), b.unwrap(), c.unwrap()].into_iter().filter(|created| *created).count(), 2);
+        assert_eq!(db.count_reward_redemptions(concurrent_reward, Some(&viewer), Some(8), None).await.unwrap(), 2);
     }
 }

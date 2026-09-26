@@ -265,6 +265,19 @@ fn default_true() -> bool {
     true
 }
 
+fn normalize_description_patch(description: &mut Option<String>, existing: &str) -> Result<(), ApiError> {
+    if description.as_deref() == Some(existing) {
+        *description = None;
+    }
+    if description.as_ref().is_some_and(|value| value.chars().count() > 200) {
+        return Err(ApiError::BadRequest {
+            message: "Twitch reward description must be 200 characters or less".into(),
+            param: "twitch_description".into(),
+        });
+    }
+    Ok(())
+}
+
 fn validate_purchase_limits(limits: &crate::db::rewards::RewardPurchaseLimitsConfig) -> Result<(), ApiError> {
     for (idx, rule) in limits.global.iter().enumerate() {
         if rule.max_redemptions <= 0 {
@@ -369,9 +382,9 @@ pub async fn create_reward(
         });
     }
 
-    if body.twitch_description.chars().count() > 500 {
+    if body.twitch_description.chars().count() > 200 {
         return Err(ApiError::BadRequest {
-            message: "Twitch reward description must be 500 characters or less".into(),
+            message: "Twitch reward description must be 200 characters or less".into(),
             param: "twitch_description".into(),
         });
     }
@@ -1172,7 +1185,7 @@ pub async fn update_reward(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
     PathArg(path): PathArg<RewardPath>,
-    JsonArg(body): JsonArg<UpdateRewardBody>,
+    JsonArg(mut body): JsonArg<UpdateRewardBody>,
 ) -> Result<Json<RewardResponse>, ApiError> {
     let reward_id = path.reward_id;
     let existing = state.db.get_reward_by_twitch_id(reward_id).await?
@@ -1185,6 +1198,9 @@ pub async fn update_reward(
             message: "Reward does not belong to this channel".to_string(),
         });
     }
+
+    // PATCH must not resend an unchanged legacy prompt that Twitch would reject.
+    normalize_description_patch(&mut body.twitch_description, &existing.twitch_description)?;
 
     if let Some(ref title) = body.twitch_title {
         if title.trim().is_empty() {
@@ -1201,14 +1217,6 @@ pub async fn update_reward(
         }
     }
 
-    if let Some(ref desc) = body.twitch_description {
-        if desc.chars().count() > 500 {
-            return Err(ApiError::BadRequest {
-                message: "Twitch reward description must be 500 characters or less".into(),
-                param: "twitch_description".into(),
-            });
-        }
-    }
 
     if let Some(ref pool) = body.pool_items {
         if pool.is_empty() {
@@ -2015,6 +2023,26 @@ pub async fn batch_rewards(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn description_patch_preserves_legacy_text_without_resending_it() {
+        let legacy = "x".repeat(250);
+        let mut unchanged = Some(legacy.clone());
+        super::normalize_description_patch(&mut unchanged, &legacy).unwrap();
+        assert!(unchanged.is_none());
+        let payload = crate::helix::api::custom_rewards::model::TwitchUpdateRewardPayload {
+            prompt: unchanged, title: Some("New title".into()), ..Default::default()
+        };
+        let json = serde_json::to_value(payload).unwrap();
+        assert!(json.get("prompt").is_none(), "unrelated Twitch PATCH must not resend legacy text");
+        let mut absent = None;
+        super::normalize_description_patch(&mut absent, &legacy).unwrap();
+        let mut changed_long = Some("y".repeat(201));
+        assert!(super::normalize_description_patch(&mut changed_long, &legacy).is_err());
+        let mut unicode = Some("🎁".repeat(200));
+        super::normalize_description_patch(&mut unicode, &legacy).unwrap();
+        unicode = Some("🎁".repeat(201));
+        assert!(super::normalize_description_patch(&mut unicode, &legacy).is_err());
+    }
     use super::*;
 
     #[test]

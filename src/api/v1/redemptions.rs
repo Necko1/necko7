@@ -38,6 +38,8 @@ pub struct RedemptionResponse {
     pub status: RedemptionStatus,
     /// Current inventory delivery state, when this redemption has an inventory item.
     pub inventory_lifecycle_status: Option<String>,
+    pub inventory_id: Option<Uuid>,
+    pub inventory_operator_can_attempt: bool,
     pub latest_attempt_status: Option<String>,
     pub latest_attempt_outcome_kind: Option<String>,
     /// Market item name redeemed/purchased (if known)
@@ -67,6 +69,8 @@ impl From<Redemption> for RedemptionResponse {
             currency: r.currency,
             status: r.status,
             inventory_lifecycle_status: None,
+            inventory_id: None,
+            inventory_operator_can_attempt: false,
             latest_attempt_status: None,
             latest_attempt_outcome_kind: None,
             market_item_name: r.market_item_name,
@@ -180,6 +184,8 @@ pub async fn list_redemptions(
     for item in &mut items {
         if let Some(inventory) = states.get(&item.twitch_redemption_id) {
             item.inventory_lifecycle_status = Some(inventory.lifecycle_status.clone());
+            item.inventory_id = Some(inventory.inventory_id);
+            item.inventory_operator_can_attempt = inventory.operator_can_attempt;
             item.latest_attempt_status = inventory.latest_attempt_status.clone();
             item.latest_attempt_outcome_kind = inventory.latest_attempt_outcome_kind.clone();
         }
@@ -270,6 +276,8 @@ pub async fn retry_redemption(
     let mut response = RedemptionResponse::from(updated);
     if let Some(inventory) = state.db.get_redemption_inventory_states(&[redemption_id]).await?.pop() {
         response.inventory_lifecycle_status = Some(inventory.lifecycle_status);
+        response.inventory_id = Some(inventory.inventory_id);
+        response.inventory_operator_can_attempt = inventory.operator_can_attempt;
         response.latest_attempt_status = inventory.latest_attempt_status;
         response.latest_attempt_outcome_kind = inventory.latest_attempt_outcome_kind;
     }

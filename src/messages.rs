@@ -20,6 +20,7 @@ pub const ALL_CATEGORIES: [&str; 5] = [
 // ── Orders Message Keys ────────────────────────────────────────────────────
 pub const MSG_ORDERS_CREATED: &str = "orders.created";
 pub const MSG_ORDERS_REDEEMED: &str = "orders.redeemed";
+pub const MSG_ORDERS_POOL_CREATED: &str = "orders.pool_created";
 pub const MSG_ORDERS_WAITING_VIEWER: &str = "orders.waiting_viewer";
 pub const MSG_ORDERS_WAITING_OPERATOR: &str = "orders.waiting_operator";
 pub const MSG_ORDERS_TRADE_LINK_REQUIRED: &str = "orders.trade_link_required";
@@ -71,6 +72,7 @@ pub const MSG_CHAT_REQ_FAILED_BOTH: &str = MSG_CHAT_REQ_FAILED_BOTH_REFUND;
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 pub struct OrdersMessages {
     pub redeemed: String,
+    pub pool_created: String,
     pub created: String,
     pub waiting_viewer: String,
     pub waiting_operator: String,
@@ -85,6 +87,7 @@ impl Default for OrdersMessages {
     fn default() -> Self {
         Self {
             redeemed: "@{buyer} {item} has been added to your inventory. Follow delivery in your profile.".to_string(),
+            pool_created: "@{buyer} Rolled skin {item} (chance: {chance})! The item is in your inventory; follow delivery in your profile.".to_string(),
             created: "@{buyer} Market order created for {item}. Watch for the Steam trade offer; you can follow delivery in your inventory.".to_string(),
             waiting_viewer: "@{buyer} {item} is in your inventory. Your auto-buy preference is off, so no Market order was placed. Start delivery or refund your points from your inventory.".to_string(),
             waiting_operator: "@{buyer} {item} is in your inventory. Auto-buy is off for this reward, so no Market order was placed. The channel team will review delivery.".to_string(),
@@ -147,6 +150,7 @@ pub(crate) fn is_obsolete_copied_default(category: &str, key: &str, value: &str)
         return true;
     }
     matches!((category, key, value),
+        ("orders", "pool_created", "@{buyer} Rolled skin {item} (chance: {chance})! Market order created. Please wait for the trade offer (up to 5 minutes).") |
         ("orders", "unavailable", "@{buyer} Market could not order {item} at its fixed price. Your points remain pending; you can retry later or request a refund from your inventory.") |
         ("orders", "reconciliation_required", "@{buyer} Market's status for {item} is being checked. Please do not start another order or refund until it is resolved; your points remain pending.") |
         ("market_errors", "unknown", "@{buyer} Market returned an uncertain result for {item}. We are checking whether an order exists; your points remain pending. Do not retry or refund yet.") |
@@ -241,6 +245,7 @@ impl From<serde_json::Value> for CategorizedChatMessages {
         if is_nested {
             if let Some(orders_val) = obj.get("orders").and_then(|v| v.as_object()) {
                 if let Some(v) = orders_val.get("redeemed").and_then(|s| s.as_str()) { result.orders.redeemed = v.to_string(); }
+                if let Some(v) = orders_val.get("pool_created").and_then(|s| s.as_str()) { result.orders.pool_created = v.to_string(); }
                 if let Some(v) = orders_val.get("created").and_then(|s| s.as_str()) { result.orders.created = v.to_string(); }
                 if let Some(v) = orders_val.get("waiting_viewer").and_then(|s| s.as_str()) { result.orders.waiting_viewer = v.to_string(); }
                 if let Some(v) = orders_val.get("waiting_operator").and_then(|s| s.as_str()) { result.orders.waiting_operator = v.to_string(); }
@@ -293,6 +298,7 @@ impl From<serde_json::Value> for CategorizedChatMessages {
             if let Some((cat, key)) = resolve_category_and_key(k) {
                 match (cat, key) {
                     ("orders", "redeemed") => result.orders.redeemed = val_str,
+                    ("orders", "pool_created") => result.orders.pool_created = val_str,
                     ("orders", "created") => result.orders.created = val_str,
                     ("orders", "waiting_viewer") => result.orders.waiting_viewer = val_str,
                     ("orders", "waiting_operator") => result.orders.waiting_operator = val_str,
@@ -355,6 +361,7 @@ impl CategorizedChatMessages {
         match cat {
             "orders" => match key {
                 "redeemed" => Some(&self.orders.redeemed),
+                "pool_created" => Some(&self.orders.pool_created),
                 "created" => Some(&self.orders.created),
                 "waiting_viewer" => Some(&self.orders.waiting_viewer),
                 "waiting_operator" => Some(&self.orders.waiting_operator),
@@ -427,6 +434,7 @@ impl CategorizedChatMessages {
                 }
                 match (cat.as_str(), key.as_str()) {
                     ("orders", "redeemed") => merged.orders.redeemed = trimmed.to_string(),
+                    ("orders", "pool_created") => merged.orders.pool_created = trimmed.to_string(),
                     ("orders", "created") => merged.orders.created = trimmed.to_string(),
                     ("orders", "waiting_viewer") => merged.orders.waiting_viewer = trimmed.to_string(),
                     ("orders", "waiting_operator") => merged.orders.waiting_operator = trimmed.to_string(),
@@ -474,6 +482,7 @@ impl CategorizedChatMessages {
         let mut orders = HashMap::new();
         orders.insert("redeemed".to_string(), vec!["buyer".to_string(), "item".to_string()]);
         orders.insert("created".to_string(), vec!["buyer".to_string(), "item".to_string()]);
+        orders.insert("pool_created".to_string(), vec!["buyer".to_string(), "item".to_string(), "chance".to_string()]);
         for key in ["waiting_viewer", "waiting_operator", "trade_link_required", "insufficient_funds", "reconciliation_required", "refunded"] {
             orders.insert(key.to_string(), vec!["buyer".to_string(), "item".to_string()]);
         }
@@ -520,6 +529,7 @@ pub fn resolve_category_and_key(message_id: &str) -> Option<(&'static str, &'sta
     match message_id {
         // Dot-notation
         "orders.redeemed" => Some(("orders", "redeemed")),
+        "orders.pool_created" | "order_pool_created" => Some(("orders", "pool_created")),
         "orders.created" => Some(("orders", "created")),
         "orders.waiting_viewer" => Some(("orders", "waiting_viewer")),
         "orders.waiting_operator" => Some(("orders", "waiting_operator")),
@@ -655,6 +665,11 @@ mod tests {
         let defaults = CategorizedChatMessages::default();
         assert_eq!(defaults.get_message(MSG_ORDERS_REDEEMED).unwrap(), &defaults.orders.redeemed);
         assert_ne!(defaults.orders.redeemed, defaults.orders.created);
+        assert_eq!(defaults.get_message("order_pool_created").unwrap(), &defaults.orders.pool_created);
+        assert_eq!(CategorizedChatMessages::all_placeholders().orders["pool_created"], vec!["buyer", "item", "chance"]);
+        assert!(!defaults.orders.pool_created.contains("Market order created"));
+        assert!(is_obsolete_copied_default("orders", "pool_created", "@{buyer} Rolled skin {item} (chance: {chance})! Market order created. Please wait for the trade offer (up to 5 minutes)."));
+        assert!(!is_obsolete_copied_default("orders", "pool_created", "My custom {item} {chance}"));
         assert!(!defaults.orders.redeemed.to_ascii_lowercase().contains("order created"));
         assert_eq!(defaults.get_message(MSG_ORDERS_CREATED).unwrap(), &defaults.orders.created);
         assert_eq!(defaults.get_message("order_created").unwrap(), &defaults.orders.created);
@@ -771,7 +786,7 @@ mod tests {
         let defaults = CategorizedChatMessages::default();
         let visible = serde_json::to_value(&defaults).unwrap();
         assert!(visible.get("market_errors").is_some());
-        for key in ["pool_created", "failed_no_money_refund", "failed_no_money_penalty", "failed_filter_exhausted", "retrying", "manual_hold", "steam_account_action", "retry_available"] {
+        for key in ["failed_no_money_refund", "failed_no_money_penalty", "failed_filter_exhausted", "retrying", "manual_hold", "steam_account_action", "retry_available"] {
             assert!(visible["orders"].get(key).is_none(), "{key}");
             assert!(defaults.get_message(&format!("orders.{key}")).is_none(), "{key}");
         }
