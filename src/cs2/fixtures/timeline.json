@@ -1,0 +1,1793 @@
+[
+  {
+    "events": [],
+    "resets": [
+      "initial"
+    ],
+    "seq": 4
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 5
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 6
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "playing",
+          "previous": "menu"
+        },
+        "kind": "activity_changed"
+      }
+    ],
+    "resets": [
+      "map_context_changed"
+    ],
+    "seq": 7
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "live",
+          "previous": "warmup"
+        },
+        "kind": "map_phase_changed"
+      },
+      {
+        "kind": "match_started"
+      }
+    ],
+    "resets": [
+      "match_restarted"
+    ],
+    "seq": 8
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 100,
+          "delta": 100,
+          "previous": 0
+        },
+        "kind": "armor_changed"
+      },
+      {
+        "change": {
+          "current": 150,
+          "delta": -650,
+          "previous": 800
+        },
+        "kind": "money_changed"
+      },
+      {
+        "change": {
+          "current": 850,
+          "delta": 650,
+          "previous": 200
+        },
+        "kind": "equipment_value_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 9
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "live",
+          "previous": "freeze_time"
+        },
+        "kind": "round_phase_changed"
+      },
+      {
+        "kind": "round_started"
+      },
+      {
+        "change": {
+          "current": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife_t"
+          },
+          "previous": {
+            "category": "Pistol",
+            "finish": "default",
+            "name": "weapon_glock"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 10
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": {
+            "category": "Pistol",
+            "finish": "default",
+            "name": "weapon_glock"
+          },
+          "previous": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife_t"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 11
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife_t"
+          },
+          "previous": {
+            "category": "Pistol",
+            "finish": "default",
+            "name": "weapon_glock"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 12
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": {
+            "category": "Pistol",
+            "finish": "default",
+            "name": "weapon_glock"
+          },
+          "previous": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife_t"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 13
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 92,
+          "delta": -8,
+          "previous": 100
+        },
+        "kind": "health_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 14
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 82,
+          "delta": -10,
+          "previous": 92
+        },
+        "kind": "health_changed"
+      },
+      {
+        "change": {
+          "current": 95,
+          "delta": -5,
+          "previous": 100
+        },
+        "kind": "armor_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 15
+  },
+  {
+    "events": [
+      {
+        "capacity": null,
+        "clip": {
+          "current": 19,
+          "delta": -1,
+          "previous": 20
+        },
+        "kind": "ammo_changed",
+        "reserve": null,
+        "weapon": {
+          "category": "Pistol",
+          "finish": "default",
+          "name": "weapon_glock"
+        }
+      }
+    ],
+    "resets": [],
+    "seq": 16
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 73,
+          "delta": -9,
+          "previous": 82
+        },
+        "kind": "health_changed"
+      },
+      {
+        "change": {
+          "current": 92,
+          "delta": -3,
+          "previous": 95
+        },
+        "kind": "armor_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 17
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 59,
+          "delta": -14,
+          "previous": 73
+        },
+        "kind": "health_changed"
+      },
+      {
+        "capacity": null,
+        "clip": {
+          "current": 18,
+          "delta": -1,
+          "previous": 19
+        },
+        "kind": "ammo_changed",
+        "reserve": null,
+        "weapon": {
+          "category": "Pistol",
+          "finish": "default",
+          "name": "weapon_glock"
+        }
+      }
+    ],
+    "resets": [],
+    "seq": 18
+  },
+  {
+    "events": [
+      {
+        "capacity": null,
+        "clip": {
+          "current": 17,
+          "delta": -1,
+          "previous": 18
+        },
+        "kind": "ammo_changed",
+        "reserve": null,
+        "weapon": {
+          "category": "Pistol",
+          "finish": "default",
+          "name": "weapon_glock"
+        }
+      }
+    ],
+    "resets": [],
+    "seq": 19
+  },
+  {
+    "events": [
+      {
+        "capacity": null,
+        "clip": {
+          "current": 16,
+          "delta": -1,
+          "previous": 17
+        },
+        "kind": "ammo_changed",
+        "reserve": null,
+        "weapon": {
+          "category": "Pistol",
+          "finish": "default",
+          "name": "weapon_glock"
+        }
+      }
+    ],
+    "resets": [],
+    "seq": 20
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 0,
+          "delta": -59,
+          "previous": 59
+        },
+        "kind": "health_changed"
+      },
+      {
+        "change": {
+          "current": 0,
+          "delta": -92,
+          "previous": 92
+        },
+        "kind": "armor_changed"
+      },
+      {
+        "changes": [
+          {
+            "current": 1,
+            "delta": 1,
+            "previous": 0,
+            "stat": "deaths"
+          }
+        ],
+        "kind": "match_stats_changed"
+      },
+      {
+        "kind": "player_died",
+        "total": 1
+      }
+    ],
+    "resets": [],
+    "seq": 21
+  },
+  {
+    "events": [],
+    "resets": [
+      "local_identity_lost"
+    ],
+    "seq": 22
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 23
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 24
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 25
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 26
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 27
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 28
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 29
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 30
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 31
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "over",
+          "previous": "live"
+        },
+        "kind": "round_phase_changed"
+      },
+      {
+        "kind": "round_ended"
+      },
+      {
+        "ct": {
+          "current": 1,
+          "delta": 1,
+          "previous": 0
+        },
+        "kind": "score_changed",
+        "t": null
+      }
+    ],
+    "resets": [],
+    "seq": 32
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 33
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "freeze_time",
+          "previous": "over"
+        },
+        "kind": "round_phase_changed"
+      }
+    ],
+    "resets": [
+      "local_identity_restored"
+    ],
+    "seq": 34
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": {
+            "category": "Pistol",
+            "finish": "default",
+            "name": "weapon_glock"
+          },
+          "previous": {
+            "category": "C4",
+            "finish": "default",
+            "name": "weapon_c4"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 35
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife_t"
+          },
+          "previous": {
+            "category": "Pistol",
+            "finish": "default",
+            "name": "weapon_glock"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 36
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "live",
+          "previous": "freeze_time"
+        },
+        "kind": "round_phase_changed"
+      },
+      {
+        "kind": "round_started"
+      }
+    ],
+    "resets": [],
+    "seq": 37
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 74,
+          "delta": -26,
+          "previous": 100
+        },
+        "kind": "health_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 38
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": {
+            "category": "Pistol",
+            "finish": "default",
+            "name": "weapon_glock"
+          },
+          "previous": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife_t"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 39
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 0,
+          "delta": -74,
+          "previous": 74
+        },
+        "kind": "health_changed"
+      },
+      {
+        "changes": [
+          {
+            "current": 2,
+            "delta": 1,
+            "previous": 1,
+            "stat": "deaths"
+          }
+        ],
+        "kind": "match_stats_changed"
+      },
+      {
+        "kind": "player_died",
+        "total": 2
+      }
+    ],
+    "resets": [],
+    "seq": 40
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 21,
+          "delta": 21,
+          "previous": 0
+        },
+        "effect": "smoke",
+        "kind": "exposure_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 41
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 116,
+          "delta": 95,
+          "previous": 21
+        },
+        "effect": "smoke",
+        "kind": "exposure_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 42
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 247,
+          "delta": 131,
+          "previous": 116
+        },
+        "effect": "smoke",
+        "kind": "exposure_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 43
+  },
+  {
+    "events": [],
+    "resets": [
+      "observation_gap"
+    ],
+    "seq": 272
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 273
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 274
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 275
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 276
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 277
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 278
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 279
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 280
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "over",
+          "previous": "live"
+        },
+        "kind": "round_phase_changed"
+      },
+      {
+        "kind": "round_ended"
+      },
+      {
+        "ct": {
+          "current": 6,
+          "delta": 1,
+          "previous": 5
+        },
+        "kind": "score_changed",
+        "t": null
+      }
+    ],
+    "resets": [],
+    "seq": 281
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 282
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "freeze_time",
+          "previous": "over"
+        },
+        "kind": "round_phase_changed"
+      }
+    ],
+    "resets": [
+      "local_identity_restored"
+    ],
+    "seq": 283
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife_t"
+          },
+          "previous": {
+            "category": "Pistol",
+            "finish": "default",
+            "name": "weapon_glock"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 284
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": {
+            "category": "Pistol",
+            "finish": "default",
+            "name": "weapon_glock"
+          },
+          "previous": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife_t"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 285
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife_t"
+          },
+          "previous": {
+            "category": "Pistol",
+            "finish": "default",
+            "name": "weapon_glock"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 286
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "text_input",
+          "previous": "playing"
+        },
+        "kind": "activity_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 287
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "playing",
+          "previous": "text_input"
+        },
+        "kind": "activity_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 288
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 1000,
+          "delta": -2700,
+          "previous": 3700
+        },
+        "kind": "money_changed"
+      },
+      {
+        "change": {
+          "current": 2900,
+          "delta": 2700,
+          "previous": 200
+        },
+        "kind": "equipment_value_changed"
+      },
+      {
+        "change": {
+          "current": {
+            "category": "Rifle",
+            "finish": "default",
+            "name": "weapon_ak47"
+          },
+          "previous": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife_t"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 289
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 100,
+          "delta": 100,
+          "previous": 0
+        },
+        "kind": "armor_changed"
+      },
+      {
+        "change": {
+          "current": true,
+          "previous": false
+        },
+        "kind": "helmet_changed"
+      },
+      {
+        "change": {
+          "current": 0,
+          "delta": -1000,
+          "previous": 1000
+        },
+        "kind": "money_changed"
+      },
+      {
+        "change": {
+          "current": 3900,
+          "delta": 1000,
+          "previous": 2900
+        },
+        "kind": "equipment_value_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 290
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife_t"
+          },
+          "previous": {
+            "category": "Rifle",
+            "finish": "default",
+            "name": "weapon_ak47"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 291
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "live",
+          "previous": "freeze_time"
+        },
+        "kind": "round_phase_changed"
+      },
+      {
+        "kind": "round_started"
+      }
+    ],
+    "resets": [],
+    "seq": 292
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": {
+            "category": "Rifle",
+            "finish": "default",
+            "name": "weapon_ak47"
+          },
+          "previous": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife_t"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 293
+  },
+  {
+    "events": [
+      {
+        "capacity": null,
+        "clip": {
+          "current": 28,
+          "delta": -2,
+          "previous": 30
+        },
+        "kind": "ammo_changed",
+        "reserve": null,
+        "weapon": {
+          "category": "Rifle",
+          "finish": "default",
+          "name": "weapon_ak47"
+        }
+      }
+    ],
+    "resets": [],
+    "seq": 294
+  },
+  {
+    "events": [
+      {
+        "capacity": null,
+        "clip": {
+          "current": 26,
+          "delta": -2,
+          "previous": 28
+        },
+        "kind": "ammo_changed",
+        "reserve": null,
+        "weapon": {
+          "category": "Rifle",
+          "finish": "default",
+          "name": "weapon_ak47"
+        }
+      }
+    ],
+    "resets": [],
+    "seq": 295
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 0,
+          "delta": -100,
+          "previous": 100
+        },
+        "kind": "health_changed"
+      },
+      {
+        "change": {
+          "current": 0,
+          "delta": -100,
+          "previous": 100
+        },
+        "kind": "armor_changed"
+      },
+      {
+        "change": {
+          "current": false,
+          "previous": true
+        },
+        "kind": "helmet_changed"
+      },
+      {
+        "changes": [
+          {
+            "current": 8,
+            "delta": 1,
+            "previous": 7,
+            "stat": "deaths"
+          }
+        ],
+        "kind": "match_stats_changed"
+      },
+      {
+        "kind": "player_died",
+        "total": 8
+      }
+    ],
+    "resets": [],
+    "seq": 296
+  },
+  {
+    "events": [],
+    "resets": [
+      "local_identity_lost"
+    ],
+    "seq": 297
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 298
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 299
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 300
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 301
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 302
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 303
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 304
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 305
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "over",
+          "previous": "live"
+        },
+        "kind": "round_phase_changed"
+      },
+      {
+        "kind": "round_ended"
+      },
+      {
+        "ct": {
+          "current": 7,
+          "delta": 1,
+          "previous": 6
+        },
+        "kind": "score_changed",
+        "t": null
+      }
+    ],
+    "resets": [],
+    "seq": 306
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 307
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "freeze_time",
+          "previous": "over"
+        },
+        "kind": "round_phase_changed"
+      }
+    ],
+    "resets": [
+      "local_identity_restored"
+    ],
+    "seq": 308
+  },
+  {
+    "events": [],
+    "resets": [
+      "observation_gap"
+    ],
+    "seq": 524
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "over",
+          "previous": "live"
+        },
+        "kind": "round_phase_changed"
+      },
+      {
+        "kind": "round_ended"
+      },
+      {
+        "ct": {
+          "current": 2,
+          "delta": 1,
+          "previous": 1
+        },
+        "kind": "score_changed",
+        "t": null
+      },
+      {
+        "change": {
+          "current": 4650,
+          "delta": 3250,
+          "previous": 1400
+        },
+        "kind": "money_changed"
+      },
+      {
+        "changes": [
+          {
+            "current": 1,
+            "delta": 1,
+            "previous": 0,
+            "stat": "mvps"
+          }
+        ],
+        "kind": "match_stats_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 525
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife"
+          },
+          "previous": {
+            "category": "Pistol",
+            "finish": "default",
+            "name": "weapon_usp_silencer"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 526
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": {
+            "category": "Pistol",
+            "finish": "default",
+            "name": "weapon_usp_silencer"
+          },
+          "previous": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 527
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 4900,
+          "delta": 250,
+          "previous": 4650
+        },
+        "kind": "money_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 528
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife"
+          },
+          "previous": {
+            "category": "Pistol",
+            "finish": "default",
+            "name": "weapon_usp_silencer"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 529
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "freeze_time",
+          "previous": "over"
+        },
+        "kind": "round_phase_changed"
+      }
+    ],
+    "resets": [
+      "round_boundary"
+    ],
+    "seq": 530
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 100,
+          "delta": 100,
+          "previous": 0
+        },
+        "kind": "armor_changed"
+      },
+      {
+        "change": {
+          "current": true,
+          "previous": false
+        },
+        "kind": "helmet_changed"
+      },
+      {
+        "change": {
+          "current": 3900,
+          "delta": -1000,
+          "previous": 4900
+        },
+        "kind": "money_changed"
+      },
+      {
+        "change": {
+          "current": 1200,
+          "delta": 1000,
+          "previous": 200
+        },
+        "kind": "equipment_value_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 531
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 1000,
+          "delta": -2900,
+          "previous": 3900
+        },
+        "kind": "money_changed"
+      },
+      {
+        "change": {
+          "current": 4100,
+          "delta": 2900,
+          "previous": 1200
+        },
+        "kind": "equipment_value_changed"
+      },
+      {
+        "change": {
+          "current": {
+            "category": "Rifle",
+            "finish": "am_circuitboard_silver",
+            "name": "weapon_m4a1"
+          },
+          "previous": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 532
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife"
+          },
+          "previous": {
+            "category": "Rifle",
+            "finish": "am_circuitboard_silver",
+            "name": "weapon_m4a1"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 533
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 3900,
+          "delta": 2900,
+          "previous": 1000
+        },
+        "kind": "money_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 534
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 2200,
+          "delta": -1700,
+          "previous": 3900
+        },
+        "kind": "money_changed"
+      },
+      {
+        "change": {
+          "current": 2900,
+          "delta": -1200,
+          "previous": 4100
+        },
+        "kind": "equipment_value_changed"
+      },
+      {
+        "change": {
+          "current": {
+            "category": "SniperRifle",
+            "finish": "ht_red_edges_fineline",
+            "name": "weapon_ssg08"
+          },
+          "previous": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 535
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife"
+          },
+          "previous": {
+            "category": "SniperRifle",
+            "finish": "ht_red_edges_fineline",
+            "name": "weapon_ssg08"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 536
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "text_input",
+          "previous": "playing"
+        },
+        "kind": "activity_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 537
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "playing",
+          "previous": "text_input"
+        },
+        "kind": "activity_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 538
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "live",
+          "previous": "freeze_time"
+        },
+        "kind": "round_phase_changed"
+      },
+      {
+        "kind": "round_started"
+      }
+    ],
+    "resets": [],
+    "seq": 539
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": {
+            "category": "SniperRifle",
+            "finish": "ht_red_edges_fineline",
+            "name": "weapon_ssg08"
+          },
+          "previous": {
+            "category": "Knife",
+            "finish": "default",
+            "name": "weapon_knife"
+          }
+        },
+        "kind": "weapon_changed"
+      }
+    ],
+    "resets": [],
+    "seq": 540
+  },
+  {
+    "events": [
+      {
+        "capacity": null,
+        "clip": {
+          "current": 9,
+          "delta": -1,
+          "previous": 10
+        },
+        "kind": "ammo_changed",
+        "reserve": null,
+        "weapon": {
+          "category": "SniperRifle",
+          "finish": "ht_red_edges_fineline",
+          "name": "weapon_ssg08"
+        }
+      }
+    ],
+    "resets": [],
+    "seq": 541
+  },
+  {
+    "events": [
+      {
+        "capacity": null,
+        "clip": {
+          "current": 8,
+          "delta": -1,
+          "previous": 9
+        },
+        "kind": "ammo_changed",
+        "reserve": null,
+        "weapon": {
+          "category": "SniperRifle",
+          "finish": "ht_red_edges_fineline",
+          "name": "weapon_ssg08"
+        }
+      }
+    ],
+    "resets": [],
+    "seq": 542
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 72,
+          "delta": -28,
+          "previous": 100
+        },
+        "kind": "health_changed"
+      },
+      {
+        "change": {
+          "current": 99,
+          "delta": -1,
+          "previous": 100
+        },
+        "kind": "armor_changed"
+      },
+      {
+        "capacity": null,
+        "clip": {
+          "current": 7,
+          "delta": -1,
+          "previous": 8
+        },
+        "kind": "ammo_changed",
+        "reserve": null,
+        "weapon": {
+          "category": "SniperRifle",
+          "finish": "ht_red_edges_fineline",
+          "name": "weapon_ssg08"
+        }
+      }
+    ],
+    "resets": [],
+    "seq": 543
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": 0,
+          "delta": -72,
+          "previous": 72
+        },
+        "kind": "health_changed"
+      },
+      {
+        "change": {
+          "current": 0,
+          "delta": -99,
+          "previous": 99
+        },
+        "kind": "armor_changed"
+      },
+      {
+        "change": {
+          "current": false,
+          "previous": true
+        },
+        "kind": "helmet_changed"
+      },
+      {
+        "changes": [
+          {
+            "current": 13,
+            "delta": 1,
+            "previous": 12,
+            "stat": "deaths"
+          }
+        ],
+        "kind": "match_stats_changed"
+      },
+      {
+        "kind": "player_died",
+        "total": 13
+      }
+    ],
+    "resets": [],
+    "seq": 544
+  },
+  {
+    "events": [],
+    "resets": [
+      "local_identity_lost"
+    ],
+    "seq": 545
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 546
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 547
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 548
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 549
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 550
+  },
+  {
+    "events": [],
+    "resets": [
+      "observation_gap"
+    ],
+    "seq": 601
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 602
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 603
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 604
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 605
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 606
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 607
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 608
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 609
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 610
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 611
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 612
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 613
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 614
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 615
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 616
+  },
+  {
+    "events": [
+      {
+        "change": {
+          "current": "game_over",
+          "previous": "live"
+        },
+        "kind": "map_phase_changed"
+      },
+      {
+        "kind": "match_ended"
+      },
+      {
+        "change": {
+          "current": "freeze_time",
+          "previous": "live"
+        },
+        "kind": "round_phase_changed"
+      },
+      {
+        "ct": null,
+        "kind": "score_changed",
+        "t": {
+          "current": 13,
+          "delta": 1,
+          "previous": 12
+        }
+      }
+    ],
+    "resets": [],
+    "seq": 617
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 618
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 619
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 620
+  },
+  {
+    "events": [],
+    "resets": [
+      "map_context_changed",
+      "local_identity_restored"
+    ],
+    "seq": 621
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 622
+  },
+  {
+    "events": [],
+    "resets": [],
+    "seq": 623
+  }
+]

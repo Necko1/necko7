@@ -1,4 +1,5 @@
-//! Device trust boundary. No game event/reward processing is performed here.
+//! Device trust boundary. Authenticated snapshots enter the backend semantic pipeline.
+#![deny(clippy::all)]
 #[cfg(test)]
 #[path = "cs2_tests.rs"]
 mod integration_tests;
@@ -244,6 +245,18 @@ pub async fn revoke(
         .fetch_one(&mut *tx)
         .await
         .map_err(db)?;
+    let device: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM cs2_devices WHERE channel_id=$1 AND revoked_at IS NULL")
+            .bind(&auth.channel_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db)?;
+    // Same lock order as signed ingestion: process stripe before device row.
+    let _serial = if let Some(id) = device {
+        Some(state.cs2.serial(id).await)
+    } else {
+        None
+    };
     sqlx::query("DELETE FROM cs2_pairing_codes WHERE channel_id=$1")
         .bind(&auth.channel_id)
         .execute(&mut *tx)
@@ -251,6 +264,9 @@ pub async fn revoke(
         .map_err(db)?;
     sqlx::query("UPDATE cs2_devices SET revoked_at=now(),updated_at=now() WHERE channel_id=$1 AND revoked_at IS NULL").bind(auth.channel_id).execute(&mut *tx).await.map_err(db)?;
     tx.commit().await.map_err(db)?;
+    if let Some(id) = device {
+        state.cs2.remove(id);
+    }
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -290,6 +306,7 @@ async fn signed(
         return Err(bad("Expected JSON"));
     }
     let env: Envelope = serde_json::from_slice(&body).map_err(|_| bad("Invalid envelope"))?;
+    let _serial = state.cs2.serial(env.device_id).await;
     let mut tx = state.db.pool().begin().await.map_err(db)?;
     let device: Option<(Vec<u8>,String)> = sqlx::query_as("SELECT public_key,channel_id FROM cs2_devices WHERE id=$1 AND revoked_at IS NULL FOR UPDATE")
         .bind(env.device_id).fetch_optional(&mut *tx).await.map_err(db)?;
@@ -344,14 +361,21 @@ async fn signed(
     sqlx::query("UPDATE cs2_devices SET last_seen_at=CASE WHEN $3 THEN clock_timestamp() ELSE last_seen_at END,last_heartbeat_at=CASE WHEN $4 THEN clock_timestamp() ELSE last_heartbeat_at END,updated_at=clock_timestamp(),revoked_at=CASE WHEN $2 THEN clock_timestamp() ELSE revoked_at END WHERE id=$1")
         .bind(env.device_id).bind(revoking).bind(action.is_none()).bind(action == Some("heartbeat")).execute(&mut *tx).await.map_err(db)?;
     tx.commit().await.map_err(db)?;
-    // Future event processing boundary: authenticated env.gsi + channel.
-    // Do not log raw snapshots (which can contain local auth and personal data).
-    tracing::debug!(device_id=%env.device_id, channel_id=%channel, seq=env.seq, bytes=body.len(), revoking, "Accepted CS2 device message");
-    let log_payloads =
-        std::env::var("CS2_LOG_GSI_PAYLOADS").is_ok_and(|s| s.eq_ignore_ascii_case("true"));
-    if let Some(gsi) = env.gsi.filter(|_| log_payloads) {
-        let payload = serde_json::to_string_pretty(&sanitized_payload(gsi)).unwrap_or_default();
-        tracing::debug!(device_id=%env.device_id, channel_id=%channel, seq=env.seq, payload=%payload, "Accepted CS2 GSI");
+    tracing::debug!(device_id=%env.device_id, channel_id=%channel, session_id=%env.session_id, seq=env.seq, bytes=body.len(), revoking, "Accepted CS2 device message");
+    if revoking {
+        state.cs2.remove(env.device_id);
+    }
+    if let Some(gsi) = env.gsi {
+        let gsi = crate::cs2::sanitize(gsi);
+        let source = crate::cs2::model::Source {
+            device_id: env.device_id,
+            channel_id: channel,
+            session_id: env.session_id,
+            source_seq: env.seq,
+            timestamp: env.sent_at,
+        };
+        let transition = state.cs2.process(source.clone(), &gsi);
+        crate::cs2::log_transition(&source, &gsi, &transition);
     }
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
@@ -381,32 +405,13 @@ pub async fn heartbeat(
     signed(state, headers, body, Some("heartbeat")).await
 }
 
-// Defense in depth: even a signed caller cannot accidentally log local auth.
-fn sanitized_payload(mut value: serde_json::Value) -> serde_json::Value {
-    match &mut value {
-        serde_json::Value::Object(map) => {
-            map.remove("auth");
-            for child in map.values_mut() {
-                *child = sanitized_payload(child.take());
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for child in items {
-                *child = sanitized_payload(child.take());
-            }
-        }
-        _ => {}
-    }
-    value
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     #[test]
     fn debug_payload_never_contains_auth() {
-        let cleaned = sanitized_payload(
+        let cleaned = crate::cs2::sanitize(
             serde_json::json!({"auth":{"token":"secret"},"player":{"name":"Test"},"previously":{"auth":{"token":"old"}}}),
         );
         assert_eq!(cleaned["player"]["name"], "Test");

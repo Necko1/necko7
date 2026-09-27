@@ -1,0 +1,5 @@
+# Fixture provenance
+
+`live-gameplay.json`: all 127 complete accepted GSI JSON records in the supplied 2026-09-27 live `logs.txt`. Extracted from multiline `Accepted CS2 GSI ... seq=... payload=` records, stripping Docker service/time prefixes. No parse failures or truncated JSON records. The original seq and received_at fields are retained; device/channel/session IDs used by tests are synthetic (the old raw log omitted session_id). Provider and player Steam IDs are mapped consistently to fixture IDs, display names and clan tags replaced, all auth fields recursively removed. Gameplay values, deltas and missing structures are unchanged. Source file SHA-256: 1816117f4de94d244270ffae49859f17d08a430dc84d294ccd254ce0ecd6596d.
+
+This is four excerpts of a match with gaps 44–271, 309–523, 551–600, not a complete match recording. `timeline.json` is the reviewed complete semantic-event timeline (empty arrays included), not raw Valve expectations. Synthetic edge-case tests derive full snapshots from this capture and explicitly say which fields they alter; fabricated local kills are never described as observed local kills.

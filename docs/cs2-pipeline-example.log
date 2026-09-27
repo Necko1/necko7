@@ -1,0 +1,631 @@
+DEBUG cs2_pipeline{device_id=00000000-0000-0000-0000-000000000001 channel_id=fixture-channel session_id=00000000-0000-0000-0000-000000000002 seq=15}: necko7::cs2: RAW GSI payload={
+  "map": {
+    "mode": "competitive",
+    "name": "de_inferno",
+    "num_matches_to_win_series": 0,
+    "phase": "live",
+    "round": 0,
+    "team_ct": {
+      "consecutive_round_losses": 1,
+      "matches_won_this_series": 0,
+      "score": 0,
+      "timeouts_remaining": 3
+    },
+    "team_t": {
+      "consecutive_round_losses": 1,
+      "matches_won_this_series": 0,
+      "score": 0,
+      "timeouts_remaining": 3
+    }
+  },
+  "player": {
+    "activity": "playing",
+    "match_stats": {
+      "assists": 0,
+      "deaths": 0,
+      "kills": 0,
+      "mvps": 0,
+      "score": 0
+    },
+    "name": "fixture-player-1",
+    "observer_slot": 8,
+    "state": {
+      "armor": 95,
+      "burning": 0,
+      "equip_value": 850,
+      "flashed": 0,
+      "health": 82,
+      "helmet": false,
+      "money": 150,
+      "round_killhs": 0,
+      "round_kills": 0,
+      "smoked": 0
+    },
+    "steamid": "76561198000000001",
+    "team": "T",
+    "weapons": {
+      "weapon_0": {
+        "name": "weapon_knife_t",
+        "paintkit": "default",
+        "state": "holstered",
+        "type": "Knife"
+      },
+      "weapon_1": {
+        "ammo_clip": 20,
+        "ammo_clip_max": 20,
+        "ammo_reserve": 3,
+        "name": "weapon_glock",
+        "paintkit": "default",
+        "state": "active",
+        "type": "Pistol"
+      }
+    }
+  },
+  "previously": {
+    "player": {
+      "state": {
+        "armor": 100,
+        "health": 92
+      }
+    }
+  },
+  "provider": {
+    "appid": 730,
+    "name": "Counter-Strike: Global Offensive",
+    "steamid": "76561198000000001",
+    "timestamp": 1790522987,
+    "version": 14185
+  },
+  "round": {
+    "phase": "live"
+  }
+}
+DEBUG cs2_pipeline{device_id=00000000-0000-0000-0000-000000000001 channel_id=fixture-channel session_id=00000000-0000-0000-0000-000000000002 seq=15}: necko7::cs2: NORMALIZED STATE previous={
+  "game": {
+    "local_steam_id": "76561198000000001",
+    "app_id": 730,
+    "build": 14185,
+    "name": "Counter-Strike: Global Offensive",
+    "observed_at": 1790522986
+  },
+  "view": {
+    "identity": "local",
+    "steam_id": "76561198000000001",
+    "display_name": "fixture-player-1",
+    "clan": null,
+    "observer_slot": 8,
+    "activity": "playing"
+  },
+  "match": {
+    "map": "de_inferno",
+    "mode": "competitive",
+    "phase": "live",
+    "score": {
+      "ct": 0,
+      "t": 0
+    },
+    "ct": {
+      "consecutive_losses": 1,
+      "series_wins": 0,
+      "timeouts_remaining": 3
+    },
+    "t": {
+      "consecutive_losses": 1,
+      "series_wins": 0,
+      "timeouts_remaining": 3
+    },
+    "series_matches_to_win": 0
+  },
+  "round": {
+    "completed_rounds": 0,
+    "phase": "live",
+    "winner": null
+  },
+  "player": {
+    "steam_id": "76561198000000001",
+    "team": "t",
+    "health": 92,
+    "armor": 100,
+    "helmet": false,
+    "defuse_kit": null,
+    "money": 150,
+    "equipment_value": 850,
+    "flash": 0,
+    "smoke": 0,
+    "burning": 0,
+    "match_stats": {
+      "kills": 0,
+      "deaths": 0,
+      "assists": 0,
+      "mvps": 0,
+      "score": 0
+    },
+    "round_stats": {
+      "kills": 0,
+      "headshot_kills": 0
+    },
+    "weapons": [
+      {
+        "identity": {
+          "name": "weapon_glock",
+          "category": "Pistol",
+          "finish": "default"
+        },
+        "status": "active",
+        "ammo": {
+          "clip": 20,
+          "capacity": 20,
+          "reserve": 3
+        }
+      },
+      {
+        "identity": {
+          "name": "weapon_knife_t",
+          "category": "Knife",
+          "finish": "default"
+        },
+        "status": "holstered",
+        "ammo": {
+          "clip": null,
+          "capacity": null,
+          "reserve": null
+        }
+      }
+    ]
+  }
+} current={
+  "game": {
+    "local_steam_id": "76561198000000001",
+    "app_id": 730,
+    "build": 14185,
+    "name": "Counter-Strike: Global Offensive",
+    "observed_at": 1790522987
+  },
+  "view": {
+    "identity": "local",
+    "steam_id": "76561198000000001",
+    "display_name": "fixture-player-1",
+    "clan": null,
+    "observer_slot": 8,
+    "activity": "playing"
+  },
+  "match": {
+    "map": "de_inferno",
+    "mode": "competitive",
+    "phase": "live",
+    "score": {
+      "ct": 0,
+      "t": 0
+    },
+    "ct": {
+      "consecutive_losses": 1,
+      "series_wins": 0,
+      "timeouts_remaining": 3
+    },
+    "t": {
+      "consecutive_losses": 1,
+      "series_wins": 0,
+      "timeouts_remaining": 3
+    },
+    "series_matches_to_win": 0
+  },
+  "round": {
+    "completed_rounds": 0,
+    "phase": "live",
+    "winner": null
+  },
+  "player": {
+    "steam_id": "76561198000000001",
+    "team": "t",
+    "health": 82,
+    "armor": 95,
+    "helmet": false,
+    "defuse_kit": null,
+    "money": 150,
+    "equipment_value": 850,
+    "flash": 0,
+    "smoke": 0,
+    "burning": 0,
+    "match_stats": {
+      "kills": 0,
+      "deaths": 0,
+      "assists": 0,
+      "mvps": 0,
+      "score": 0
+    },
+    "round_stats": {
+      "kills": 0,
+      "headshot_kills": 0
+    },
+    "weapons": [
+      {
+        "identity": {
+          "name": "weapon_glock",
+          "category": "Pistol",
+          "finish": "default"
+        },
+        "status": "active",
+        "ammo": {
+          "clip": 20,
+          "capacity": 20,
+          "reserve": 3
+        }
+      },
+      {
+        "identity": {
+          "name": "weapon_knife_t",
+          "category": "Knife",
+          "finish": "default"
+        },
+        "status": "holstered",
+        "ammo": {
+          "clip": null,
+          "capacity": null,
+          "reserve": null
+        }
+      }
+    ]
+  }
+} resets=[]
+DEBUG cs2_pipeline{device_id=00000000-0000-0000-0000-000000000001 channel_id=fixture-channel session_id=00000000-0000-0000-0000-000000000002 seq=15}: necko7::cs2: NORMALIZED EVENTS events=[
+  {
+    "device_id": "00000000-0000-0000-0000-000000000001",
+    "channel_id": "fixture-channel",
+    "session_id": "00000000-0000-0000-0000-000000000002",
+    "source_seq": 15,
+    "timestamp": "2026-09-27T15:30:15Z",
+    "kind": "health_changed",
+    "change": {
+      "previous": 92,
+      "current": 82,
+      "delta": -10
+    },
+    "reliability": "RELIABLE",
+    "player": {
+      "steam_id": "76561198000000001",
+      "team": "t"
+    },
+    "match": {
+      "map": "de_inferno",
+      "mode": "competitive",
+      "phase": "live",
+      "score": {
+        "ct": 0,
+        "t": 0
+      },
+      "ct": {
+        "consecutive_losses": 1,
+        "series_wins": 0,
+        "timeouts_remaining": 3
+      },
+      "t": {
+        "consecutive_losses": 1,
+        "series_wins": 0,
+        "timeouts_remaining": 3
+      },
+      "series_matches_to_win": 0
+    },
+    "round": {
+      "completed_rounds": 0,
+      "phase": "live",
+      "winner": null
+    }
+  },
+  {
+    "device_id": "00000000-0000-0000-0000-000000000001",
+    "channel_id": "fixture-channel",
+    "session_id": "00000000-0000-0000-0000-000000000002",
+    "source_seq": 15,
+    "timestamp": "2026-09-27T15:30:15Z",
+    "kind": "armor_changed",
+    "change": {
+      "previous": 100,
+      "current": 95,
+      "delta": -5
+    },
+    "reliability": "RELIABLE",
+    "player": {
+      "steam_id": "76561198000000001",
+      "team": "t"
+    },
+    "match": {
+      "map": "de_inferno",
+      "mode": "competitive",
+      "phase": "live",
+      "score": {
+        "ct": 0,
+        "t": 0
+      },
+      "ct": {
+        "consecutive_losses": 1,
+        "series_wins": 0,
+        "timeouts_remaining": 3
+      },
+      "t": {
+        "consecutive_losses": 1,
+        "series_wins": 0,
+        "timeouts_remaining": 3
+      },
+      "series_matches_to_win": 0
+    },
+    "round": {
+      "completed_rounds": 0,
+      "phase": "live",
+      "winner": null
+    }
+  }
+]
+DEBUG cs2_pipeline{device_id=00000000-0000-0000-0000-000000000001 channel_id=fixture-channel session_id=00000000-0000-0000-0000-000000000002 seq=15}: necko7::cs2: CS2 event details={"kind":"health_changed","change":{"previous":92,"current":82,"delta":-10}}
+DEBUG cs2_pipeline{device_id=00000000-0000-0000-0000-000000000001 channel_id=fixture-channel session_id=00000000-0000-0000-0000-000000000002 seq=15}: necko7::cs2: CS2 event details={"kind":"armor_changed","change":{"previous":100,"current":95,"delta":-5}}
+DEBUG cs2_pipeline{device_id=00000000-0000-0000-0000-000000000001 channel_id=fixture-channel session_id=00000000-0000-0000-0000-000000000002 seq=16}: necko7::cs2: RAW GSI payload={
+  "map": {
+    "mode": "competitive",
+    "name": "de_inferno",
+    "num_matches_to_win_series": 0,
+    "phase": "live",
+    "round": 0,
+    "team_ct": {
+      "consecutive_round_losses": 1,
+      "matches_won_this_series": 0,
+      "score": 0,
+      "timeouts_remaining": 3
+    },
+    "team_t": {
+      "consecutive_round_losses": 1,
+      "matches_won_this_series": 0,
+      "score": 0,
+      "timeouts_remaining": 3
+    }
+  },
+  "player": {
+    "activity": "playing",
+    "match_stats": {
+      "assists": 0,
+      "deaths": 0,
+      "kills": 0,
+      "mvps": 0,
+      "score": 0
+    },
+    "name": "fixture-player-1",
+    "observer_slot": 8,
+    "state": {
+      "armor": 95,
+      "burning": 0,
+      "equip_value": 850,
+      "flashed": 0,
+      "health": 82,
+      "helmet": false,
+      "money": 150,
+      "round_killhs": 0,
+      "round_kills": 0,
+      "smoked": 0
+    },
+    "steamid": "76561198000000001",
+    "team": "T",
+    "weapons": {
+      "weapon_0": {
+        "name": "weapon_knife_t",
+        "paintkit": "default",
+        "state": "holstered",
+        "type": "Knife"
+      },
+      "weapon_1": {
+        "ammo_clip": 20,
+        "ammo_clip_max": 20,
+        "ammo_reserve": 3,
+        "name": "weapon_glock",
+        "paintkit": "default",
+        "state": "active",
+        "type": "Pistol"
+      }
+    }
+  },
+  "previously": {
+    "player": {
+      "state": {
+        "armor": 100,
+        "health": 92
+      }
+    }
+  },
+  "provider": {
+    "appid": 730,
+    "name": "Counter-Strike: Global Offensive",
+    "steamid": "76561198000000001",
+    "timestamp": 1790522987,
+    "version": 14185
+  },
+  "round": {
+    "phase": "live"
+  }
+}
+DEBUG cs2_pipeline{device_id=00000000-0000-0000-0000-000000000001 channel_id=fixture-channel session_id=00000000-0000-0000-0000-000000000002 seq=16}: necko7::cs2: NORMALIZED STATE previous={
+  "game": {
+    "local_steam_id": "76561198000000001",
+    "app_id": 730,
+    "build": 14185,
+    "name": "Counter-Strike: Global Offensive",
+    "observed_at": 1790522987
+  },
+  "view": {
+    "identity": "local",
+    "steam_id": "76561198000000001",
+    "display_name": "fixture-player-1",
+    "clan": null,
+    "observer_slot": 8,
+    "activity": "playing"
+  },
+  "match": {
+    "map": "de_inferno",
+    "mode": "competitive",
+    "phase": "live",
+    "score": {
+      "ct": 0,
+      "t": 0
+    },
+    "ct": {
+      "consecutive_losses": 1,
+      "series_wins": 0,
+      "timeouts_remaining": 3
+    },
+    "t": {
+      "consecutive_losses": 1,
+      "series_wins": 0,
+      "timeouts_remaining": 3
+    },
+    "series_matches_to_win": 0
+  },
+  "round": {
+    "completed_rounds": 0,
+    "phase": "live",
+    "winner": null
+  },
+  "player": {
+    "steam_id": "76561198000000001",
+    "team": "t",
+    "health": 82,
+    "armor": 95,
+    "helmet": false,
+    "defuse_kit": null,
+    "money": 150,
+    "equipment_value": 850,
+    "flash": 0,
+    "smoke": 0,
+    "burning": 0,
+    "match_stats": {
+      "kills": 0,
+      "deaths": 0,
+      "assists": 0,
+      "mvps": 0,
+      "score": 0
+    },
+    "round_stats": {
+      "kills": 0,
+      "headshot_kills": 0
+    },
+    "weapons": [
+      {
+        "identity": {
+          "name": "weapon_glock",
+          "category": "Pistol",
+          "finish": "default"
+        },
+        "status": "active",
+        "ammo": {
+          "clip": 20,
+          "capacity": 20,
+          "reserve": 3
+        }
+      },
+      {
+        "identity": {
+          "name": "weapon_knife_t",
+          "category": "Knife",
+          "finish": "default"
+        },
+        "status": "holstered",
+        "ammo": {
+          "clip": null,
+          "capacity": null,
+          "reserve": null
+        }
+      }
+    ]
+  }
+} current={
+  "game": {
+    "local_steam_id": "76561198000000001",
+    "app_id": 730,
+    "build": 14185,
+    "name": "Counter-Strike: Global Offensive",
+    "observed_at": 1790522987
+  },
+  "view": {
+    "identity": "local",
+    "steam_id": "76561198000000001",
+    "display_name": "fixture-player-1",
+    "clan": null,
+    "observer_slot": 8,
+    "activity": "playing"
+  },
+  "match": {
+    "map": "de_inferno",
+    "mode": "competitive",
+    "phase": "live",
+    "score": {
+      "ct": 0,
+      "t": 0
+    },
+    "ct": {
+      "consecutive_losses": 1,
+      "series_wins": 0,
+      "timeouts_remaining": 3
+    },
+    "t": {
+      "consecutive_losses": 1,
+      "series_wins": 0,
+      "timeouts_remaining": 3
+    },
+    "series_matches_to_win": 0
+  },
+  "round": {
+    "completed_rounds": 0,
+    "phase": "live",
+    "winner": null
+  },
+  "player": {
+    "steam_id": "76561198000000001",
+    "team": "t",
+    "health": 82,
+    "armor": 95,
+    "helmet": false,
+    "defuse_kit": null,
+    "money": 150,
+    "equipment_value": 850,
+    "flash": 0,
+    "smoke": 0,
+    "burning": 0,
+    "match_stats": {
+      "kills": 0,
+      "deaths": 0,
+      "assists": 0,
+      "mvps": 0,
+      "score": 0
+    },
+    "round_stats": {
+      "kills": 0,
+      "headshot_kills": 0
+    },
+    "weapons": [
+      {
+        "identity": {
+          "name": "weapon_glock",
+          "category": "Pistol",
+          "finish": "default"
+        },
+        "status": "active",
+        "ammo": {
+          "clip": 20,
+          "capacity": 20,
+          "reserve": 3
+        }
+      },
+      {
+        "identity": {
+          "name": "weapon_knife_t",
+          "category": "Knife",
+          "finish": "default"
+        },
+        "status": "holstered",
+        "ammo": {
+          "clip": null,
+          "capacity": null,
+          "reserve": null
+        }
+      }
+    ]
+  }
+} resets=[]
+DEBUG cs2_pipeline{device_id=00000000-0000-0000-0000-000000000001 channel_id=fixture-channel session_id=00000000-0000-0000-0000-000000000002 seq=16}: necko7::cs2: NORMALIZED EVENTS events=[]
+DEBUG cs2_pipeline{device_id=00000000-0000-0000-0000-000000000001 channel_id=fixture-channel session_id=00000000-0000-0000-0000-000000000002 seq=17}: necko7::cs2: CS2 event details={"kind":"health_changed","change":{"previous":82,"current":92,"delta":10}}
+DEBUG cs2_pipeline{device_id=00000000-0000-0000-0000-000000000001 channel_id=fixture-channel session_id=00000000-0000-0000-0000-000000000002 seq=17}: necko7::cs2: CS2 event details={"kind":"armor_changed","change":{"previous":95,"current":100,"delta":5}}

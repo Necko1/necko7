@@ -51,6 +51,7 @@ pub struct AppState {
     pub active_broadcaster_tasks: Mutex<HashMap<String, CancellationToken>>,
     pub twitch_user_cache: RwLock<HashMap<String, (std::time::Instant, Arc<crate::helix::api::users::UserInfo>)>>,
 
+    pub cs2: Arc<crate::cs2::Pipeline>,
     pub db: Db,
     pub channel_logger: Arc<crate::channel_log::ChannelLogger>,
 
@@ -83,6 +84,20 @@ impl AppState {
         let shutdown_token = CancellationToken::new();
         let channel_logger = crate::channel_log::ChannelLogger::new(db.clone(), shutdown_token.clone());
 
+        let cs2 = Arc::new(crate::cs2::Pipeline::default());
+        let tasks = TaskTracker::new();
+        let cleanup_cs2 = cs2.clone();
+        let cleanup_shutdown = shutdown_token.clone();
+        tasks.spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                tokio::select! {
+                    _ = cleanup_shutdown.cancelled() => break,
+                    _ = interval.tick() => cleanup_cs2.expire(),
+                }
+            }
+        });
+
         Ok(Arc::new(Self {
             helix_client: HelixClient::new(client_id.clone(), client_secret.clone()),
             market_client: MarketClient::new(),
@@ -100,11 +115,12 @@ impl AppState {
             chat_messages: RwLock::new(chat_messages_map),
             active_broadcaster_tasks: Mutex::new(HashMap::new()),
             twitch_user_cache: RwLock::new(HashMap::new()),
+            cs2,
             db,
             channel_logger,
             app_initialized: AtomicBool::new(app_initialized),
             shutdown_token,
-            tasks: TaskTracker::new(),
+            tasks,
         }))
     }
 

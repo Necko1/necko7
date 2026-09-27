@@ -67,6 +67,7 @@ async fn database_api_security() {
         sqlx::query("INSERT INTO sessions(session_id,user_id,expires_at) VALUES($1,$2,now()+interval '1 hour')").bind(cookie).bind(id).execute(db.pool()).await.unwrap();
     }
     let router = router().with_state(state.clone());
+    assert!(!state.cs2.contains(Uuid::nil()));
     let base = format!("/broadcasters/{channel}/cs2");
     let code_path = format!("{base}/pairing");
     assert_eq!(
@@ -218,6 +219,8 @@ async fn database_api_security() {
         .status(),
         StatusCode::BAD_REQUEST
     );
+    let device_id: Uuid = serde_json::from_value(paired["device_id"].clone()).unwrap();
+    assert!(!state.cs2.contains(device_id));
     // Heartbeats work without CS2 and must not masquerade as GSI activity.
     let heartbeat_session = Uuid::new_v4();
     let heartbeat_body = serde_json::to_vec(&serde_json::json!({"device_id":paired["device_id"],"session_id":heartbeat_session,"seq":1,"sent_at":Utc::now(),"action":"heartbeat"})).unwrap();
@@ -276,16 +279,33 @@ async fn database_api_security() {
         .status(),
         StatusCode::BAD_REQUEST
     );
+    assert!(
+        !state.cs2.contains(device_id),
+        "Heartbeats must not create game state"
+    );
     let session = Uuid::new_v4();
     let body = |seq, session, sent_at| {
         serde_json::to_vec(&serde_json::json!({"device_id":paired["device_id"],"session_id":session,"seq":seq,"sent_at":sent_at,"gsi":{"provider":{"appid":730}}})).unwrap()
     };
-    let original = body(1, session, Utc::now());
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../../cs2/fixtures/live-gameplay.json")).unwrap();
+    let game = fixture
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["seq"] == 14)
+        .unwrap()["payload"]
+        .clone();
+    let original = serde_json::to_vec(&serde_json::json!({"device_id":device_id,"session_id":session,"seq":1,"sent_at":Utc::now(),"gsi":game})).unwrap();
     assert_eq!(
         request(&router, "POST", "/cs2/gsi", None, original.clone(), None)
             .await
             .status(),
         StatusCode::UNAUTHORIZED
+    );
+    assert!(
+        !state.cs2.contains(device_id),
+        "Unauthenticated payload must not enter normalizer"
     );
     // Verify that whitespace is part of the signature, including through Axum's raw Bytes extractor.
     let sig = STANDARD.encode(key.sign(&original).to_bytes());
@@ -301,6 +321,10 @@ async fn database_api_security() {
     assert_eq!(
         router.clone().oneshot(req).await.unwrap().status(),
         StatusCode::UNAUTHORIZED
+    );
+    assert!(
+        !state.cs2.contains(device_id),
+        "Tampered payload must not enter normalizer"
     );
     let (a, b) = tokio::join!(
         request(
@@ -325,6 +349,9 @@ async fn database_api_security() {
             + usize::from(b.status() == StatusCode::NO_CONTENT),
         1
     );
+    let (normalized_source, normalized) = state.cs2.snapshot(device_id).unwrap();
+    assert_eq!(normalized_source.source_seq, 1);
+    assert_eq!(normalized.player.unwrap().health, Some(92));
     assert_eq!(
         request(
             &router,
@@ -350,6 +377,11 @@ async fn database_api_security() {
         .await
         .status(),
         StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        state.cs2.snapshot(device_id).unwrap().0.source_seq,
+        3,
+        "Replay must not roll normalized state back"
     );
     assert_eq!(
         request(
@@ -417,6 +449,10 @@ async fn database_api_security() {
         .status(),
         StatusCode::NO_CONTENT
     );
+    assert!(
+        !state.cs2.contains(device_id),
+        "Signed unpair removes semantic state"
+    );
     assert_eq!(
         request(
             &router,
@@ -463,6 +499,15 @@ async fn database_api_security() {
         .await,
     )
     .await;
+    let device_id: Uuid = serde_json::from_value(paired["device_id"].clone()).unwrap();
+    let gsi = serde_json::to_vec(&serde_json::json!({"device_id":device_id,"session_id":Uuid::new_v4(),"seq":1,"sent_at":Utc::now(),"gsi":game})).unwrap();
+    assert_eq!(
+        request(&router, "POST", "/cs2/gsi", None, gsi, Some(&key))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(state.cs2.contains(device_id));
     assert_eq!(
         request(&router, "DELETE", &base, Some(owner_cookie), vec![], None)
             .await
@@ -475,6 +520,10 @@ async fn database_api_security() {
             .await
             .status(),
         StatusCode::UNAUTHORIZED
+    );
+    assert!(
+        !state.cs2.contains(device_id),
+        "Dashboard revocation removes state; rejected GSI cannot recreate it"
     );
     let revoked_heartbeat = serde_json::to_vec(&serde_json::json!({"device_id":paired["device_id"],"session_id":Uuid::new_v4(),"seq":1,"sent_at":Utc::now(),"action":"heartbeat"})).unwrap();
     assert_eq!(

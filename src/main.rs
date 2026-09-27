@@ -1,4 +1,5 @@
 pub mod state;
+pub mod cs2;
 pub mod db;
 pub mod helix;
 pub mod api;
