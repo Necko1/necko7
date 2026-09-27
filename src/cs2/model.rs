@@ -11,7 +11,7 @@ macro_rules! vocabulary {
 }
 vocabulary!(Team { Ct => "ct", T => "t" });
 vocabulary!(Activity { Menu => "menu", Playing => "playing", TextInput => "text_input" });
-vocabulary!(MatchPhase { Warmup => "warmup", Live => "live", GameOver => "game_over" });
+vocabulary!(MatchPhase { Warmup => "warmup", Live => "live", Intermission => "intermission", GameOver => "game_over" });
 vocabulary!(RoundPhase { FreezeTime => "freeze_time", Live => "live", Over => "over" });
 vocabulary!(WeaponStatus { Active => "active", Holstered => "holstered", Reloading => "reloading" });
 vocabulary!(Identity { Local => "local", Spectator => "spectator", Unknown => "unknown" });

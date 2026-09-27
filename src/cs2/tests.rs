@@ -504,3 +504,103 @@ fn missing_match_phase_breaks_combat_baseline_until_context_is_known_again() {
     let (_, b) = combat();
     assert!(n.apply(source(3), &b).events.is_empty());
 }
+
+fn wingman_records() -> Vec<Record> {
+    serde_json::from_str(include_str!("fixtures/wingman-two-rounds.json")).unwrap()
+}
+
+#[test]
+fn complete_wingman_match_preserves_halftime_kill_and_side_switch() {
+    let mut n = Normalizer::default();
+    let mut timeline = Vec::new();
+    let mut kills = 0;
+    let mut starts = 0;
+    let mut ends = 0;
+    for r in wingman_records() {
+        let t = n.apply(
+            Source {
+                timestamp: r.received_at,
+                ..source(r.seq)
+            },
+            &r.payload,
+        );
+        for event in &t.events {
+            match event.event {
+                EventKind::PlayerKill { count, .. } => kills += count,
+                EventKind::MatchStarted => starts += 1,
+                EventKind::MatchEnded => ends += 1,
+                _ => {}
+            }
+        }
+        if r.seq == 3623 {
+            assert_eq!(
+                serde_json::to_value(t.current.r#match.as_ref().unwrap().phase).unwrap(),
+                json!("intermission")
+            );
+            assert!(
+                t.resets.is_empty(),
+                "Halftime preserves the ending round's counters"
+            );
+        }
+        if r.seq == 3625 {
+            assert!(t.resets.contains(&ResetReason::TeamChanged));
+            assert_eq!(
+                t.current.player.as_ref().unwrap().match_stats.kills,
+                Some(2)
+            );
+            assert_eq!(
+                t.current.player.as_ref().unwrap().round_stats.kills,
+                Some(0)
+            );
+        }
+        if r.seq == 3633 {
+            assert_eq!(
+                t.current.r#match.as_ref().unwrap().score,
+                Score {
+                    ct: Some(1),
+                    t: Some(1)
+                }
+            );
+            assert!(names(&t).contains(&"match_ended".into()));
+            assert!(names(&t).contains(&"player_died".into()));
+            assert!(!names(&t).contains(&"round_started".into()));
+        }
+        timeline.push(json!({"seq":r.seq,"events":kinds(&t)}));
+    }
+    assert_eq!((kills, starts, ends), (2, 1, 1));
+    let expected: Value =
+        serde_json::from_str(include_str!("fixtures/wingman-timeline.json")).unwrap();
+    assert_eq!(serde_json::to_value(timeline).unwrap(), expected);
+}
+
+#[test]
+fn halftime_keeps_identity_guards_and_equivalent_payload_deduplication() {
+    let rs = wingman_records();
+    let a = &rs.iter().find(|r| r.seq == 3622).unwrap().payload;
+    let b = &rs.iter().find(|r| r.seq == 3623).unwrap().payload;
+    let mut n = Normalizer::default();
+    n.apply(source(1), a);
+    let t = n.apply(source(2), b);
+    assert!(names(&t).contains(&"player_kill".into()));
+    assert!(n.apply(source(3), b).events.is_empty());
+    let mut spectated = b.clone();
+    spectated["player"]["steamid"] = json!("76561198000000002");
+    let mut n = Normalizer::default();
+    n.apply(source(1), a);
+    let t = n.apply(source(2), &spectated);
+    assert_eq!(
+        names(&t),
+        [
+            "map_phase_changed",
+            "round_phase_changed",
+            "round_ended",
+            "score_changed"
+        ]
+    );
+    assert!(t.current.player.is_none());
+    let mut unknown = b.clone();
+    unknown["map"]["phase"] = json!("unrecognized_future_phase");
+    let mut n = Normalizer::default();
+    n.apply(source(1), a);
+    assert!(n.apply(source(2), &unknown).events.is_empty());
+}

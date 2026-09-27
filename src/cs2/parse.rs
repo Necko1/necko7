@@ -38,6 +38,7 @@ fn match_phase(value: &Value) -> Option<MatchPhase> {
     match value.as_str()? {
         "warmup" => Some(MatchPhase::Warmup),
         "live" => Some(MatchPhase::Live),
+        "intermission" => Some(MatchPhase::Intermission),
         "gameover" => Some(MatchPhase::GameOver),
         _ => None,
     }

@@ -1,0 +1,2452 @@
+[
+  {
+    "seq": 3608,
+    "received_at": "2026-09-27T18:32:59.887950139Z",
+    "payload": {
+      "player": {
+        "activity": "menu",
+        "name": "fixture-player-1",
+        "steamid": "76561198000000001"
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790533974,
+        "version": 14185
+      }
+    }
+  },
+  {
+    "seq": 3609,
+    "received_at": "2026-09-27T18:33:07.410813296Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "warmup",
+        "round": 0,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "previously": {
+        "player": true
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790533981,
+        "version": 14185
+      }
+    }
+  },
+  {
+    "seq": 3610,
+    "received_at": "2026-09-27T18:33:07.838357945Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 0,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "textinput",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 0,
+          "mvps": 0,
+          "score": 0
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 2,
+        "state": {
+          "armor": 0,
+          "burning": 0,
+          "equip_value": 200,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 800,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "T",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife_t",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 20,
+            "ammo_clip_max": 20,
+            "ammo_reserve": 3,
+            "name": "weapon_glock",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Pistol"
+          },
+          "weapon_2": {
+            "name": "weapon_c4",
+            "paintkit": "default",
+            "state": "active",
+            "type": "C4"
+          }
+        }
+      },
+      "previously": {
+        "map": {
+          "phase": "warmup"
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790533982,
+        "version": 14185
+      },
+      "round": {
+        "phase": "freezetime"
+      }
+    }
+  },
+  {
+    "seq": 3611,
+    "received_at": "2026-09-27T18:33:11.449938832Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 0,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 0,
+          "mvps": 0,
+          "score": 0
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 2,
+        "state": {
+          "armor": 0,
+          "burning": 0,
+          "equip_value": 200,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 800,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "T",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife_t",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 20,
+            "ammo_clip_max": 20,
+            "ammo_reserve": 3,
+            "name": "weapon_glock",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Pistol"
+          },
+          "weapon_2": {
+            "name": "weapon_c4",
+            "paintkit": "default",
+            "state": "active",
+            "type": "C4"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "activity": "textinput"
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790533985,
+        "version": 14185
+      },
+      "round": {
+        "phase": "freezetime"
+      }
+    }
+  },
+  {
+    "seq": 3612,
+    "received_at": "2026-09-27T18:33:11.930755377Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 0,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "textinput",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 0,
+          "mvps": 0,
+          "score": 0
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 2,
+        "state": {
+          "armor": 0,
+          "burning": 0,
+          "equip_value": 200,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 800,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "T",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife_t",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 20,
+            "ammo_clip_max": 20,
+            "ammo_reserve": 3,
+            "name": "weapon_glock",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Pistol"
+          },
+          "weapon_2": {
+            "name": "weapon_c4",
+            "paintkit": "default",
+            "state": "active",
+            "type": "C4"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "activity": "playing"
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790533986,
+        "version": 14185
+      },
+      "round": {
+        "phase": "freezetime"
+      }
+    }
+  },
+  {
+    "seq": 3613,
+    "received_at": "2026-09-27T18:33:13.531645614Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 0,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 0,
+          "mvps": 0,
+          "score": 0
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 2,
+        "state": {
+          "armor": 0,
+          "burning": 0,
+          "equip_value": 200,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 800,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "T",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife_t",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 20,
+            "ammo_clip_max": 20,
+            "ammo_reserve": 3,
+            "name": "weapon_glock",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Pistol"
+          },
+          "weapon_2": {
+            "name": "weapon_c4",
+            "paintkit": "default",
+            "state": "active",
+            "type": "C4"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "activity": "textinput"
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790533987,
+        "version": 14185
+      },
+      "round": {
+        "phase": "freezetime"
+      }
+    }
+  },
+  {
+    "seq": 3614,
+    "received_at": "2026-09-27T18:33:13.805584525Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 0,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "textinput",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 0,
+          "mvps": 0,
+          "score": 0
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 2,
+        "state": {
+          "armor": 0,
+          "burning": 0,
+          "equip_value": 200,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 800,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "T",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife_t",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 20,
+            "ammo_clip_max": 20,
+            "ammo_reserve": 3,
+            "name": "weapon_glock",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Pistol"
+          },
+          "weapon_2": {
+            "name": "weapon_c4",
+            "paintkit": "default",
+            "state": "active",
+            "type": "C4"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "activity": "playing"
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790533988,
+        "version": 14185
+      },
+      "round": {
+        "phase": "freezetime"
+      }
+    }
+  },
+  {
+    "seq": 3615,
+    "received_at": "2026-09-27T18:33:16.731797715Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 0,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 0,
+          "mvps": 0,
+          "score": 0
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 2,
+        "state": {
+          "armor": 0,
+          "burning": 0,
+          "equip_value": 200,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 800,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "T",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife_t",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 20,
+            "ammo_clip_max": 20,
+            "ammo_reserve": 3,
+            "name": "weapon_glock",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Pistol"
+          },
+          "weapon_2": {
+            "name": "weapon_c4",
+            "paintkit": "default",
+            "state": "active",
+            "type": "C4"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "activity": "textinput"
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790533991,
+        "version": 14185
+      },
+      "round": {
+        "phase": "freezetime"
+      }
+    }
+  },
+  {
+    "seq": 3616,
+    "received_at": "2026-09-27T18:33:19.220012243Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 0,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 0,
+          "mvps": 0,
+          "score": 0
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 2,
+        "state": {
+          "armor": 100,
+          "burning": 0,
+          "equip_value": 850,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 150,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "T",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife_t",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 20,
+            "ammo_clip_max": 20,
+            "ammo_reserve": 3,
+            "name": "weapon_glock",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Pistol"
+          },
+          "weapon_2": {
+            "name": "weapon_c4",
+            "paintkit": "default",
+            "state": "active",
+            "type": "C4"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "state": {
+            "armor": 0,
+            "equip_value": 200,
+            "money": 800
+          }
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790533993,
+        "version": 14185
+      },
+      "round": {
+        "phase": "freezetime"
+      }
+    }
+  },
+  {
+    "seq": 3617,
+    "received_at": "2026-09-27T18:33:23.234963871Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 0,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 0,
+          "mvps": 0,
+          "score": 0
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 2,
+        "state": {
+          "armor": 100,
+          "burning": 0,
+          "equip_value": 850,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 150,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "T",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife_t",
+            "paintkit": "default",
+            "state": "active",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 20,
+            "ammo_clip_max": 20,
+            "ammo_reserve": 3,
+            "name": "weapon_glock",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Pistol"
+          },
+          "weapon_2": {
+            "name": "weapon_c4",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "C4"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "weapons": {
+            "weapon_0": {
+              "state": "holstered"
+            },
+            "weapon_2": {
+              "state": "active"
+            }
+          }
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790533997,
+        "version": 14185
+      },
+      "round": {
+        "phase": "freezetime"
+      }
+    }
+  },
+  {
+    "seq": 3618,
+    "received_at": "2026-09-27T18:33:24.257414422Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 0,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 0,
+          "mvps": 0,
+          "score": 0
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 2,
+        "state": {
+          "armor": 100,
+          "burning": 0,
+          "equip_value": 850,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 150,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "T",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife_t",
+            "paintkit": "default",
+            "state": "active",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 20,
+            "ammo_clip_max": 20,
+            "ammo_reserve": 3,
+            "name": "weapon_glock",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Pistol"
+          },
+          "weapon_2": {
+            "name": "weapon_c4",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "C4"
+          }
+        }
+      },
+      "previously": {
+        "round": {
+          "phase": "freezetime"
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790533998,
+        "version": 14185
+      },
+      "round": {
+        "phase": "live"
+      }
+    }
+  },
+  {
+    "seq": 3619,
+    "received_at": "2026-09-27T18:33:28.580197802Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 0,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 0,
+          "mvps": 0,
+          "score": 0
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 2,
+        "state": {
+          "armor": 100,
+          "burning": 0,
+          "equip_value": 850,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 150,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "T",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife_t",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 20,
+            "ammo_clip_max": 20,
+            "ammo_reserve": 3,
+            "name": "weapon_glock",
+            "paintkit": "default",
+            "state": "active",
+            "type": "Pistol"
+          },
+          "weapon_2": {
+            "name": "weapon_c4",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "C4"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "weapons": {
+            "weapon_0": {
+              "state": "active"
+            },
+            "weapon_1": {
+              "state": "holstered"
+            }
+          }
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790534002,
+        "version": 14185
+      },
+      "round": {
+        "phase": "live"
+      }
+    }
+  },
+  {
+    "seq": 3620,
+    "received_at": "2026-09-27T18:33:33.263425245Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 0,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 0,
+          "mvps": 0,
+          "score": 0
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 2,
+        "state": {
+          "armor": 100,
+          "burning": 0,
+          "equip_value": 850,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 150,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "T",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife_t",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 19,
+            "ammo_clip_max": 20,
+            "ammo_reserve": 3,
+            "name": "weapon_glock",
+            "paintkit": "default",
+            "state": "active",
+            "type": "Pistol"
+          },
+          "weapon_2": {
+            "name": "weapon_c4",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "C4"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "weapons": {
+            "weapon_1": {
+              "ammo_clip": 20
+            }
+          }
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790534007,
+        "version": 14185
+      },
+      "round": {
+        "phase": "live"
+      }
+    }
+  },
+  {
+    "seq": 3621,
+    "received_at": "2026-09-27T18:33:33.484696457Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 0,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 0,
+          "mvps": 0,
+          "score": 0
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 2,
+        "state": {
+          "armor": 100,
+          "burning": 0,
+          "equip_value": 850,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 150,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "T",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife_t",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 18,
+            "ammo_clip_max": 20,
+            "ammo_reserve": 3,
+            "name": "weapon_glock",
+            "paintkit": "default",
+            "state": "active",
+            "type": "Pistol"
+          },
+          "weapon_2": {
+            "name": "weapon_c4",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "C4"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "weapons": {
+            "weapon_1": {
+              "ammo_clip": 19
+            }
+          }
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790534007,
+        "version": 14185
+      },
+      "round": {
+        "phase": "live"
+      }
+    }
+  },
+  {
+    "seq": 3622,
+    "received_at": "2026-09-27T18:33:33.736117556Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 0,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 1,
+          "mvps": 0,
+          "score": 2
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 2,
+        "state": {
+          "armor": 100,
+          "burning": 0,
+          "equip_value": 850,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 450,
+          "round_killhs": 1,
+          "round_kills": 1,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "T",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife_t",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 17,
+            "ammo_clip_max": 20,
+            "ammo_reserve": 3,
+            "name": "weapon_glock",
+            "paintkit": "default",
+            "state": "active",
+            "type": "Pistol"
+          },
+          "weapon_2": {
+            "name": "weapon_c4",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "C4"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "match_stats": {
+            "kills": 0,
+            "score": 0
+          },
+          "state": {
+            "money": 150,
+            "round_killhs": 0,
+            "round_kills": 0
+          },
+          "weapons": {
+            "weapon_1": {
+              "ammo_clip": 18
+            }
+          }
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790534008,
+        "version": 14185
+      },
+      "round": {
+        "phase": "live"
+      }
+    }
+  },
+  {
+    "seq": 3623,
+    "received_at": "2026-09-27T18:33:34.071663292Z",
+    "payload": {
+      "added": {
+        "round": {
+          "win_team": true
+        }
+      },
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "intermission",
+        "round": 1,
+        "team_ct": {
+          "consecutive_round_losses": 1,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 1,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 2,
+          "mvps": 1,
+          "score": 4
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 2,
+        "state": {
+          "armor": 100,
+          "burning": 0,
+          "equip_value": 850,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 3500,
+          "round_killhs": 2,
+          "round_kills": 2,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "T",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife_t",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 16,
+            "ammo_clip_max": 20,
+            "ammo_reserve": 3,
+            "name": "weapon_glock",
+            "paintkit": "default",
+            "state": "active",
+            "type": "Pistol"
+          },
+          "weapon_2": {
+            "name": "weapon_c4",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "C4"
+          }
+        }
+      },
+      "previously": {
+        "map": {
+          "phase": "live",
+          "round": 0,
+          "team_ct": {
+            "consecutive_round_losses": 0
+          },
+          "team_t": {
+            "score": 0
+          }
+        },
+        "player": {
+          "match_stats": {
+            "kills": 1,
+            "mvps": 0,
+            "score": 2
+          },
+          "state": {
+            "money": 450,
+            "round_killhs": 1,
+            "round_kills": 1
+          },
+          "weapons": {
+            "weapon_1": {
+              "ammo_clip": 17
+            }
+          }
+        },
+        "round": {
+          "phase": "live"
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790534008,
+        "version": 14185
+      },
+      "round": {
+        "phase": "over",
+        "win_team": "T"
+      }
+    }
+  },
+  {
+    "seq": 3624,
+    "received_at": "2026-09-27T18:33:34.809939586Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "intermission",
+        "round": 1,
+        "team_ct": {
+          "consecutive_round_losses": 1,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 1,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 2,
+          "mvps": 1,
+          "score": 4
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 2,
+        "state": {
+          "armor": 100,
+          "burning": 0,
+          "equip_value": 850,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 3500,
+          "round_killhs": 2,
+          "round_kills": 2,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "T",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife_t",
+            "paintkit": "default",
+            "state": "active",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "name": "weapon_c4",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "C4"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "weapons": {
+            "weapon_0": {
+              "state": "holstered"
+            },
+            "weapon_1": {
+              "ammo_clip": 16,
+              "ammo_clip_max": 20,
+              "ammo_reserve": 3,
+              "name": "weapon_glock",
+              "state": "active",
+              "type": "Pistol"
+            },
+            "weapon_2": {
+              "name": "weapon_c4",
+              "paintkit": "default",
+              "state": "holstered",
+              "type": "C4"
+            }
+          }
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790534009,
+        "version": 14185
+      },
+      "round": {
+        "phase": "over",
+        "win_team": "T"
+      }
+    }
+  },
+  {
+    "seq": 3625,
+    "received_at": "2026-09-27T18:33:42.626509877Z",
+    "payload": {
+      "added": {
+        "player": {
+          "weapons": {
+            "weapon_1": {
+              "ammo_clip": true,
+              "ammo_clip_max": true,
+              "ammo_reserve": true
+            }
+          }
+        }
+      },
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 1,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 1,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 2,
+          "mvps": 1,
+          "score": 4
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 0,
+        "state": {
+          "armor": 0,
+          "burning": 0,
+          "equip_value": 200,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 800,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "CT",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 12,
+            "ammo_clip_max": 12,
+            "ammo_reserve": 2,
+            "name": "weapon_usp_silencer",
+            "paintkit": "default",
+            "state": "active",
+            "type": "Pistol"
+          }
+        }
+      },
+      "previously": {
+        "map": {
+          "phase": "intermission",
+          "team_ct": {
+            "consecutive_round_losses": 1,
+            "score": 0
+          },
+          "team_t": {
+            "score": 1
+          }
+        },
+        "player": {
+          "observer_slot": 2,
+          "state": {
+            "armor": 100,
+            "equip_value": 850,
+            "money": 3500,
+            "round_killhs": 2,
+            "round_kills": 2
+          },
+          "team": "T",
+          "weapons": {
+            "weapon_0": {
+              "name": "weapon_knife_t",
+              "state": "active"
+            },
+            "weapon_1": {
+              "name": "weapon_c4",
+              "state": "holstered",
+              "type": "C4"
+            }
+          }
+        },
+        "round": {
+          "phase": "over",
+          "win_team": "T"
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790534016,
+        "version": 14185
+      },
+      "round": {
+        "phase": "freezetime"
+      }
+    }
+  },
+  {
+    "seq": 3626,
+    "received_at": "2026-09-27T18:33:59.087899873Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 1,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 1,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 2,
+          "mvps": 1,
+          "score": 4
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 0,
+        "state": {
+          "armor": 100,
+          "burning": 0,
+          "equip_value": 850,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 150,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "CT",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 12,
+            "ammo_clip_max": 12,
+            "ammo_reserve": 2,
+            "name": "weapon_usp_silencer",
+            "paintkit": "default",
+            "state": "active",
+            "type": "Pistol"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "state": {
+            "armor": 0,
+            "equip_value": 200,
+            "money": 800
+          }
+        },
+        "round": {
+          "phase": "freezetime"
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790534033,
+        "version": 14185
+      },
+      "round": {
+        "phase": "live"
+      }
+    }
+  },
+  {
+    "seq": 3627,
+    "received_at": "2026-09-27T18:33:59.658814494Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 1,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 1,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 2,
+          "mvps": 1,
+          "score": 4
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 0,
+        "state": {
+          "armor": 100,
+          "burning": 0,
+          "equip_value": 850,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 150,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "CT",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife",
+            "paintkit": "default",
+            "state": "active",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 12,
+            "ammo_clip_max": 12,
+            "ammo_reserve": 2,
+            "name": "weapon_usp_silencer",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Pistol"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "weapons": {
+            "weapon_0": {
+              "state": "holstered"
+            },
+            "weapon_1": {
+              "state": "active"
+            }
+          }
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790534033,
+        "version": 14185
+      },
+      "round": {
+        "phase": "live"
+      }
+    }
+  },
+  {
+    "seq": 3628,
+    "received_at": "2026-09-27T18:34:04.378593468Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 1,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 1,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 2,
+          "mvps": 1,
+          "score": 2
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 0,
+        "state": {
+          "armor": 100,
+          "burning": 0,
+          "equip_value": 850,
+          "flashed": 0,
+          "health": 100,
+          "helmet": false,
+          "money": 0,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "CT",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife",
+            "paintkit": "default",
+            "state": "active",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 12,
+            "ammo_clip_max": 12,
+            "ammo_reserve": 2,
+            "name": "weapon_usp_silencer",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Pistol"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "match_stats": {
+            "score": 4
+          },
+          "state": {
+            "money": 150
+          }
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790534038,
+        "version": 14185
+      },
+      "round": {
+        "phase": "live"
+      }
+    }
+  },
+  {
+    "seq": 3629,
+    "received_at": "2026-09-27T18:34:12.051221514Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 1,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 1,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 2,
+          "mvps": 1,
+          "score": 2
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 0,
+        "state": {
+          "armor": 91,
+          "burning": 0,
+          "equip_value": 850,
+          "flashed": 0,
+          "health": 84,
+          "helmet": false,
+          "money": 0,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "CT",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife",
+            "paintkit": "default",
+            "state": "active",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 12,
+            "ammo_clip_max": 12,
+            "ammo_reserve": 2,
+            "name": "weapon_usp_silencer",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Pistol"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "state": {
+            "armor": 100,
+            "health": 100
+          }
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790534046,
+        "version": 14185
+      },
+      "round": {
+        "phase": "live"
+      }
+    }
+  },
+  {
+    "seq": 3630,
+    "received_at": "2026-09-27T18:34:12.316946141Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 1,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 1,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 2,
+          "mvps": 1,
+          "score": 2
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 0,
+        "state": {
+          "armor": 82,
+          "burning": 0,
+          "equip_value": 850,
+          "flashed": 0,
+          "health": 47,
+          "helmet": false,
+          "money": 0,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "CT",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife",
+            "paintkit": "default",
+            "state": "active",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 12,
+            "ammo_clip_max": 12,
+            "ammo_reserve": 2,
+            "name": "weapon_usp_silencer",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Pistol"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "state": {
+            "armor": 91,
+            "health": 84
+          }
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790534046,
+        "version": 14185
+      },
+      "round": {
+        "phase": "live"
+      }
+    }
+  },
+  {
+    "seq": 3631,
+    "received_at": "2026-09-27T18:34:12.573906032Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 1,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 1,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 2,
+          "mvps": 1,
+          "score": 2
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 0,
+        "state": {
+          "armor": 82,
+          "burning": 0,
+          "equip_value": 850,
+          "flashed": 0,
+          "health": 26,
+          "helmet": false,
+          "money": 0,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "CT",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife",
+            "paintkit": "default",
+            "state": "active",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 12,
+            "ammo_clip_max": 12,
+            "ammo_reserve": 2,
+            "name": "weapon_usp_silencer",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Pistol"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "state": {
+            "health": 47
+          }
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790534046,
+        "version": 14185
+      },
+      "round": {
+        "phase": "live"
+      }
+    }
+  },
+  {
+    "seq": 3632,
+    "received_at": "2026-09-27T18:34:13.081918973Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "live",
+        "round": 1,
+        "team_ct": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 1,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 0,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 0,
+          "kills": 2,
+          "mvps": 1,
+          "score": 2
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 0,
+        "state": {
+          "armor": 73,
+          "burning": 0,
+          "equip_value": 850,
+          "flashed": 0,
+          "health": 10,
+          "helmet": false,
+          "money": 0,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "CT",
+        "weapons": {
+          "weapon_0": {
+            "name": "weapon_knife",
+            "paintkit": "default",
+            "state": "active",
+            "type": "Knife"
+          },
+          "weapon_1": {
+            "ammo_clip": 12,
+            "ammo_clip_max": 12,
+            "ammo_reserve": 2,
+            "name": "weapon_usp_silencer",
+            "paintkit": "default",
+            "state": "holstered",
+            "type": "Pistol"
+          }
+        }
+      },
+      "previously": {
+        "player": {
+          "state": {
+            "armor": 82,
+            "health": 26
+          }
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790534047,
+        "version": 14185
+      },
+      "round": {
+        "phase": "live"
+      }
+    }
+  },
+  {
+    "seq": 3633,
+    "received_at": "2026-09-27T18:34:13.312729781Z",
+    "payload": {
+      "added": {
+        "round": {
+          "win_team": true
+        }
+      },
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "gameover",
+        "round": 2,
+        "team_ct": {
+          "consecutive_round_losses": 1,
+          "matches_won_this_series": 0,
+          "score": 1,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 1,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "playing",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 1,
+          "kills": 2,
+          "mvps": 1,
+          "score": 2
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 0,
+        "state": {
+          "armor": 0,
+          "burning": 0,
+          "equip_value": 850,
+          "flashed": 0,
+          "health": 0,
+          "helmet": false,
+          "money": 2000,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "CT",
+        "weapons": {}
+      },
+      "previously": {
+        "map": {
+          "phase": "live",
+          "round": 1,
+          "team_ct": {
+            "consecutive_round_losses": 0
+          },
+          "team_t": {
+            "score": 0
+          }
+        },
+        "player": {
+          "match_stats": {
+            "deaths": 0
+          },
+          "state": {
+            "armor": 73,
+            "health": 10,
+            "money": 0
+          },
+          "weapons": {
+            "weapon_0": {
+              "name": "weapon_knife",
+              "paintkit": "default",
+              "state": "active",
+              "type": "Knife"
+            },
+            "weapon_1": {
+              "ammo_clip": 12,
+              "ammo_clip_max": 12,
+              "ammo_reserve": 2,
+              "name": "weapon_usp_silencer",
+              "paintkit": "default",
+              "state": "holstered",
+              "type": "Pistol"
+            }
+          }
+        },
+        "round": {
+          "phase": "live"
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790534047,
+        "version": 14185
+      },
+      "round": {
+        "phase": "freezetime",
+        "win_team": "T"
+      }
+    }
+  },
+  {
+    "seq": 3634,
+    "received_at": "2026-09-27T18:34:23.265108101Z",
+    "payload": {
+      "map": {
+        "mode": "scrimcomp2v2",
+        "name": "de_vertigo",
+        "num_matches_to_win_series": 0,
+        "phase": "gameover",
+        "round": 2,
+        "team_ct": {
+          "consecutive_round_losses": 1,
+          "matches_won_this_series": 0,
+          "score": 1,
+          "timeouts_remaining": 1
+        },
+        "team_t": {
+          "consecutive_round_losses": 0,
+          "matches_won_this_series": 0,
+          "score": 1,
+          "timeouts_remaining": 1
+        }
+      },
+      "player": {
+        "activity": "menu",
+        "match_stats": {
+          "assists": 0,
+          "deaths": 1,
+          "kills": 2,
+          "mvps": 1,
+          "score": 2
+        },
+        "name": "fixture-player-1",
+        "observer_slot": 0,
+        "state": {
+          "armor": 0,
+          "burning": 0,
+          "equip_value": 850,
+          "flashed": 0,
+          "health": 0,
+          "helmet": false,
+          "money": 2000,
+          "round_killhs": 0,
+          "round_kills": 0,
+          "smoked": 0
+        },
+        "steamid": "76561198000000001",
+        "team": "CT",
+        "weapons": {}
+      },
+      "previously": {
+        "player": {
+          "activity": "playing"
+        }
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790534057,
+        "version": 14185
+      },
+      "round": {
+        "phase": "freezetime",
+        "win_team": "T"
+      }
+    }
+  },
+  {
+    "seq": 3635,
+    "received_at": "2026-09-27T18:34:23.949501371Z",
+    "payload": {
+      "player": {
+        "activity": "menu",
+        "name": "fixture-player-1",
+        "steamid": "76561198000000001"
+      },
+      "previously": {
+        "map": true,
+        "player": {
+          "match_stats": {
+            "assists": 0,
+            "deaths": 1,
+            "kills": 2,
+            "mvps": 1,
+            "score": 2
+          },
+          "observer_slot": 0,
+          "state": {
+            "armor": 0,
+            "burning": 0,
+            "equip_value": 850,
+            "flashed": 0,
+            "health": 0,
+            "helmet": false,
+            "money": 2000,
+            "round_killhs": 0,
+            "round_kills": 0,
+            "smoked": 0
+          },
+          "team": "CT",
+          "weapons": {}
+        },
+        "round": true
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790534058,
+        "version": 14185
+      }
+    }
+  },
+  {
+    "seq": 3636,
+    "received_at": "2026-09-27T18:34:53.991380046Z",
+    "payload": {
+      "player": {
+        "activity": "menu",
+        "name": "fixture-player-1",
+        "steamid": "76561198000000001"
+      },
+      "provider": {
+        "appid": 730,
+        "name": "Counter-Strike: Global Offensive",
+        "steamid": "76561198000000001",
+        "timestamp": 1790534088,
+        "version": 14185
+      }
+    }
+  }
+]

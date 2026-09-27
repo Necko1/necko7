@@ -146,27 +146,31 @@ fn derive(old: &Cs2State, new: &Cs2State, resets: &mut Vec<ResetReason>, out: &m
         if !restarted {
             if let Some(change) = change(&old.round.phase, &new.round.phase) {
                 out.push(EventKind::RoundPhaseChanged { change });
-                if a.phase == Some(MatchPhase::Live) && b.phase == Some(MatchPhase::Live) {
-                    if old.round.phase == Some(RoundPhase::FreezeTime)
-                        && new.round.phase == Some(RoundPhase::Live)
-                        && old
-                            .round
-                            .completed_rounds
-                            .zip(new.round.completed_rounds)
-                            .is_some_and(|(a, b)| a == b)
-                    {
-                        out.push(EventKind::RoundStarted);
-                    }
-                    if old.round.phase == Some(RoundPhase::Live)
-                        && new.round.phase == Some(RoundPhase::Over)
-                        && old
-                            .round
-                            .completed_rounds
-                            .zip(new.round.completed_rounds)
-                            .is_some_and(|(a, b)| b == a || b == a + 1)
-                    {
-                        out.push(EventKind::RoundEnded);
-                    }
+                if a.phase == Some(MatchPhase::Live)
+                    && b.phase == Some(MatchPhase::Live)
+                    && old.round.phase == Some(RoundPhase::FreezeTime)
+                    && new.round.phase == Some(RoundPhase::Live)
+                    && old
+                        .round
+                        .completed_rounds
+                        .zip(new.round.completed_rounds)
+                        .is_some_and(|(a, b)| a == b)
+                {
+                    out.push(EventKind::RoundStarted);
+                }
+                // The final round of a half reports intermission and over in
+                // the same snapshot, including its last kill and score update.
+                if a.phase == Some(MatchPhase::Live)
+                    && matches!(b.phase, Some(MatchPhase::Live | MatchPhase::Intermission))
+                    && old.round.phase == Some(RoundPhase::Live)
+                    && new.round.phase == Some(RoundPhase::Over)
+                    && old
+                        .round
+                        .completed_rounds
+                        .zip(new.round.completed_rounds)
+                        .is_some_and(|(a, b)| b == a || b == a + 1)
+                {
+                    out.push(EventKind::RoundEnded);
                 }
             }
             let ct = NumberChange::between(a.score.ct, b.score.ct);

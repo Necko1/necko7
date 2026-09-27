@@ -2,7 +2,7 @@
 
 ## Analysis completed before implementation
 
-Source: the supplied `logs.txt`, 869,262 bytes, parsed in full: **127 complete accepted payloads**, seq 4–623, 2026-09-27 15:27:30–15:50:44 UTC. There are three missing ranges: 44–271, 309–523, 551–600. This is an excerpt, NOT a lossless event stream. Device/session identifiers were absent from the JSON itself; the old log did not print session_id. Fixtures use a declared synthetic session and anonymized identities, preserving equality, values, ordering, timestamps and sequence gaps.
+Source: the supplied `logs.txt`, 869,262 bytes, parsed in full: **127 complete accepted payloads**, seq 4–623, 2026-09-27 15:27:30–15:50:44 UTC. There are three missing ranges: 44–271, 309–523, 551–600. The user confirmed these ranges were deliberately omitted when supplying the beginning/end excerpts to avoid ~100k log lines; they are not evidence of transport loss. This capture is an excerpt, NOT a lossless event stream. Device/session identifiers were absent from the JSON itself; the old log did not print session_id. Fixtures use a declared synthetic session and anonymized identities, preserving equality, values, ordering, timestamps and sequence gaps.
 
 The backend previously accepted an arbitrary JSON object after signature/timestamp/replay verification and only optionally logged it. There was no gameplay parser, normalized state or semantic event layer. The companion validates local auth, removes it, signs and forwards the latest watch-channel snapshot. Intermediate updates can be coalesced. Security and transport remain unchanged.
 
@@ -42,7 +42,7 @@ The checked-in companion config enables provider, map, round, player_id, player_
 | round_phase_changed | freezetime→live→over, same map | RELIABLE reported phase; final gameover exception; round reset | Yes |
 | freeze time start/end | phase enters/leaves freezetime | RELIABLE reported phase, not round outcome | Covered by round_phase_changed |
 | round_started | freezetime→live with map.phase=live | RELIABLE; initial live snapshot/gaps miss start | Yes |
-| round_ended | live→over with map.phase=live | RELIABLE; gameover+freezetime intentionally emits match_ended, not guessed round_ended | Yes |
+| round_ended | live→over with map.phase live or intermission | RELIABLE; gameover+freezetime intentionally emits match_ended, not guessed round_ended | Yes |
 | round winner / round.win_team | absent→CT at over | RELIABLE reported winner state; repeated winners need result identity; delayed/partial reports complicate dedup | State only |
 | local round win/loss | winner + local side | INFERRED if side retained while spectating; side swap / delayed winner risks attribution | No |
 | score_changed / team_ct.score, team_t.score | 0:0→1:0 | RELIABLE observed side scores; neither persistent team identity nor cause; match/gap reset | Yes |
@@ -233,7 +233,7 @@ All 24 event kinds are RELIABLE **under their stated observation contract**. Rel
 | match_ended | known live→game_over, same map/mode; no score threshold | `{kind:"match_ended"}` |
 | round_phase_changed | same map/mode, no match restart, C(known round phase) | `{kind:"round_phase_changed",change:{previous:"live",current:"over"}}` |
 | round_started | both map phases live, freezetime→live, same known completed_rounds | `{kind:"round_started"}` |
-| round_ended | both map phases live, live→over, completed_rounds equal or +1 | `{kind:"round_ended"}` |
+| round_ended | previous map phase live, current map phase live or intermission, round live→over, completed_rounds equal or +1 | `{kind:"round_ended"}` |
 | score_changed | same map/mode and no match restart; at least one side has a known changed score; compare sides independently | `{kind:"score_changed",ct:{previous:0,current:1,delta:1},t:null}` |
 | activity_changed | both player IDs proven local, same provider/session/time; C(activity); may occur on map entry; not gameplay exit | `{kind:"activity_changed",change:{previous:"playing",current:"text_input"}}` |
 | team_changed | both IDs local, same map/mode, no match restart; C(team); suppress other local comparisons on that payload | `{kind:"team_changed",change:{previous:"t",current:"ct"}}` |
@@ -367,3 +367,13 @@ The logging test injects local auth before sanitization and asserts that neither
 * Integration security tests still assert exact signed bytes, tamper/replay/stale rejection, pairing concurrency, channel authorization and revoked-device heartbeat rejection; additional assertions verify accepted real data reaches normalization, heartbeats/rejected signatures do not initialize it, replay cannot roll it back, and both revocation paths remove state.
 * The first full run exposed a new logging-test timestamp regression in its test data; the fixture time was corrected. A rerun against the same disposable database exposed an existing inventory test's reliance on an empty global pending queue (previous runs leave rows). Final `cargo test -- --include-ignored` against fresh disposable PostgreSQL 17: **112 passed, 0 failed, 0 ignored**, including all six PostgreSQL integration tests. There are 21 new semantic/logging/lifecycle tests plus expanded existing API integration assertions. No inventory code/tests were weakened or changed.
 * No desktop or dashboard source changes were required. Windows UI/lifecycle behavior is outside this backend-only change and was not reverified. A future manual gameplay pass should enable the pipeline flag and check new CS2 versions against these same identity/reset rules; this capture cannot validate currently unobserved countdowns/bomb fields.
+
+## Follow-up: complete two-round practice Wingman (0.9.3)
+
+[Full per-payload audit and corrected timeline](cs2-wingman-review.md). The uncut capture has 29 consecutive payloads, seq 3608–3636, menu→warmup→first half→intermission→side switch→1:1 gameover→menu. It supplies the first continuously observed local kills in these fixtures. The earlier original 127-record analysis remains scoped to that excerpt.
+
+**Bug fixed:** the phase vocabulary omitted `intermission`. The conservative unknown-phase guard consequently suppressed the ending half's kill/MVP/score/ammo at 3623, selection change at 3624, and phase/side/score transitions at 3625. Intermission is now a recognized ongoing-match phase, not a match restart. A live→over round can end as map.phase becomes intermission; local counters still belong to the ending round. Returning intermission→live does not emit another match_started. The observed side change/new freezetime continues to reset local money/armor/inventory/round-stat comparisons. No new event kinds or transport behavior were added.
+
+Additional observed values: map.mode=`scrimcomp2v2`, map.name=`de_vertigo`, map.phase=`intermission`, per-side timeouts_remaining=1. Three new leaf paths at seq 3625 are `added.player.weapons.weapon_*.ammo_clip`, `.ammo_clip_max`, `.ammo_reserve`, all boolean true. They are hints, not ammo values; the normalizer continues to use current weapon fields. All other leaf paths were already represented in the original inventory. No countdown/bomb/spatial/roster categories appear.
+
+The new fixture's two local kills and two round headshot-counter increments are real observations. The aggregate counters still do not prove victim or weapon identity. The final round reports gameover + freezetime again; match_ended and the tied score are exposed without inventing a winner or a round_started/respawn event. Four intentionally empty results remain: 3608 initial baseline, 3609 warmup without player/round, 3635 map disappearance with unchanged menu activity, 3636 equivalent menu state.

@@ -1,0 +1,683 @@
+[
+  {
+    "seq": 3608,
+    "events": []
+  },
+  {
+    "seq": 3609,
+    "events": []
+  },
+  {
+    "seq": 3610,
+    "events": [
+      {
+        "kind": "map_phase_changed",
+        "change": {
+          "previous": "warmup",
+          "current": "live"
+        }
+      },
+      {
+        "kind": "match_started"
+      }
+    ]
+  },
+  {
+    "seq": 3611,
+    "events": [
+      {
+        "kind": "activity_changed",
+        "change": {
+          "previous": "text_input",
+          "current": "playing"
+        }
+      }
+    ]
+  },
+  {
+    "seq": 3612,
+    "events": [
+      {
+        "kind": "activity_changed",
+        "change": {
+          "previous": "playing",
+          "current": "text_input"
+        }
+      }
+    ]
+  },
+  {
+    "seq": 3613,
+    "events": [
+      {
+        "kind": "activity_changed",
+        "change": {
+          "previous": "text_input",
+          "current": "playing"
+        }
+      }
+    ]
+  },
+  {
+    "seq": 3614,
+    "events": [
+      {
+        "kind": "activity_changed",
+        "change": {
+          "previous": "playing",
+          "current": "text_input"
+        }
+      }
+    ]
+  },
+  {
+    "seq": 3615,
+    "events": [
+      {
+        "kind": "activity_changed",
+        "change": {
+          "previous": "text_input",
+          "current": "playing"
+        }
+      }
+    ]
+  },
+  {
+    "seq": 3616,
+    "events": [
+      {
+        "kind": "armor_changed",
+        "change": {
+          "previous": 0,
+          "current": 100,
+          "delta": 100
+        }
+      },
+      {
+        "kind": "money_changed",
+        "change": {
+          "previous": 800,
+          "current": 150,
+          "delta": -650
+        }
+      },
+      {
+        "kind": "equipment_value_changed",
+        "change": {
+          "previous": 200,
+          "current": 850,
+          "delta": 650
+        }
+      }
+    ]
+  },
+  {
+    "seq": 3617,
+    "events": [
+      {
+        "kind": "weapon_changed",
+        "change": {
+          "previous": {
+            "name": "weapon_c4",
+            "category": "C4",
+            "finish": "default"
+          },
+          "current": {
+            "name": "weapon_knife_t",
+            "category": "Knife",
+            "finish": "default"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "seq": 3618,
+    "events": [
+      {
+        "kind": "round_phase_changed",
+        "change": {
+          "previous": "freeze_time",
+          "current": "live"
+        }
+      },
+      {
+        "kind": "round_started"
+      }
+    ]
+  },
+  {
+    "seq": 3619,
+    "events": [
+      {
+        "kind": "weapon_changed",
+        "change": {
+          "previous": {
+            "name": "weapon_knife_t",
+            "category": "Knife",
+            "finish": "default"
+          },
+          "current": {
+            "name": "weapon_glock",
+            "category": "Pistol",
+            "finish": "default"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "seq": 3620,
+    "events": [
+      {
+        "kind": "ammo_changed",
+        "weapon": {
+          "name": "weapon_glock",
+          "category": "Pistol",
+          "finish": "default"
+        },
+        "clip": {
+          "previous": 20,
+          "current": 19,
+          "delta": -1
+        },
+        "capacity": null,
+        "reserve": null
+      }
+    ]
+  },
+  {
+    "seq": 3621,
+    "events": [
+      {
+        "kind": "ammo_changed",
+        "weapon": {
+          "name": "weapon_glock",
+          "category": "Pistol",
+          "finish": "default"
+        },
+        "clip": {
+          "previous": 19,
+          "current": 18,
+          "delta": -1
+        },
+        "capacity": null,
+        "reserve": null
+      }
+    ]
+  },
+  {
+    "seq": 3622,
+    "events": [
+      {
+        "kind": "money_changed",
+        "change": {
+          "previous": 150,
+          "current": 450,
+          "delta": 300
+        }
+      },
+      {
+        "kind": "match_stats_changed",
+        "changes": [
+          {
+            "stat": "kills",
+            "previous": 0,
+            "current": 1,
+            "delta": 1
+          },
+          {
+            "stat": "score",
+            "previous": 0,
+            "current": 2,
+            "delta": 2
+          }
+        ]
+      },
+      {
+        "kind": "player_kill",
+        "count": 1,
+        "total": 1
+      },
+      {
+        "kind": "round_stats_changed",
+        "changes": [
+          {
+            "stat": "round_kills",
+            "previous": 0,
+            "current": 1,
+            "delta": 1
+          },
+          {
+            "stat": "round_headshot_kills",
+            "previous": 0,
+            "current": 1,
+            "delta": 1
+          }
+        ]
+      },
+      {
+        "kind": "ammo_changed",
+        "weapon": {
+          "name": "weapon_glock",
+          "category": "Pistol",
+          "finish": "default"
+        },
+        "clip": {
+          "previous": 18,
+          "current": 17,
+          "delta": -1
+        },
+        "capacity": null,
+        "reserve": null
+      }
+    ]
+  },
+  {
+    "seq": 3623,
+    "events": [
+      {
+        "kind": "map_phase_changed",
+        "change": {
+          "previous": "live",
+          "current": "intermission"
+        }
+      },
+      {
+        "kind": "round_phase_changed",
+        "change": {
+          "previous": "live",
+          "current": "over"
+        }
+      },
+      {
+        "kind": "round_ended"
+      },
+      {
+        "kind": "score_changed",
+        "ct": null,
+        "t": {
+          "previous": 0,
+          "current": 1,
+          "delta": 1
+        }
+      },
+      {
+        "kind": "money_changed",
+        "change": {
+          "previous": 450,
+          "current": 3500,
+          "delta": 3050
+        }
+      },
+      {
+        "kind": "match_stats_changed",
+        "changes": [
+          {
+            "stat": "kills",
+            "previous": 1,
+            "current": 2,
+            "delta": 1
+          },
+          {
+            "stat": "mvps",
+            "previous": 0,
+            "current": 1,
+            "delta": 1
+          },
+          {
+            "stat": "score",
+            "previous": 2,
+            "current": 4,
+            "delta": 2
+          }
+        ]
+      },
+      {
+        "kind": "player_kill",
+        "count": 1,
+        "total": 2
+      },
+      {
+        "kind": "round_stats_changed",
+        "changes": [
+          {
+            "stat": "round_kills",
+            "previous": 1,
+            "current": 2,
+            "delta": 1
+          },
+          {
+            "stat": "round_headshot_kills",
+            "previous": 1,
+            "current": 2,
+            "delta": 1
+          }
+        ]
+      },
+      {
+        "kind": "ammo_changed",
+        "weapon": {
+          "name": "weapon_glock",
+          "category": "Pistol",
+          "finish": "default"
+        },
+        "clip": {
+          "previous": 17,
+          "current": 16,
+          "delta": -1
+        },
+        "capacity": null,
+        "reserve": null
+      }
+    ]
+  },
+  {
+    "seq": 3624,
+    "events": [
+      {
+        "kind": "weapon_changed",
+        "change": {
+          "previous": {
+            "name": "weapon_glock",
+            "category": "Pistol",
+            "finish": "default"
+          },
+          "current": {
+            "name": "weapon_knife_t",
+            "category": "Knife",
+            "finish": "default"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "seq": 3625,
+    "events": [
+      {
+        "kind": "map_phase_changed",
+        "change": {
+          "previous": "intermission",
+          "current": "live"
+        }
+      },
+      {
+        "kind": "round_phase_changed",
+        "change": {
+          "previous": "over",
+          "current": "freeze_time"
+        }
+      },
+      {
+        "kind": "score_changed",
+        "ct": {
+          "previous": 0,
+          "current": 1,
+          "delta": 1
+        },
+        "t": {
+          "previous": 1,
+          "current": 0,
+          "delta": -1
+        }
+      },
+      {
+        "kind": "team_changed",
+        "change": {
+          "previous": "t",
+          "current": "ct"
+        }
+      }
+    ]
+  },
+  {
+    "seq": 3626,
+    "events": [
+      {
+        "kind": "round_phase_changed",
+        "change": {
+          "previous": "freeze_time",
+          "current": "live"
+        }
+      },
+      {
+        "kind": "round_started"
+      },
+      {
+        "kind": "armor_changed",
+        "change": {
+          "previous": 0,
+          "current": 100,
+          "delta": 100
+        }
+      },
+      {
+        "kind": "money_changed",
+        "change": {
+          "previous": 800,
+          "current": 150,
+          "delta": -650
+        }
+      },
+      {
+        "kind": "equipment_value_changed",
+        "change": {
+          "previous": 200,
+          "current": 850,
+          "delta": 650
+        }
+      }
+    ]
+  },
+  {
+    "seq": 3627,
+    "events": [
+      {
+        "kind": "weapon_changed",
+        "change": {
+          "previous": {
+            "name": "weapon_usp_silencer",
+            "category": "Pistol",
+            "finish": "default"
+          },
+          "current": {
+            "name": "weapon_knife",
+            "category": "Knife",
+            "finish": "default"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "seq": 3628,
+    "events": [
+      {
+        "kind": "money_changed",
+        "change": {
+          "previous": 150,
+          "current": 0,
+          "delta": -150
+        }
+      },
+      {
+        "kind": "match_stats_changed",
+        "changes": [
+          {
+            "stat": "score",
+            "previous": 4,
+            "current": 2,
+            "delta": -2
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "seq": 3629,
+    "events": [
+      {
+        "kind": "health_changed",
+        "change": {
+          "previous": 100,
+          "current": 84,
+          "delta": -16
+        }
+      },
+      {
+        "kind": "armor_changed",
+        "change": {
+          "previous": 100,
+          "current": 91,
+          "delta": -9
+        }
+      }
+    ]
+  },
+  {
+    "seq": 3630,
+    "events": [
+      {
+        "kind": "health_changed",
+        "change": {
+          "previous": 84,
+          "current": 47,
+          "delta": -37
+        }
+      },
+      {
+        "kind": "armor_changed",
+        "change": {
+          "previous": 91,
+          "current": 82,
+          "delta": -9
+        }
+      }
+    ]
+  },
+  {
+    "seq": 3631,
+    "events": [
+      {
+        "kind": "health_changed",
+        "change": {
+          "previous": 47,
+          "current": 26,
+          "delta": -21
+        }
+      }
+    ]
+  },
+  {
+    "seq": 3632,
+    "events": [
+      {
+        "kind": "health_changed",
+        "change": {
+          "previous": 26,
+          "current": 10,
+          "delta": -16
+        }
+      },
+      {
+        "kind": "armor_changed",
+        "change": {
+          "previous": 82,
+          "current": 73,
+          "delta": -9
+        }
+      }
+    ]
+  },
+  {
+    "seq": 3633,
+    "events": [
+      {
+        "kind": "map_phase_changed",
+        "change": {
+          "previous": "live",
+          "current": "game_over"
+        }
+      },
+      {
+        "kind": "match_ended"
+      },
+      {
+        "kind": "round_phase_changed",
+        "change": {
+          "previous": "live",
+          "current": "freeze_time"
+        }
+      },
+      {
+        "kind": "score_changed",
+        "ct": null,
+        "t": {
+          "previous": 0,
+          "current": 1,
+          "delta": 1
+        }
+      },
+      {
+        "kind": "health_changed",
+        "change": {
+          "previous": 10,
+          "current": 0,
+          "delta": -10
+        }
+      },
+      {
+        "kind": "armor_changed",
+        "change": {
+          "previous": 73,
+          "current": 0,
+          "delta": -73
+        }
+      },
+      {
+        "kind": "money_changed",
+        "change": {
+          "previous": 0,
+          "current": 2000,
+          "delta": 2000
+        }
+      },
+      {
+        "kind": "match_stats_changed",
+        "changes": [
+          {
+            "stat": "deaths",
+            "previous": 0,
+            "current": 1,
+            "delta": 1
+          }
+        ]
+      },
+      {
+        "kind": "player_died",
+        "total": 1
+      }
+    ]
+  },
+  {
+    "seq": 3634,
+    "events": [
+      {
+        "kind": "activity_changed",
+        "change": {
+          "previous": "playing",
+          "current": "menu"
+        }
+      }
+    ]
+  },
+  {
+    "seq": 3635,
+    "events": []
+  },
+  {
+    "seq": 3636,
+    "events": []
+  }
+]
