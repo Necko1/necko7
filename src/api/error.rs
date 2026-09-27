@@ -8,6 +8,8 @@ use crate::helix::error::HelixError;
 
 #[derive(Debug, utoipa::IntoResponses)]
 pub enum ApiError {
+    #[response(status = TOO_MANY_REQUESTS, description = "Rate limit exceeded")]
+    TooManyRequests { message: String },
     #[response(status = BAD_REQUEST, description = "The request is invalid (bad parameter, missing field, etc.)")]
     BadRequest {
         message: String,
@@ -58,6 +60,7 @@ pub struct ErrorDetail {
 impl ApiError {
     fn status_code(&self) -> StatusCode {
         match self {
+            ApiError::TooManyRequests { .. } => StatusCode::TOO_MANY_REQUESTS,
             ApiError::BadRequest { .. } => StatusCode::BAD_REQUEST,
             ApiError::Unauthorized { .. } => StatusCode::UNAUTHORIZED,
             ApiError::Forbidden { .. } => StatusCode::FORBIDDEN,
@@ -69,6 +72,7 @@ impl ApiError {
 
     fn code_and_type(&self) -> (&'static str, &'static str) {
         match self {
+            ApiError::TooManyRequests { .. } => ("rate_limit_error", "rate_limit_error"),
             ApiError::BadRequest { .. } => ("invalid_request_error", "invalid_request_error"),
             ApiError::Unauthorized { .. } => ("authentication_error", "authentication_error"),
             ApiError::Forbidden { .. } => ("authorization_error", "authorization_error"),
@@ -80,6 +84,7 @@ impl ApiError {
 
     fn message(&self) -> &str {
         match self {
+            ApiError::TooManyRequests { message } => message,
             ApiError::BadRequest { message, .. } => message,
             ApiError::Unauthorized { message } => message,
             ApiError::Forbidden { message } => message,

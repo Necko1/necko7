@@ -1,4 +1,5 @@
 pub mod broadcasters;
+pub mod cs2;
 pub mod permissions;
 pub mod proxy;
 pub mod rewards;
@@ -20,6 +21,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        cs2::status, cs2::create_code, cs2::pair, cs2::revoke, cs2::ingest, cs2::unpair,
         crate::api::auth::bot_login_redirect,
         crate::api::auth::streamer_login_redirect,
         crate::api::auth::user_login_redirect,
@@ -78,6 +80,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         viewer_profile::request_operator_inventory_refund,
     ),
     components(schemas(
+        cs2::Status, cs2::PairingCode, cs2::PairRequest, cs2::PairResponse, cs2::Channel, cs2::Envelope, crate::db::cs2::Device,
         crate::api::auth::LogoutResponse,
         users::UserResponse,
         users::UpdateViewerSettings,
@@ -160,6 +163,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         crate::db::channel_logs::ChannelLogCategory,
     )),
     tags(
+        (name = "CS2", description = "Owner-managed desktop pairing and Ed25519-signed GSI; rewards coming soon"),
         (name = "Auth", description = "Twitch OAuth 2.0 authentication flows and session management"),
         (name = "Users", description = "User profile and session information"),
         (name = "Broadcasters", description = "Broadcaster settings and channel management"),
@@ -197,6 +201,7 @@ impl utoipa::Modify for SecurityAddon {
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
+        .merge(cs2::router())
         .route("/users/me", get(users::get_current_user))
         .route("/users/me/settings", get(users::get_viewer_settings).put(users::update_viewer_settings))
         .route("/broadcasters", get(broadcasters::list_broadcasters))

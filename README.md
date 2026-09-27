@@ -87,3 +87,20 @@ OpenAPI specification:
 ```
 http(s)://<APP_URL>/api-docs/openapi.json
 ```
+
+## CS2 Integration
+
+The CS2 companion uses this backend's existing Axum API, session cookies, OWNER permissions, broadcaster relation, SQLx migrations and tracing. Migration `20260927120000_cs2_integration.sql` adds hashed one-time pairing codes, public-key devices and bounded replay sessions. It is applied by the normal startup migrator.
+
+Routes (also exposed in Swagger):
+
+| Route under `/api/v1` | Authentication | Behavior |
+| --- | --- | --- |
+| `GET /broadcasters/{channel_id}/cs2` | existing session + OWNER | Active device / last seen |
+| `POST /broadcasters/{channel_id}/cs2/pairing` | existing session + OWNER | Replace code; five-minute expiry |
+| `DELETE /broadcasters/{channel_id}/cs2` | existing session + OWNER | Revoke device and invalidate pending code |
+| `POST /cs2/devices/pair` | temporary code | Atomically register public Ed25519 key |
+| `POST /cs2/gsi` | exact raw-body Ed25519 signature | Validate, persist replay state, update last seen |
+| `POST /cs2/devices/unpair` | signed `action: unpair` envelope | Device-authorized revocation |
+
+The route's channel ID is checked against existing permissions, never trusted by itself. One active device/channel is enforced by a partial unique index. No desktop private/shared API secret is stored. GSI processing stops at the authenticated boundary in `src/api/v1/cs2.rs`; rewards are coming soon. Global governor budgets are per process; deploy behind the normal HTTPS reverse proxy with per-source limits. Full cross-project setup, security and Windows lifecycle instructions are in [the companion README](../necko7-cs2i/README.md).
