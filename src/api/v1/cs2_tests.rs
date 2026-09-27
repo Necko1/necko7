@@ -218,6 +218,64 @@ async fn database_api_security() {
         .status(),
         StatusCode::BAD_REQUEST
     );
+    // Heartbeats work without CS2 and must not masquerade as GSI activity.
+    let heartbeat_session = Uuid::new_v4();
+    let heartbeat_body = serde_json::to_vec(&serde_json::json!({"device_id":paired["device_id"],"session_id":heartbeat_session,"seq":1,"sent_at":Utc::now(),"action":"heartbeat"})).unwrap();
+    assert_eq!(
+        request(
+            &router,
+            "POST",
+            "/cs2/devices/heartbeat",
+            None,
+            heartbeat_body.clone(),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(
+            &router,
+            "POST",
+            "/cs2/devices/heartbeat",
+            None,
+            heartbeat_body.clone(),
+            Some(&key)
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    let status = json(request(&router, "GET", &base, Some(owner_cookie), vec![], None).await).await;
+    assert!(status["device"]["last_seen_at"].is_null());
+    assert!(status["device"]["last_heartbeat_at"].is_string());
+    assert_eq!(
+        request(
+            &router,
+            "POST",
+            "/cs2/devices/heartbeat",
+            None,
+            heartbeat_body.clone(),
+            Some(&key)
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        request(
+            &router,
+            "POST",
+            "/cs2/gsi",
+            None,
+            heartbeat_body,
+            Some(&key)
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
     let session = Uuid::new_v4();
     let body = |seq, session, sent_at| {
         serde_json::to_vec(&serde_json::json!({"device_id":paired["device_id"],"session_id":session,"seq":seq,"sent_at":sent_at,"gsi":{"provider":{"appid":730}}})).unwrap()
@@ -416,6 +474,20 @@ async fn database_api_security() {
         request(&router, "POST", "/cs2/gsi", None, body, Some(&key))
             .await
             .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let revoked_heartbeat = serde_json::to_vec(&serde_json::json!({"device_id":paired["device_id"],"session_id":Uuid::new_v4(),"seq":1,"sent_at":Utc::now(),"action":"heartbeat"})).unwrap();
+    assert_eq!(
+        request(
+            &router,
+            "POST",
+            "/cs2/devices/heartbeat",
+            None,
+            revoked_heartbeat,
+            Some(&key)
+        )
+        .await
+        .status(),
         StatusCode::UNAUTHORIZED
     );
     sqlx::query("DELETE FROM users WHERE twitch_id=$1 OR twitch_id=$2")

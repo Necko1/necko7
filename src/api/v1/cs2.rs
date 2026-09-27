@@ -76,6 +76,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/cs2/devices/pair", post(pair))
         .route("/cs2/gsi", post(ingest))
         .route("/cs2/devices/unpair", post(unpair))
+        .route("/cs2/devices/heartbeat", post(heartbeat))
         .layer(DefaultBodyLimit::max(256 * 1024))
 }
 #[derive(Serialize, utoipa::ToSchema)]
@@ -278,7 +279,7 @@ async fn signed(
     state: Arc<AppState>,
     headers: HeaderMap,
     body: Bytes,
-    revoking: bool,
+    action: Option<&str>,
 ) -> Result<axum::http::StatusCode, ApiError> {
     GSI_LIMIT.check().map_err(|_| limited())?;
     if headers
@@ -304,9 +305,9 @@ async fn signed(
     if !fresh(&env) {
         return Err(bad("Stale timestamp or invalid sequence"));
     }
-    if revoking {
-        if env.action.as_deref() != Some("unpair") || env.gsi.is_some() {
-            return Err(bad("Expected unpair action"));
+    if let Some(action) = action {
+        if env.action.as_deref() != Some(action) || env.gsi.is_some() {
+            return Err(bad("Expected signed device action without GSI"));
         }
     } else if env.action.is_some() || !env.gsi.as_ref().is_some_and(|g| g.is_object()) {
         return Err(bad("Expected GSI object"));
@@ -339,12 +340,19 @@ async fn signed(
     }
     sqlx::query("INSERT INTO cs2_sessions(device_id,session_id,highest_seq,expires_at) VALUES($1,$2,$3,clock_timestamp()+interval '11 minutes') ON CONFLICT(device_id,session_id) DO UPDATE SET highest_seq=$3,expires_at=clock_timestamp()+interval '11 minutes'")
         .bind(env.device_id).bind(env.session_id).bind(env.seq).execute(&mut *tx).await.map_err(db)?;
-    sqlx::query("UPDATE cs2_devices SET last_seen_at=now(),updated_at=now(),revoked_at=CASE WHEN $2 THEN now() ELSE revoked_at END WHERE id=$1")
-        .bind(env.device_id).bind(revoking).execute(&mut *tx).await.map_err(db)?;
+    let revoking = action == Some("unpair");
+    sqlx::query("UPDATE cs2_devices SET last_seen_at=CASE WHEN $3 THEN clock_timestamp() ELSE last_seen_at END,last_heartbeat_at=CASE WHEN $4 THEN clock_timestamp() ELSE last_heartbeat_at END,updated_at=clock_timestamp(),revoked_at=CASE WHEN $2 THEN clock_timestamp() ELSE revoked_at END WHERE id=$1")
+        .bind(env.device_id).bind(revoking).bind(action.is_none()).bind(action == Some("heartbeat")).execute(&mut *tx).await.map_err(db)?;
     tx.commit().await.map_err(db)?;
     // Future event processing boundary: authenticated env.gsi + channel.
     // Do not log raw snapshots (which can contain local auth and personal data).
     tracing::debug!(device_id=%env.device_id, channel_id=%channel, seq=env.seq, bytes=body.len(), revoking, "Accepted CS2 device message");
+    let log_payloads =
+        std::env::var("CS2_LOG_GSI_PAYLOADS").is_ok_and(|s| s.eq_ignore_ascii_case("true"));
+    if let Some(gsi) = env.gsi.filter(|_| log_payloads) {
+        let payload = serde_json::to_string_pretty(&sanitized_payload(gsi)).unwrap_or_default();
+        tracing::debug!(device_id=%env.device_id, channel_id=%channel, seq=env.seq, payload=%payload, "Accepted CS2 GSI");
+    }
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 #[utoipa::path(post, path="/api/v1/cs2/gsi", request_body=Envelope, responses((status=204)), security(), tag="CS2")]
@@ -353,7 +361,7 @@ pub async fn ingest(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<axum::http::StatusCode, ApiError> {
-    signed(state, headers, body, false).await
+    signed(state, headers, body, None).await
 }
 #[utoipa::path(post, path="/api/v1/cs2/devices/unpair", request_body=Envelope, responses((status=204)), security(), tag="CS2")]
 pub async fn unpair(
@@ -361,13 +369,51 @@ pub async fn unpair(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<axum::http::StatusCode, ApiError> {
-    signed(state, headers, body, true).await
+    signed(state, headers, body, Some("unpair")).await
+}
+
+#[utoipa::path(post, path="/api/v1/cs2/devices/heartbeat", request_body=Envelope, responses((status=204), (status=401)), security(), tag="CS2")]
+pub async fn heartbeat(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<axum::http::StatusCode, ApiError> {
+    signed(state, headers, body, Some("heartbeat")).await
+}
+
+// Defense in depth: even a signed caller cannot accidentally log local auth.
+fn sanitized_payload(mut value: serde_json::Value) -> serde_json::Value {
+    match &mut value {
+        serde_json::Value::Object(map) => {
+            map.remove("auth");
+            for child in map.values_mut() {
+                *child = sanitized_payload(child.take());
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                *child = sanitized_payload(child.take());
+            }
+        }
+        _ => {}
+    }
+    value
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
+    #[test]
+    fn debug_payload_never_contains_auth() {
+        let cleaned = sanitized_payload(
+            serde_json::json!({"auth":{"token":"secret"},"player":{"name":"Test"},"previously":{"auth":{"token":"old"}}}),
+        );
+        assert_eq!(cleaned["player"]["name"], "Test");
+        assert!(!cleaned.to_string().contains("secret"));
+        assert!(!cleaned.to_string().contains("old"));
+        assert!(!cleaned.to_string().contains("auth"));
+    }
     #[test]
     fn codes() {
         assert_eq!(normalize(" abcd-2345 ").unwrap(), "ABCD2345");

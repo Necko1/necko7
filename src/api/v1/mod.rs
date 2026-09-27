@@ -21,7 +21,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
 #[derive(OpenApi)]
 #[openapi(
     paths(
-        cs2::status, cs2::create_code, cs2::pair, cs2::revoke, cs2::ingest, cs2::unpair,
+        cs2::status, cs2::create_code, cs2::pair, cs2::revoke, cs2::ingest, cs2::unpair, cs2::heartbeat,
         crate::api::auth::bot_login_redirect,
         crate::api::auth::streamer_login_redirect,
         crate::api::auth::user_login_redirect,
