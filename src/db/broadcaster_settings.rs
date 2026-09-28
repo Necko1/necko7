@@ -11,6 +11,8 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct PublicRewardsConfig {
     #[serde(default)]
+    pub show_invisible_rewards: bool,
+    #[serde(default)]
     pub enabled: bool,
     #[serde(default = "default_true")]
     pub show_description: bool,
@@ -43,6 +45,7 @@ pub struct PublicRewardsConfig {
 impl Default for PublicRewardsConfig {
     fn default() -> Self {
         Self {
+            show_invisible_rewards: false,
             enabled: false,
             show_description: true,
             show_cost_points: true,

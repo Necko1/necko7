@@ -106,6 +106,7 @@ impl HelixClient {
         };
 
         let body = TwitchUpdateRewardPayload {
+            is_enabled: reward_info.is_visible,
             title: reward_info.title,
             cost: reward_info.cost,
             prompt: reward_info.description,

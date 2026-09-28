@@ -33,6 +33,8 @@ pub struct PaginatedLeaderboardResponse {
 
 #[derive(Deserialize, ToSchema, utoipa::IntoParams)]
 pub struct LeaderboardQuery {
+    /// Minute window (1–525600). Takes precedence over time_window_hours.
+    pub window_minutes: Option<i32>,
     /// Time window in hours (e.g. 6, 24, 48, 168 for week, 720 for month). If not specified, returns all time.
     pub time_window_hours: Option<i32>,
     /// Sort by: "messages", "characters", or "last_active" (default: "messages")
@@ -77,9 +79,12 @@ pub async fn get_chat_leaderboard(
     let sort_by = query.sort_by.as_deref().unwrap_or("messages");
     let order = query.order.as_deref().unwrap_or("desc");
 
-    let since = query.time_window_hours
+    if query.window_minutes.is_some_and(|m| !(1..=525600).contains(&m)) {
+        return Err(ApiError::BadRequest { message: "Window must be 1–525600 minutes".into(), param: "window_minutes".into() });
+    }
+    let since = query.window_minutes.map(|m| Utc::now() - Duration::minutes(i64::from(m))).or_else(|| query.time_window_hours
         .filter(|&h| h > 0)
-        .map(|h| Utc::now() - Duration::hours(h as i64));
+        .map(|h| Utc::now() - Duration::hours(h as i64)));
 
     let (items, total) = state.db.get_leaderboard(
         &auth.channel_id,

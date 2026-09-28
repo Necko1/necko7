@@ -94,6 +94,17 @@ pub async fn request_viewer_inventory_refund(
     action_result(result)
 }
 
+#[derive(serde::Deserialize)]
+pub struct DiscardConfirmation { pub confirmation: String }
+pub async fn discard_viewer_inventory(
+    CallerUser { user_id }: CallerUser, Path(inventory_id): Path<Uuid>, State(state): State<Arc<AppState>>,
+    Json(body): Json<DiscardConfirmation>,
+) -> Result<Json<InventoryActionResult>,ApiError> {
+    if body.confirmation!="DISCARD" {return Err(ApiError::BadRequest {message:"Confirm DISCARD; no Twitch points will be refunded".into(),param:"confirmation".into()});}
+    if !state.db.discard_script_item(inventory_id,&user_id).await? {return Err(ApiError::UnprocessableEntity {message:"Only your own script-origin item with no unresolved order or trade can be discarded".into(),param:"inventory_id".into()});}
+    action_result("DISCARDED")
+}
+
 #[utoipa::path(post, path = "/api/v1/broadcasters/{channel_id}/chat/users/{user_id}/inventory/{inventory_id}/attempt", tag = "Viewer Profile", params(("channel_id" = String, Path), ("user_id" = String, Path), ("inventory_id" = Uuid, Path)), responses((status = 200, body = InventoryActionResult)), security(("session_id" = [])))]
 pub async fn request_operator_inventory_attempt(
     auth: crate::api::extractor::authorized_channel::AuthorizedChannel,

@@ -167,6 +167,8 @@ pub struct PurchaseLimitRule {
 
 #[derive(Debug, Clone, FromRow)]
 pub struct Reward {
+    pub script_alias: Option<String>,
+    pub is_visible: bool,
     pub twitch_id: Uuid,
     pub is_paused: bool,
     pub pause_reason: Option<PauseReason>,
@@ -240,6 +242,8 @@ pub struct NewReward {
 
 #[derive(Debug, Clone, Default)]
 pub struct UpdateReward {
+    pub script_alias: Option<String>,
+    pub is_visible: Option<bool>,
     pub is_paused: Option<bool>,
     pub pause_reason: Option<PauseReason>,
     pub is_deleted: Option<bool>,
@@ -275,7 +279,7 @@ pub struct UpdateReward {
 macro_rules! reward_select {
     ($tail:expr) => {
         concat!(
-            "SELECT twitch_id, is_paused, pause_reason, is_deleted, streamer_id, reward_type, pricing_mode, price_strategy, market_item_name, filter_config, pool_items, manual_twitch_points, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, retry_on_buyer_failure, currency, min_market_price, max_market_price, chat_min_messages, chat_min_characters, chat_time_window_hours, chat_logical_operator, refund_if_chat_req_failed, purchase_limits, is_public, created_at, updated_at FROM rewards ",
+            "SELECT script_alias, is_visible, twitch_id, is_paused, pause_reason, is_deleted, streamer_id, reward_type, pricing_mode, price_strategy, market_item_name, filter_config, pool_items, manual_twitch_points, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, retry_on_buyer_failure, currency, min_market_price, max_market_price, chat_min_messages, chat_min_characters, chat_time_window_hours, chat_logical_operator, refund_if_chat_req_failed, purchase_limits, is_public, created_at, updated_at FROM rewards ",
             $tail
         )
     };
@@ -285,7 +289,7 @@ macro_rules! reward_insert_returning {
     ($insert_stmt:expr) => {
         concat!(
             $insert_stmt,
-            " RETURNING twitch_id, is_paused, pause_reason, is_deleted, streamer_id, reward_type, pricing_mode, price_strategy, market_item_name, filter_config, pool_items, manual_twitch_points, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, retry_on_buyer_failure, currency, min_market_price, max_market_price, chat_min_messages, chat_min_characters, chat_time_window_hours, chat_logical_operator, refund_if_chat_req_failed, purchase_limits, is_public, created_at, updated_at"
+            " RETURNING script_alias, is_visible, twitch_id, is_paused, pause_reason, is_deleted, streamer_id, reward_type, pricing_mode, price_strategy, market_item_name, filter_config, pool_items, manual_twitch_points, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, market_autobuy, retry_on_buyer_failure, currency, min_market_price, max_market_price, chat_min_messages, chat_min_characters, chat_time_window_hours, chat_logical_operator, refund_if_chat_req_failed, purchase_limits, is_public, created_at, updated_at"
         )
     };
 }
@@ -424,7 +428,7 @@ impl Db {
 
     pub async fn update_reward(&self, twitch_id: Uuid, patch: &UpdateReward) -> DbResult<()> {
         sqlx::query(
-            "UPDATE rewards SET is_paused = COALESCE($2, is_paused), pause_reason = CASE WHEN $2 = FALSE THEN NULL WHEN $15::varchar IS NOT NULL THEN $15 ELSE pause_reason END, is_deleted = COALESCE($3, is_deleted), market_item_name = CASE WHEN COALESCE($16, reward_type) != 'FIXED' THEN NULL ELSE COALESCE($4, market_item_name) END, twitch_title = COALESCE($5, twitch_title), twitch_description = COALESCE($6, twitch_description), current_market_price = COALESCE($7, current_market_price), permissible_market_price_deviation = COALESCE($8, permissible_market_price_deviation), twitch_price_markup_percentage = COALESCE($9, twitch_price_markup_percentage), global_cooldown_seconds = COALESCE($10, global_cooldown_seconds), max_redemptions_per_stream = COALESCE($11, max_redemptions_per_stream), max_redemptions_per_user_per_stream = COALESCE($12, max_redemptions_per_user_per_stream), market_autobuy = COALESCE($13, market_autobuy), currency = COALESCE($14, currency), reward_type = COALESCE($16, reward_type), pricing_mode = COALESCE($17, pricing_mode), price_strategy = COALESCE($18, price_strategy), filter_config = CASE WHEN COALESCE($16, reward_type) != 'FILTER' THEN NULL ELSE COALESCE($19, filter_config) END, pool_items = CASE WHEN COALESCE($16, reward_type) != 'POOL' THEN NULL ELSE COALESCE($20, pool_items) END, min_market_price = COALESCE($21, min_market_price), max_market_price = COALESCE($22, max_market_price), chat_min_messages = COALESCE($23, chat_min_messages), chat_min_characters = COALESCE($24, chat_min_characters), chat_time_window_hours = COALESCE($25, chat_time_window_hours), chat_logical_operator = COALESCE($26, chat_logical_operator), refund_if_chat_req_failed = COALESCE($27, refund_if_chat_req_failed), manual_twitch_points = COALESCE($28, manual_twitch_points), purchase_limits = COALESCE($29, purchase_limits), is_public = COALESCE($30, is_public), retry_on_buyer_failure = COALESCE($31, retry_on_buyer_failure), updated_at = NOW() WHERE twitch_id = $1"
+            "UPDATE rewards SET is_paused = COALESCE($2, is_paused), pause_reason = CASE WHEN $2 = FALSE THEN NULL WHEN $15::varchar IS NOT NULL THEN $15 ELSE pause_reason END, is_deleted = COALESCE($3, is_deleted), market_item_name = CASE WHEN COALESCE($16, reward_type) != 'FIXED' THEN NULL ELSE COALESCE($4, market_item_name) END, twitch_title = COALESCE($5, twitch_title), twitch_description = COALESCE($6, twitch_description), current_market_price = COALESCE($7, current_market_price), permissible_market_price_deviation = COALESCE($8, permissible_market_price_deviation), twitch_price_markup_percentage = COALESCE($9, twitch_price_markup_percentage), global_cooldown_seconds = COALESCE($10, global_cooldown_seconds), max_redemptions_per_stream = COALESCE($11, max_redemptions_per_stream), max_redemptions_per_user_per_stream = COALESCE($12, max_redemptions_per_user_per_stream), market_autobuy = COALESCE($13, market_autobuy), currency = COALESCE($14, currency), reward_type = COALESCE($16, reward_type), pricing_mode = COALESCE($17, pricing_mode), price_strategy = COALESCE($18, price_strategy), filter_config = CASE WHEN COALESCE($16, reward_type) != 'FILTER' THEN NULL ELSE COALESCE($19, filter_config) END, pool_items = CASE WHEN COALESCE($16, reward_type) != 'POOL' THEN NULL ELSE COALESCE($20, pool_items) END, min_market_price = COALESCE($21, min_market_price), max_market_price = COALESCE($22, max_market_price), chat_min_messages = COALESCE($23, chat_min_messages), chat_min_characters = COALESCE($24, chat_min_characters), chat_time_window_hours = COALESCE($25, chat_time_window_hours), chat_logical_operator = COALESCE($26, chat_logical_operator), refund_if_chat_req_failed = COALESCE($27, refund_if_chat_req_failed), manual_twitch_points = COALESCE($28, manual_twitch_points), purchase_limits = COALESCE($29, purchase_limits), is_public = COALESCE($30, is_public), retry_on_buyer_failure = COALESCE($31, retry_on_buyer_failure), is_visible=COALESCE($32,is_visible), script_alias=CASE WHEN $33::text IS NULL THEN script_alias ELSE NULLIF($33, '') END, updated_at = NOW() WHERE twitch_id = $1"
         )
         .bind(twitch_id)
         .bind(patch.is_paused)
@@ -457,6 +461,8 @@ impl Db {
         .bind(&patch.purchase_limits)
         .bind(patch.is_public)
         .bind(patch.retry_on_buyer_failure)
+        .bind(patch.is_visible)
+        .bind(&patch.script_alias)
         .execute(&self.pool)
         .await?;
         Ok(())

@@ -172,6 +172,7 @@ pub async fn get_public_rewards(
     let result = rewards
         .into_iter()
         .filter(|r| cfg.show_paused_rewards || !r.is_paused)
+        .filter(|r| cfg.show_invisible_rewards || r.is_visible)
         .map(|r| build_public_reward_response(&r, &cfg, setting.base_price_multiplier))
         .collect();
 
@@ -222,6 +223,10 @@ pub async fn get_public_reward_by_id(
         return Err(ApiError::NotFound {
             message: format!("Reward '{}' not found on this channel", reward_id),
         });
+    }
+
+    if !reward.is_visible && !cfg.show_invisible_rewards {
+        return Err(ApiError::NotFound { message: "Reward not found".into() });
     }
 
     if reward.is_paused && !cfg.show_paused_rewards {
@@ -381,6 +386,7 @@ mod tests {
 
     fn reward(currency: &str) -> Reward {
         Reward {
+            is_visible: true, script_alias: None,
             twitch_id: Uuid::new_v4(), is_paused: false, pause_reason: None, is_deleted: false,
             streamer_id: "123".into(), reward_type: RewardType::Pool, pricing_mode: PricingMode::Auto,
             price_strategy: None, market_item_name: Some("AK-47 | Redline".into()), filter_config: None,

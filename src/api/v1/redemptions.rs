@@ -18,8 +18,10 @@ pub struct RedemptionPath {
 
 #[derive(Serialize, ToSchema)]
 pub struct RedemptionResponse {
+    pub origin: String,
+    pub twitch_redemption_id: Option<Uuid>,
     /// Twitch redemption UUID
-    pub twitch_redemption_id: Uuid,
+    pub fulfillment_id: Uuid,
     /// Twitch reward UUID this redemption belongs to
     pub twitch_reward_id: Uuid,
     /// Twitch user ID who made the redemption
@@ -59,7 +61,9 @@ pub struct RedemptionResponse {
 impl From<Redemption> for RedemptionResponse {
     fn from(r: Redemption) -> Self {
         Self {
+            origin: r.origin,
             twitch_redemption_id: r.twitch_redemption_id,
+            fulfillment_id: r.fulfillment_id,
             twitch_reward_id: r.twitch_reward_id,
             user_id: r.user_id,
             user_login: r.user_login,
@@ -124,7 +128,7 @@ pub struct ListRedemptionsQuery {
             example = json!({
                 "items": [
                     {
-                        "twitch_redemption_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                        "fulfillment_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
                         "twitch_reward_id": "550e8400-e29b-41d4-a716-446655440000",
                         "user_id": "987654321",
                         "user_login": "some_viewer",
@@ -178,11 +182,11 @@ pub async fn list_redemptions(
     ).await?;
 
     let mut items: Vec<RedemptionResponse> = redemptions.into_iter().map(RedemptionResponse::from).collect();
-    let ids: Vec<Uuid> = items.iter().map(|r| r.twitch_redemption_id).collect();
+    let ids: Vec<Uuid> = items.iter().map(|r| r.fulfillment_id).collect();
     let states = state.db.get_redemption_inventory_states(&ids).await?;
     let states: std::collections::HashMap<Uuid, _> = states.into_iter().map(|s| (s.redemption_id, s)).collect();
     for item in &mut items {
-        if let Some(inventory) = states.get(&item.twitch_redemption_id) {
+        if let Some(inventory) = states.get(&item.fulfillment_id) {
             item.inventory_lifecycle_status = Some(inventory.lifecycle_status.clone());
             item.inventory_id = Some(inventory.inventory_id);
             item.inventory_operator_can_attempt = inventory.operator_can_attempt;
@@ -329,6 +333,7 @@ pub async fn refund_redemption(
         });
     }
 
+    if redemption.origin == "SCRIPT" { return Err(ApiError::UnprocessableEntity {message:"Script items have no Twitch redemption; use viewer discard".into(),param:"redemption_id".into()}); }
     if state.db.inventory_exists(redemption_id).await? {
         let result = crate::processor::inventory_fulfillment::refund(&state, redemption_id, false, Some(&auth.user_id)).await
             .map_err(|message| ApiError::Internal { message })?;
@@ -366,7 +371,7 @@ pub async fn refund_redemption(
     state.with_broadcaster_token(&bc_ref, move |token| {
         let broadcaster_id = broadcaster_id.clone();
         let reward_id = redemption.twitch_reward_id.to_string();
-        let redemption_id = redemption.twitch_redemption_id.to_string();
+        let redemption_id = redemption.fulfillment_id.to_string();
         let state_clone = Arc::clone(&state_clone);
         async move {
             state_clone.helix_client.update_redemption_status(
@@ -462,6 +467,7 @@ pub async fn penalty_redemption(
         });
     }
 
+    if redemption.origin == "SCRIPT" { return Err(ApiError::UnprocessableEntity {message:"Script items have no Twitch redemption; use viewer discard".into(),param:"redemption_id".into()}); }
     if state.db.inventory_exists(redemption_id).await? {
         return Err(ApiError::UnprocessableEntity { message: "Inventory fulfillment remains pending until delivery or a safe explicit refund".into(), param: "redemption_id".into() });
     }
@@ -494,7 +500,7 @@ pub async fn penalty_redemption(
     state.with_broadcaster_token(&bc_ref, move |token| {
         let broadcaster_id = broadcaster_id.clone();
         let reward_id = redemption.twitch_reward_id.to_string();
-        let redemption_id = redemption.twitch_redemption_id.to_string();
+        let redemption_id = redemption.fulfillment_id.to_string();
         let state_clone = Arc::clone(&state_clone);
         async move {
             state_clone.helix_client.update_redemption_status(
@@ -553,7 +559,8 @@ mod tests {
     #[test]
     fn test_redemption_response_contains_user_trade_link() {
         let redemption = Redemption {
-            twitch_redemption_id: Uuid::new_v4(),
+            origin: "TWITCH".into(), twitch_redemption_id: Some(Uuid::new_v4()),
+            fulfillment_id: Uuid::new_v4(),
             twitch_reward_id: Uuid::new_v4(),
             user_id: "12345".to_string(),
             user_login: "streamer_fan".to_string(),
@@ -580,7 +587,8 @@ mod tests {
     #[test]
     fn test_redemption_response_failure_details_serialization() {
         let redemption = Redemption {
-            twitch_redemption_id: Uuid::new_v4(),
+            origin: "TWITCH".into(), twitch_redemption_id: Some(Uuid::new_v4()),
+            fulfillment_id: Uuid::new_v4(),
             twitch_reward_id: Uuid::new_v4(),
             user_id: "12345".to_string(),
             user_login: "viewer".to_string(),

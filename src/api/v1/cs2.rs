@@ -376,6 +376,9 @@ async fn signed(
         };
         let transition = state.cs2.process(source.clone(), &gsi);
         crate::cs2::log_transition(&source, &gsi, &transition);
+        if let Err(error) = crate::scripting::matches::persist(state.db.pool(), &source, &transition).await {
+            tracing::error!(%error, channel_id=%source.channel_id, "Could not persist scripting context; GSI transport remains available");
+        }
     }
     Ok(axum::http::StatusCode::NO_CONTENT)
 }

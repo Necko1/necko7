@@ -44,6 +44,7 @@ pub fn stop_broadcaster_tasks(state: &AppState, channel_id: &str) {
 }
 
 pub async fn start_background_tasks(state: Arc<AppState>) {
+    crate::scripting::worker::start(state.clone());
     let state_eventsub = state.clone();
     state.spawn_task(async move {
         state_eventsub.recover_eventsub_subscriptions().await;
@@ -273,7 +274,7 @@ async fn recover_active_orders(state: Arc<AppState>) {
 
         // Live inventory attempts are resumed by the database-backed poller.
         // Old orders without a trusted attempt retain their legacy watcher.
-        match state.db.get_inventory_core(order.twitch_redemption_id).await {
+        match state.db.get_inventory_core(order.fulfillment_id).await {
             Ok(Some(item)) if item.4 != "LEGACY_REVIEW" => continue,
             Ok(_) => {},
             Err(e) => { warn!(error = %e, "Cannot classify recovered order"); continue; }
@@ -282,11 +283,11 @@ async fn recover_active_orders(state: Arc<AppState>) {
         let reward = match state.db.get_reward_by_twitch_id(order.twitch_reward_id).await {
             Ok(Some(r)) => r,
             Ok(None) => {
-                warn!(redemption_id = %order.twitch_redemption_id, reward_id = %order.twitch_reward_id, "Active order has missing reward in DB, skipping recovery");
+                warn!(redemption_id = %order.fulfillment_id, reward_id = %order.twitch_reward_id, "Active order has missing reward in DB, skipping recovery");
                 continue;
             }
             Err(e) => {
-                error!(error = %e, redemption_id = %order.twitch_redemption_id, "DB error fetching reward during order recovery");
+                error!(error = %e, redemption_id = %order.fulfillment_id, "DB error fetching reward during order recovery");
                 continue;
             }
         };
@@ -294,11 +295,11 @@ async fn recover_active_orders(state: Arc<AppState>) {
         let setting = match state.db.get_broadcaster_setting(&reward.streamer_id).await {
             Ok(Some(s)) if !s.market_api_key.trim().is_empty() => s,
             Ok(Some(_)) => {
-                warn!(streamer_id = %reward.streamer_id, redemption_id = %order.twitch_redemption_id, "Broadcaster has no market API key configured, skipping order recovery");
+                warn!(streamer_id = %reward.streamer_id, redemption_id = %order.fulfillment_id, "Broadcaster has no market API key configured, skipping order recovery");
                 continue;
             }
             Ok(None) => {
-                warn!(streamer_id = %reward.streamer_id, redemption_id = %order.twitch_redemption_id, "Broadcaster setting not found in DB, skipping order recovery");
+                warn!(streamer_id = %reward.streamer_id, redemption_id = %order.fulfillment_id, "Broadcaster setting not found in DB, skipping order recovery");
                 continue;
             }
             Err(e) => {
@@ -307,12 +308,12 @@ async fn recover_active_orders(state: Arc<AppState>) {
             }
         };
 
-        info!(redemption_id = %order.twitch_redemption_id, user_login = %order.user_login, "Resuming OrderWatcher for recovered active order");
+        info!(redemption_id = %order.fulfillment_id, user_login = %order.user_login, "Resuming OrderWatcher for recovered active order");
 
         let custom_id = if order.retry_count == 0 {
-            order.twitch_redemption_id.to_string()
+            order.fulfillment_id.to_string()
         } else {
-            format!("{}-{}", order.twitch_redemption_id, order.retry_count)
+            format!("{}-{}", order.fulfillment_id, order.retry_count)
         };
 
         let order_watcher = OrderWatcher::new(
@@ -320,7 +321,7 @@ async fn recover_active_orders(state: Arc<AppState>) {
             setting.market_api_key,
             reward.streamer_id,
             WatcherRedemptionData {
-                redemption_id: order.twitch_redemption_id,
+                redemption_id: order.fulfillment_id,
                 custom_id,
                 reward_id: order.twitch_reward_id,
                 activated_at: order.updated_at,

@@ -14,6 +14,8 @@ use crate::state::AppState;
 use crate::steam::market::errors::{classify_market_buy_for_error, MarketBuyForErrorKind};
 use crate::steam::trade_link::TradeLink;
 
+tokio::task_local! { static SILENT_SCRIPT: bool; }
+
 fn resolve_trade_link(message: &str, saved: Option<&str>, use_saved_link: bool) -> Option<TradeLink> {
     if use_saved_link {
         saved.and_then(TradeLink::parse)
@@ -64,6 +66,7 @@ pub async fn send_inventory_chat(
     state: &Arc<AppState>, channel_id: &str, template: &str, buyer: &str, item: &str,
     extra: &[(&str, &str)],
 ) {
+    if SILENT_SCRIPT.try_with(|silent| *silent).unwrap_or(false) { return; }
     let mut vars = vec![("buyer", buyer), ("item", item)];
     vars.extend_from_slice(extra);
     let message = state.render_chat_message(channel_id, template, &vars);
@@ -105,6 +108,11 @@ pub async fn announce_trade(
 /// A new order is only made by initial auto-buy or an explicit authorized action.
 /// The durable CALLING row is deliberately treated as ambiguous after a crash.
 pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action: bool, use_saved_link: bool,
+    actor_user_id: Option<&str>) -> Result<&'static str, String> {
+    let silent = state.db.get_redemption(redemption_id).await.map_err(|e|e.to_string())?.is_some_and(|r|r.origin=="SCRIPT");
+    SILENT_SCRIPT.scope(silent,purchase_inner(state,redemption_id,viewer_action,use_saved_link,actor_user_id)).await
+}
+async fn purchase_inner(state: &Arc<AppState>, redemption_id: Uuid, viewer_action: bool, use_saved_link: bool,
     actor_user_id: Option<&str>) -> Result<&'static str, String> {
     let redemption = state.db.get_redemption(redemption_id).await.map_err(|e| e.to_string())?
         .ok_or("Redemption not found")?;
@@ -295,6 +303,7 @@ pub async fn fulfill_delivered_twitch(state: &Arc<AppState>, redemption_id: Uuid
         .ok_or("Redemption not found")?;
     let reward = state.db.get_reward_by_twitch_id(redemption.twitch_reward_id).await.map_err(|e| e.to_string())?
         .ok_or("Reward not found")?;
+    if redemption.origin == "SCRIPT" { return Ok(()); }
     state.with_broadcaster_token(&reward.streamer_id, async |token| {
         state.helix_client.update_redemption_status(&reward.streamer_id,
             &redemption.twitch_reward_id.to_string(), &redemption_id.to_string(), false, &token).await
@@ -306,6 +315,7 @@ pub async fn fulfill_delivered_twitch(state: &Arc<AppState>, redemption_id: Uuid
 pub async fn refund(state: &Arc<AppState>, redemption_id: Uuid, viewer_action: bool,
     actor_user_id: Option<&str>) -> Result<&'static str, String> {
     let redemption = state.db.get_redemption(redemption_id).await.map_err(|e| e.to_string())?.ok_or("Redemption not found")?;
+    if redemption.origin == "SCRIPT" { return Ok("SCRIPT_ITEM_REQUIRES_DISCARD"); }
     let reward = state.db.get_reward_by_twitch_id(redemption.twitch_reward_id).await.map_err(|e| e.to_string())?.ok_or("Reward not found")?;
     let inventory = state.db.get_inventory_core(redemption_id).await.map_err(|e| e.to_string())?.ok_or("Inventory item not found")?;
     if let Some(latest) = state.db.latest_inventory_attempt(redemption_id).await.map_err(|e| e.to_string())? {

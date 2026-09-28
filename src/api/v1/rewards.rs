@@ -23,6 +23,8 @@ pub struct RewardPath {
 
 #[derive(Serialize, ToSchema)]
 pub struct RewardResponse {
+    pub script_alias: Option<String>,
+    pub is_visible: bool,
     /// Twitch reward UUID
     pub twitch_id: Uuid,
     /// Whether the reward is currently paused
@@ -96,6 +98,8 @@ impl From<Reward> for RewardResponse {
     fn from(r: Reward) -> Self {
         Self {
             twitch_id: r.twitch_id,
+            script_alias: r.script_alias,
+            is_visible: r.is_visible,
             is_paused: r.is_paused,
             pause_reason: r.pause_reason,
             is_deleted: r.is_deleted,
@@ -790,6 +794,9 @@ pub async fn create_reward(
 
 #[derive(Deserialize, ToSchema)]
 pub struct UpdateRewardBody {
+    /// Empty string clears the optional script alias.
+    pub script_alias: Option<String>,
+    pub is_visible: Option<bool>,
     /// New Twitch reward title
     pub twitch_title: Option<String>,
     /// New Twitch reward description
@@ -1200,6 +1207,13 @@ pub async fn update_reward(
     }
 
     // PATCH must not resend an unchanged legacy prompt that Twitch would reject.
+    if let Some(alias) = &body.script_alias {
+        if !alias.is_empty() && (alias.len()>64 || !alias.as_bytes()[0].is_ascii_lowercase() || !alias.bytes().all(|b|b.is_ascii_lowercase() || b.is_ascii_digit() || b==b'_')) {
+            return Err(ApiError::BadRequest {message:"Script alias must begin with a lowercase letter and contain only lowercase letters, digits and underscores (max 64)".into(),param:"script_alias".into()});
+        }
+        let taken:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM rewards WHERE streamer_id=$1 AND script_alias=$2 AND twitch_id<>$3 AND NOT is_deleted)").bind(&auth.channel_id).bind(alias).bind(reward_id).fetch_one(state.db.pool()).await.map_err(crate::db::error::DbError::from)?;
+        if taken {return Err(ApiError::BadRequest {message:"Script alias is already used by another reward".into(),param:"script_alias".into()});}
+    }
     normalize_description_patch(&mut body.twitch_description, &existing.twitch_description)?;
 
     if let Some(ref title) = body.twitch_title {
@@ -1467,7 +1481,7 @@ pub async fn update_reward(
         || body.max_redemptions_per_stream.is_some()
         || body.max_redemptions_per_user_per_stream.is_some()
         || body.global_cooldown_seconds.is_some()
-        || body.is_paused.is_some();
+        || body.is_paused.is_some() || body.is_visible.is_some();
 
     if has_twitch_updates {
         let update_info = crate::helix::api::custom_rewards::model::UpdateCustomReward {
@@ -1479,6 +1493,7 @@ pub async fn update_reward(
             max_per_user_per_stream: body.max_redemptions_per_user_per_stream.map(|v| v as u32),
             global_cooldown_seconds: body.global_cooldown_seconds.map(|v| v as u32),
             is_paused: body.is_paused,
+            is_visible: body.is_visible,
         };
 
         let broadcaster_id = auth.channel_id.clone();
@@ -1528,6 +1543,8 @@ pub async fn update_reward(
 
     let patch = crate::db::rewards::UpdateReward {
         is_paused: target_paused,
+        is_visible: body.is_visible,
+        script_alias: body.script_alias.clone(),
         pause_reason: patch_pause_reason,
         is_deleted: None,
         reward_type: body.reward_type,
@@ -1560,6 +1577,9 @@ pub async fn update_reward(
     };
 
     state.db.update_reward(reward_id, &patch).await?;
+    if body.is_visible.is_some() || body.script_alias.is_some() {
+        crate::scripting::service::audit(&state,&auth.channel_id,"reward.scripting_updated",serde_json::json!({"actor_type":"user","user_id":auth.user_id,"reward_id":reward_id,"is_visible":body.is_visible,"script_alias":body.script_alias}));
+    }
 
     tracing::info!(
         reward_id = %reward_id,
@@ -2406,6 +2426,7 @@ mod tests {
     #[test]
     fn test_reward_response_includes_manual_twitch_points() {
         let reward = crate::db::rewards::Reward {
+            is_visible:true, script_alias:None,
             twitch_id: uuid::Uuid::new_v4(),
             is_paused: false,
             pause_reason: None,
@@ -2526,6 +2547,7 @@ mod tests {
     #[test]
     fn test_detect_reward_changes_isolates_actual_modifications() {
         let reward = crate::db::rewards::Reward {
+            is_visible:true, script_alias:None,
             twitch_id: uuid::Uuid::new_v4(),
             is_paused: false,
             pause_reason: None,
@@ -2583,6 +2605,7 @@ mod tests {
     #[test]
     fn test_detect_reward_changes_with_calculated_market_price() {
         let reward = crate::db::rewards::Reward {
+            is_visible:true, script_alias:None,
             twitch_id: uuid::Uuid::new_v4(),
             is_paused: false,
             pause_reason: None,

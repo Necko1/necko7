@@ -15,11 +15,17 @@ use crate::processor::model::EventSubNotification;
 use crate::state::AppState;
 use crate::steam::market;
 
+pub(crate) fn chat_requirements_pass(reward: &crate::db::rewards::Reward, messages:i64, characters:i64)->bool {
+    let msgs=reward.chat_min_messages.is_none_or(|n|messages>=i64::from(n));
+    let chars=reward.chat_min_characters.is_none_or(|n|characters>=i64::from(n));
+    if reward.chat_min_messages.is_some() && reward.chat_min_characters.is_some()
+        && reward.chat_logical_operator==Some(crate::db::rewards::ChatLogicalOperator::Or) {msgs||chars} else {msgs&&chars}
+}
 pub async fn process_redemption(
     state: Arc<AppState>,
     notification: EventSubNotification,
 ) {
-    process_redemption_inner(state, notification, false).await;
+    process_fulfillment(state, notification.event, false, None).await;
 }
 
 pub async fn resume_pending_inventory_resolution(state: Arc<AppState>, redemption_id: Uuid) {
@@ -47,15 +53,16 @@ pub async fn resume_pending_inventory_resolution(state: Arc<AppState>, redemptio
             redeemed_at: redemption.created_at,
         },
     };
-    process_redemption_inner(state, notification, true).await;
+    process_fulfillment(state, notification.event, true, None).await;
 }
 
-async fn process_redemption_inner(
+pub(crate) async fn process_fulfillment(
     state: Arc<AppState>,
-    notification: EventSubNotification,
+    event: crate::processor::model::RedemptionEvent,
     resuming: bool,
+    script: Option<crate::scripting::service::Attribution>,
 ) {
-    let event = notification.event;
+    let is_script = script.is_some() || state.db.get_redemption(event.id).await.ok().flatten().is_some_and(|r|r.origin == "SCRIPT");
     let redemption_id = event.id;
     let reward_id = event.reward.id;
     let broadcaster_user_id = event.broadcaster_user_id.clone();
@@ -120,8 +127,8 @@ async fn process_redemption_inner(
                 return;
             }
         }
-    } else { match state.db.insert_redemption_with_limits(&NewRedemption {
-        twitch_redemption_id: redemption_id,
+    } else { match state.db.insert_fulfillment_with_limits(&NewRedemption {
+        fulfillment_id: redemption_id,
         twitch_reward_id: reward_id,
         user_id: event.user_id.clone(),
         user_login: event.user_login.clone(),
@@ -130,7 +137,7 @@ async fn process_redemption_inner(
         currency: reward_data.currency.clone(),
         status: RedemptionStatus::Pending,
         market_item_name: initial_item_name.clone(),
-    }, event.redeemed_at).await {
+    }, event.redeemed_at, script.as_ref()).await {
         Ok(Some((_, decision))) => decision,
         Ok(None) => {
             info!(redemption_id = %redemption_id, "Redemption is already being processed, ignoring duplicate");
@@ -200,26 +207,7 @@ async fn process_redemption_inner(
             }
         };
 
-        let msgs_ok = match reward_data.chat_min_messages {
-            Some(min) => user_msgs >= min as i64,
-            None => true,
-        };
-
-        let chars_ok = match reward_data.chat_min_characters {
-            Some(min) => user_chars >= min as i64,
-            None => true,
-        };
-
-        let operator = reward_data.chat_logical_operator.unwrap_or(crate::db::rewards::ChatLogicalOperator::And);
-        let passed = match (reward_data.chat_min_messages.is_some(), reward_data.chat_min_characters.is_some()) {
-            (true, true) => match operator {
-                crate::db::rewards::ChatLogicalOperator::And => msgs_ok && chars_ok,
-                crate::db::rewards::ChatLogicalOperator::Or => msgs_ok || chars_ok,
-            },
-            (true, false) => msgs_ok,
-            (false, true) => chars_ok,
-            (false, false) => true,
-        };
+        let passed=chat_requirements_pass(&reward_data,user_msgs,user_chars);
 
         if !passed {
             warn!(
@@ -262,7 +250,7 @@ async fn process_redemption_inner(
                 "chat_requirements_unmet",
                 Some("User did not meet chat activity requirements"),
             ).await;
-            let op_str = match operator {
+            let op_str = match reward_data.chat_logical_operator.unwrap_or(crate::db::rewards::ChatLogicalOperator::And) {
                 crate::db::rewards::ChatLogicalOperator::And => "and",
                 crate::db::rewards::ChatLogicalOperator::Or => "or",
             };
@@ -321,7 +309,7 @@ async fn process_redemption_inner(
             };
 
             let msg = state.render_chat_message(&broadcaster_user_id, template_key, &vars);
-            if let Err(e) = state.send_chat_message(&broadcaster_user_id, &msg, None).await {
+            if !is_script && let Err(e) = state.send_chat_message(&broadcaster_user_id, &msg, None).await {
                 error!(error = %e, redemption_id = %redemption_id, "Failed to send chat message for chat requirements failure");
             }
 
@@ -352,7 +340,7 @@ async fn process_redemption_inner(
                 MSG_GLOBAL_PURCHASE_LIMIT_REACHED,
                 &[("buyer", &event.user_login), ("limit", &limit), ("period", &period),
                     ("item", &reward_data.twitch_title), ("hours", &hours)]);
-            let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await;
+            if !is_script { let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await; }
             return;
         }
         PurchaseLimitDecision::UserRejected { count, max_redemptions, window_hours } => {
@@ -370,7 +358,7 @@ async fn process_redemption_inner(
                 MSG_USER_PURCHASE_LIMIT_REACHED,
                 &[("buyer", &event.user_login), ("limit", &limit), ("period", &period),
                     ("item", &reward_data.twitch_title), ("hours", &hours)]);
-            let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await;
+            if !is_script { let _ = state.send_chat_message(&broadcaster_user_id, &msg, None).await; }
             return;
         }
     }
@@ -444,7 +432,7 @@ async fn process_redemption_inner(
         }
     };
     let actual_mode = state.db.get_inventory_core(redemption_id).await.ok().flatten().map(|item| item.4);
-    if created {
+    if created && !is_script {
         // POOL announces the selected result with its own template; manual modes
         // additionally explain the next action. Other types keep their existing notice.
         let saved_mode = actual_mode.as_deref().unwrap_or(mode);
@@ -617,6 +605,12 @@ async fn update_redemption_status_failed(
     fail_cause: &str,
     fail_description: Option<&str>,
 ) {
+    if state.db.get_redemption(redemption_id).await.ok().flatten().is_some_and(|r| r.origin == "SCRIPT") {
+        if let Err(error) = state.db.update_redemption_status(redemption_id, RedemptionStatus::FailedPenalty, Some(fail_cause), fail_description).await {
+            tracing::error!(%error,%redemption_id,"Could not record script fulfillment failure");
+        }
+        return;
+    }
     if let Err(e) = state.with_broadcaster_token(broadcaster_user_id, async |token| {
         state.helix_client.update_redemption_status(
             broadcaster_user_id,

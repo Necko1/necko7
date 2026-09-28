@@ -13,6 +13,7 @@ pub struct CreateCustomReward {
 
 #[derive(Clone, Default)]
 pub struct UpdateCustomReward {
+    pub is_visible: Option<bool>,
     pub title: Option<String>,
     pub cost: Option<u32>,
     pub description: Option<String>,
@@ -25,6 +26,8 @@ pub struct UpdateCustomReward {
 
 #[derive(Serialize, Default)]
 pub struct TwitchUpdateRewardPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

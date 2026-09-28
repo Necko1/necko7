@@ -539,6 +539,8 @@ async fn database_api_security() {
         .status(),
         StatusCode::UNAUTHORIZED
     );
+    sqlx::query("DELETE FROM script_snapshots WHERE channel_id=$1").bind(&channel).execute(db.pool()).await.unwrap();
+    sqlx::query("DELETE FROM script_matches WHERE channel_id=$1").bind(&channel).execute(db.pool()).await.unwrap();
     sqlx::query("DELETE FROM users WHERE twitch_id=$1 OR twitch_id=$2")
         .bind(channel)
         .bind(editor)

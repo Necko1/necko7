@@ -31,6 +31,8 @@ fn terminal_trade_kind(trade_created: bool, accepted: bool, evidence_complete: b
 
 #[derive(Debug, Clone, FromRow, Serialize, ToSchema)]
 pub struct InventoryItem {
+    pub origin: String,
+    pub twitch_redemption_id: Option<Uuid>,
     pub id: Uuid,
     pub redemption_id: Uuid,
     pub viewer_id: String,
@@ -125,6 +127,20 @@ pub struct RedemptionInventoryState {
 }
 
 impl Db {
+    pub async fn discard_script_item(&self, inventory_id: Uuid, viewer: &str) -> DbResult<bool> {
+        let mut tx=self.pool.begin().await?;
+        let row:Option<(Uuid,String,String)>=sqlx::query_as("SELECT i.redemption_id,i.lifecycle_status,r.origin FROM inventory_items i JOIN redemptions r ON r.fulfillment_id=i.redemption_id WHERE i.id=$1 AND i.viewer_id=$2 FOR UPDATE OF i,r")
+            .bind(inventory_id).bind(viewer).fetch_optional(&mut *tx).await?;
+        let Some((redemption,status,origin))=row else {return Ok(false);};
+        if origin!="SCRIPT" || !["WAITING_VIEWER","WAITING_OPERATOR","TRADE_LINK_REQUIRED","RETRY_AVAILABLE","INSUFFICIENT_FUNDS"].contains(&status.as_str()) {return Ok(false);}
+        let unsafe_attempt:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM inventory_order_attempts WHERE inventory_id=$1 AND status NOT IN ('REJECTED','SELLER_FAILED','BUYER_FAILED'))").bind(inventory_id).fetch_one(&mut *tx).await?;
+        if unsafe_attempt {return Ok(false);}
+        sqlx::query("UPDATE inventory_items SET lifecycle_status='DISCARDED',discarded_at=now(),discarded_by=$2 WHERE id=$1").bind(inventory_id).bind(viewer).execute(&mut *tx).await?;
+        sqlx::query("UPDATE redemptions SET status='FAILED_PENALTY',fail_cause='viewer_discarded',updated_at=now() WHERE fulfillment_id=$1").bind(redemption).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO fulfillment_audit_events(event_key,redemption_id,inventory_id,event_type,actor_kind,actor_user_id) VALUES($1,$2,$3,'inventory_discarded','viewer',$4)")
+            .bind(format!("discard:{inventory_id}")).bind(redemption).bind(inventory_id).bind(viewer).execute(&mut *tx).await?;
+        tx.commit().await?; Ok(true)
+    }
     pub async fn get_redemption_inventory_states(&self, redemption_ids: &[Uuid]) -> DbResult<Vec<RedemptionInventoryState>> {
         Ok(sqlx::query_as::<_, RedemptionInventoryState>(
             "SELECT i.redemption_id, i.id AS inventory_id, i.lifecycle_status,
@@ -137,7 +153,7 @@ impl Db {
                     AS operator_can_attempt,
                     a.status AS latest_attempt_status, a.outcome_kind AS latest_attempt_outcome_kind
              FROM inventory_items i
-             JOIN redemptions r ON r.twitch_redemption_id=i.redemption_id
+             JOIN redemptions r ON r.fulfillment_id=i.redemption_id
              LEFT JOIN LATERAL (SELECT status, outcome_kind FROM inventory_order_attempts
                                 WHERE inventory_id = i.id ORDER BY attempt_id DESC LIMIT 1) a ON TRUE
              WHERE i.redemption_id = ANY($1)"
@@ -146,7 +162,7 @@ impl Db {
     pub async fn get_fulfillment_audit(&self, redemption_id: Uuid, channel_id: &str) -> DbResult<Option<Vec<FulfillmentAuditEvent>>> {
         let authorized: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM redemptions r JOIN rewards rw ON rw.twitch_id = r.twitch_reward_id
-             WHERE r.twitch_redemption_id = $1 AND rw.streamer_id = $2)"
+             WHERE r.fulfillment_id = $1 AND rw.streamer_id = $2)"
         ).bind(redemption_id).bind(channel_id).fetch_one(&self.pool).await?;
         if !authorized { return Ok(None); }
         Ok(Some(sqlx::query_as::<_, FulfillmentAuditEvent>(
@@ -159,19 +175,19 @@ impl Db {
     pub async fn get_delivered_inventory_awaiting_twitch(&self) -> DbResult<Vec<Uuid>> {
         Ok(sqlx::query_scalar(
             "SELECT redemption_id FROM inventory_items WHERE lifecycle_status = 'DELIVERED'
-             AND fulfillment_mode != 'LEGACY_REVIEW' AND twitch_fulfilled_at IS NULL"
+             AND fulfillment_mode != 'LEGACY_REVIEW' AND twitch_fulfilled_at IS NULL AND EXISTS(SELECT 1 FROM redemptions r WHERE r.fulfillment_id=redemption_id AND r.origin='TWITCH')"
         ).fetch_all(&self.pool).await?)
     }
 
     pub async fn inventory_twitch_fulfillment_pending(&self, redemption_id: Uuid) -> DbResult<bool> {
-        Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM inventory_items WHERE redemption_id = $1 AND lifecycle_status = 'DELIVERED' AND fulfillment_mode != 'LEGACY_REVIEW' AND twitch_fulfilled_at IS NULL)")
+        Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM inventory_items WHERE redemption_id = $1 AND lifecycle_status = 'DELIVERED' AND fulfillment_mode != 'LEGACY_REVIEW' AND twitch_fulfilled_at IS NULL AND EXISTS(SELECT 1 FROM redemptions r WHERE r.fulfillment_id=redemption_id AND r.origin='TWITCH'))")
             .bind(redemption_id).fetch_one(&self.pool).await?)
     }
 
     pub async fn claim_inventory_twitch_fulfillment(&self, redemption_id: Uuid) -> DbResult<bool> {
         Ok(sqlx::query("UPDATE inventory_items SET twitch_fulfillment_claimed_at = NOW()
              WHERE redemption_id = $1 AND lifecycle_status = 'DELIVERED'
-               AND fulfillment_mode != 'LEGACY_REVIEW' AND twitch_fulfilled_at IS NULL
+               AND fulfillment_mode != 'LEGACY_REVIEW' AND twitch_fulfilled_at IS NULL AND EXISTS(SELECT 1 FROM redemptions r WHERE r.fulfillment_id=redemption_id AND r.origin='TWITCH')
                AND (twitch_fulfillment_claimed_at IS NULL OR twitch_fulfillment_claimed_at < NOW() - INTERVAL '2 minutes')")
             .bind(redemption_id).execute(&self.pool).await?.rows_affected() > 0)
     }
@@ -195,7 +211,7 @@ impl Db {
 
     pub async fn operator_inventory_redemption(&self, inventory_id: Uuid, viewer_id: &str, channel_id: &str) -> DbResult<Option<Uuid>> {
         Ok(sqlx::query_scalar(
-            "SELECT i.redemption_id FROM inventory_items i JOIN redemptions r ON r.twitch_redemption_id = i.redemption_id
+            "SELECT i.redemption_id FROM inventory_items i JOIN redemptions r ON r.fulfillment_id = i.redemption_id
              JOIN rewards rew ON rew.twitch_id = r.twitch_reward_id
              WHERE i.id = $1 AND i.viewer_id = $2 AND rew.streamer_id = $3"
         ).bind(inventory_id).bind(viewer_id).bind(channel_id).fetch_optional(&self.pool).await?)
@@ -272,7 +288,7 @@ impl Db {
         if mode == "LEGACY_REVIEW" || matches!(status.as_str(), "ORDER_PENDING" | "TRADE_WAITING" | "TRADE_ACCEPTED" | "RECONCILIATION_REQUIRED" | "OPERATOR_REVIEW" | "DELIVERED" | "REFUNDING" | "REFUNDED") {
             return Ok(None);
         }
-        let redemption_status: String = sqlx::query_scalar("SELECT status FROM redemptions WHERE twitch_redemption_id = $1")
+        let redemption_status: String = sqlx::query_scalar("SELECT status FROM redemptions WHERE fulfillment_id = $1")
             .bind(redemption_id).fetch_one(&mut *tx).await?;
         if redemption_status != "PENDING" { return Ok(None); }
         if last_action.is_some_and(|at| (Utc::now() - at).num_seconds() < 30) { return Ok(None); }
@@ -323,7 +339,7 @@ impl Db {
             sqlx::query("UPDATE inventory_items SET lifecycle_status = $2 WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM inventory_order_attempts a WHERE a.inventory_id = $1 AND a.status IN ('CALLING','ORDER_CREATED','TRADE_WAITING','RECONCILIATION_REQUIRED'))")
                 .bind(inventory_id).bind(next).execute(&mut *tx).await?;
         }
-        sqlx::query("UPDATE redemptions SET status = 'PENDING', fail_cause = NULL, fail_description = NULL, updated_at = NOW() WHERE twitch_redemption_id = $1 AND status = 'ORDER_CREATED' AND EXISTS (SELECT 1 FROM inventory_items i WHERE i.redemption_id = $1 AND i.lifecycle_status IN ('RETRY_AVAILABLE','INSUFFICIENT_FUNDS','TRADE_LINK_REQUIRED'))")
+        sqlx::query("UPDATE redemptions SET status = 'PENDING', fail_cause = NULL, fail_description = NULL, updated_at = NOW() WHERE fulfillment_id = $1 AND status = 'ORDER_CREATED' AND EXISTS (SELECT 1 FROM inventory_items i WHERE i.redemption_id = $1 AND i.lifecycle_status IN ('RETRY_AVAILABLE','INSUFFICIENT_FUNDS','TRADE_LINK_REQUIRED'))")
             .bind(redemption_id).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(changed)
@@ -346,7 +362,7 @@ impl Db {
             "SELECT i.redemption_id, r.twitch_reward_id AS reward_id, rew.streamer_id AS channel_id,
                     r.user_login, r.user_trade_link, i.item_name, i.fixed_price, i.currency
              FROM inventory_items i
-             JOIN redemptions r ON r.twitch_redemption_id = i.redemption_id
+             JOIN redemptions r ON r.fulfillment_id = i.redemption_id
              JOIN rewards rew ON rew.twitch_id = r.twitch_reward_id
              WHERE r.status = 'PENDING' AND i.fulfillment_mode = 'AUTO' AND i.lifecycle_status = 'WAITING_VIEWER'
                AND NOT EXISTS (SELECT 1 FROM inventory_order_attempts a WHERE a.inventory_id = i.id)"
@@ -361,7 +377,7 @@ impl Db {
     pub async fn create_inventory_item(&self, redemption_id: Uuid, item_name: &str, fixed_price: i64, fulfillment_mode: &str, buyer_retry_allowed: bool) -> DbResult<bool> {
         let mut tx = self.pool.begin().await?;
         let reward_id: Uuid = sqlx::query_scalar(
-            "SELECT twitch_reward_id FROM redemptions WHERE twitch_redemption_id = $1"
+            "SELECT twitch_reward_id FROM redemptions WHERE fulfillment_id = $1"
         ).bind(redemption_id).fetch_one(&mut *tx).await?;
         // Use the admission lock when converting a reservation into a permanent
         // historical roll. Its window remains anchored to the redemption time.
@@ -371,14 +387,14 @@ impl Db {
         let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM inventory_items WHERE redemption_id=$1)")
             .bind(redemption_id).fetch_one(&mut *tx).await?;
         if exists { tx.commit().await?; return Ok(false); }
-        let admitted: bool = sqlx::query_scalar("SELECT purchase_limit_decision->>'kind' = 'admitted' AND status = 'PENDING' FROM redemptions WHERE twitch_redemption_id=$1")
+        let admitted: bool = sqlx::query_scalar("SELECT purchase_limit_decision->>'kind' = 'admitted' AND status = 'PENDING' FROM redemptions WHERE fulfillment_id=$1")
             .bind(redemption_id).fetch_one(&mut *tx).await?;
         if !admitted { tx.commit().await?; return Ok(false); }
         let result = sqlx::query(
             "INSERT INTO inventory_items (id, redemption_id, viewer_id, item_name, fixed_price, currency, fulfillment_mode, buyer_retry_allowed, lifecycle_status)
-             SELECT $2, r.twitch_redemption_id, r.user_id, $3, $4, r.currency, $5, $6,
+             SELECT $2, r.fulfillment_id, r.user_id, $3, $4, r.currency, $5, $6,
                     CASE WHEN $5 = 'OPERATOR' THEN 'WAITING_OPERATOR' ELSE 'WAITING_VIEWER' END
-             FROM redemptions r WHERE r.twitch_redemption_id = $1
+             FROM redemptions r WHERE r.fulfillment_id = $1
              ON CONFLICT (redemption_id) DO NOTHING"
         )
         .bind(redemption_id).bind(Uuid::new_v4()).bind(item_name).bind(fixed_price)
@@ -430,7 +446,7 @@ impl Db {
     }
 
     pub async fn claim_inventory_attempt_chat(&self, custom_id: &str, event_key: &str) -> DbResult<bool> {
-        Ok(sqlx::query("INSERT INTO inventory_attempt_chat_events (custom_id, event_key) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+        Ok(sqlx::query("INSERT INTO inventory_attempt_chat_events (custom_id, event_key) SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM inventory_order_attempts a JOIN inventory_items i ON i.id=a.inventory_id JOIN redemptions r ON r.fulfillment_id=i.redemption_id WHERE a.custom_id=$1 AND r.origin='TWITCH') ON CONFLICT DO NOTHING")
             .bind(custom_id).bind(event_key).execute(&self.pool).await?.rows_affected() > 0)
     }
 
@@ -472,7 +488,7 @@ impl Db {
         let prior_trade: Option<DateTime<Utc>> = previous.try_get("trade_created_at")?;
         let prior_settlement: Option<DateTime<Utc>> = previous.try_get("settlement")?;
         let evidence_complete: bool = previous.try_get("evidence_complete")?;
-        let redemption_status: String = sqlx::query_scalar("SELECT status FROM redemptions WHERE twitch_redemption_id = $1")
+        let redemption_status: String = sqlx::query_scalar("SELECT status FROM redemptions WHERE fulfillment_id = $1")
             .bind(redemption_id).fetch_one(&mut *tx).await?;
         transition.chat_eligible = redemption_status != "COMPLETED";
         let observed_trade = data.has_active_trade();
@@ -526,11 +542,11 @@ impl Db {
             .bind(id).bind(inventory_status).bind(&data.item_id).execute(&mut *tx).await?;
         if data.stage == "2" {
             sqlx::query("UPDATE redemptions SET status = 'COMPLETED', fail_cause = NULL, fail_description = NULL, updated_at = NOW()
-                         WHERE twitch_redemption_id = $1 AND status NOT IN ('FAILED_REFUND','COMPLETED')")
+                         WHERE fulfillment_id = $1 AND status NOT IN ('FAILED_REFUND','COMPLETED')")
                 .bind(redemption_id).execute(&mut *tx).await?;
         } else if data.stage == "5" {
             sqlx::query("UPDATE redemptions SET status = 'PENDING', fail_cause = NULL, fail_description = NULL, updated_at = NOW()
-                         WHERE twitch_redemption_id = $1 AND status = 'ORDER_CREATED'")
+                         WHERE fulfillment_id = $1 AND status = 'ORDER_CREATED'")
                 .bind(redemption_id).execute(&mut *tx).await?;
         }
         transition.order_created = matches!(previous_status.as_str(), "CALLING" | "RECONCILIATION_REQUIRED");
@@ -569,7 +585,7 @@ impl Db {
             .bind(id).bind(custom_id).bind(status).bind(causer).bind(reason).execute(&mut *tx).await?.rows_affected() > 0;
         sqlx::query("UPDATE inventory_items SET lifecycle_status = 'RETRY_AVAILABLE' WHERE id = $1 AND market_custom_id = $2 AND lifecycle_status IN ('ORDER_PENDING','TRADE_WAITING','RECONCILIATION_REQUIRED')")
             .bind(id).bind(custom_id).execute(&mut *tx).await?;
-        sqlx::query("UPDATE redemptions SET status = 'PENDING', fail_cause = NULL, fail_description = NULL, updated_at = NOW() WHERE twitch_redemption_id = $1 AND status = 'ORDER_CREATED' AND EXISTS (SELECT 1 FROM inventory_items i WHERE i.redemption_id = $1 AND i.market_custom_id = $2 AND i.lifecycle_status = 'RETRY_AVAILABLE')")
+        sqlx::query("UPDATE redemptions SET status = 'PENDING', fail_cause = NULL, fail_description = NULL, updated_at = NOW() WHERE fulfillment_id = $1 AND status = 'ORDER_CREATED' AND EXISTS (SELECT 1 FROM inventory_items i WHERE i.redemption_id = $1 AND i.market_custom_id = $2 AND i.lifecycle_status = 'RETRY_AVAILABLE')")
             .bind(redemption_id).bind(custom_id).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(changed)
@@ -589,7 +605,7 @@ impl Db {
             .bind(id).bind(custom_id).execute(&mut *tx).await?;
         sqlx::query("UPDATE inventory_items SET lifecycle_status = 'DELIVERED', acquired_at = COALESCE(acquired_at, NOW()) WHERE id = $1")
             .bind(id).execute(&mut *tx).await?;
-        sqlx::query("UPDATE redemptions SET status = 'COMPLETED', fail_cause = NULL, fail_description = NULL, updated_at = NOW() WHERE twitch_redemption_id = $1 AND status NOT IN ('FAILED_REFUND','COMPLETED')")
+        sqlx::query("UPDATE redemptions SET status = 'COMPLETED', fail_cause = NULL, fail_description = NULL, updated_at = NOW() WHERE fulfillment_id = $1 AND status NOT IN ('FAILED_REFUND','COMPLETED')")
             .bind(redemption_id).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(true)
@@ -608,7 +624,7 @@ impl Db {
         let id: Uuid = row.try_get("id")?;
         let status: String = row.try_get("lifecycle_status")?;
         if !matches!(status.as_str(), "WAITING_VIEWER" | "WAITING_OPERATOR" | "TRADE_LINK_REQUIRED" | "RETRY_AVAILABLE" | "INSUFFICIENT_FUNDS" | "OPERATOR_REVIEW") { return Ok(false); }
-        let redemption_status: String = sqlx::query_scalar("SELECT status FROM redemptions WHERE twitch_redemption_id = $1")
+        let redemption_status: String = sqlx::query_scalar("SELECT status FROM redemptions WHERE fulfillment_id = $1")
             .bind(redemption_id).fetch_one(&mut *tx).await?;
         if redemption_status != "PENDING" { return Ok(false); }
         if viewer_action {
@@ -640,7 +656,7 @@ impl Db {
             .bind(redemption_id).fetch_one(&mut *tx).await?;
         if succeeded {
             sqlx::query("UPDATE inventory_items SET lifecycle_status = 'REFUNDED' WHERE id = $1").bind(id).execute(&mut *tx).await?;
-            sqlx::query("UPDATE redemptions SET status = 'FAILED_REFUND', fail_cause = 'explicit_refund', updated_at = NOW() WHERE twitch_redemption_id = $1")
+            sqlx::query("UPDATE redemptions SET status = 'FAILED_REFUND', fail_cause = 'explicit_refund', updated_at = NOW() WHERE fulfillment_id = $1")
                 .bind(redemption_id).execute(&mut *tx).await?;
         } else {
             sqlx::query("UPDATE inventory_items SET lifecycle_status = 'RECONCILIATION_REQUIRED' WHERE id = $1")
@@ -652,7 +668,7 @@ impl Db {
 
     pub async fn get_viewer_inventory(&self, viewer_id: &str, channel_id: Option<&str>, status: Option<&str>, search: Option<&str>, limit: i64, offset: i64) -> DbResult<Vec<InventoryItem>> {
         Ok(sqlx::query_as::<_, InventoryItem>(
-            "SELECT i.id, i.redemption_id, i.viewer_id, i.item_name, i.fixed_price, i.currency,
+            "SELECT r.origin,r.twitch_redemption_id,i.id, i.redemption_id, i.viewer_id, i.item_name, i.fixed_price, i.currency,
                     i.lifecycle_status, i.fulfillment_mode, i.buyer_retry_allowed,
                     EXISTS(SELECT 1 FROM inventory_order_attempts buyer_reverts WHERE buyer_reverts.inventory_id = i.id AND buyer_reverts.outcome_kind = 'buyer_reverted') AS has_buyer_revert,
                     i.market_order_id, i.market_custom_id, latest.custom_id AS latest_attempt_custom_id,
@@ -667,7 +683,7 @@ impl Db {
                     i.created_at, i.acquired_at,
                     rew.streamer_id AS channel_id, b.channel_login, rew.twitch_title AS reward_title,
                     r.status AS redemption_status, r.fail_cause, r.fail_description
-             FROM inventory_items i JOIN redemptions r ON r.twitch_redemption_id = i.redemption_id
+             FROM inventory_items i JOIN redemptions r ON r.fulfillment_id = i.redemption_id
              JOIN rewards rew ON rew.twitch_id = r.twitch_reward_id
              JOIN broadcasters b ON b.channel_id = rew.streamer_id
              LEFT JOIN LATERAL (
@@ -728,7 +744,7 @@ mod tests {
 
     async fn new_tracking_attempt(db: &Db, reward: Uuid, viewer: &str, buyer_retry: bool) -> (Uuid, String) {
         let redemption = Uuid::new_v4();
-        sqlx::query("INSERT INTO redemptions (twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, status, created_at, updated_at) VALUES ($1,$2,$3,'viewer','',100,'PENDING',NOW(),NOW())")
+        sqlx::query("INSERT INTO redemptions (fulfillment_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, status, created_at, updated_at) VALUES ($1,$2,$3,'viewer','',100,'PENDING',NOW(),NOW())")
             .bind(redemption).bind(reward).bind(viewer).execute(db.pool()).await.unwrap();
         db.create_inventory_item(redemption, "AK-47 | Redline", 2750, "VIEWER", buyer_retry).await.unwrap();
         let custom_id = db.begin_inventory_attempt(redemption, "test-link", true).await.unwrap().unwrap();
@@ -994,11 +1010,13 @@ mod tests {
         files.sort();
         for path in files.iter().filter(|path| {
             let name = path.to_string_lossy();
-            !name.contains("20260923140000") && !name.contains("20260925120000")
+            !name.contains("20260923140000") && !name.contains("20260925120000") && !name.contains("20260928")
         }) {
             let sql = std::fs::read_to_string(path).unwrap();
             sqlx::raw_sql(sqlx::AssertSqlSafe(sql)).execute(&pool).await.unwrap();
         }
+        // Compatibility projection lets the current domain helpers populate a genuinely old schema fixture.
+        sqlx::query("ALTER TABLE redemptions ADD COLUMN fulfillment_id UUID GENERATED ALWAYS AS (twitch_redemption_id) STORED").execute(&pool).await.unwrap();
         let db = Db { pool };
         let channel = format!("migration-test-{}", Uuid::new_v4());
         let reward = Uuid::new_v4();
@@ -1027,6 +1045,10 @@ mod tests {
         sqlx::raw_sql(sqlx::AssertSqlSafe(std::fs::read_to_string(latest).unwrap())).execute(db.pool()).await.unwrap();
         let audit_migration = migration_dir.join("20260925120000_fulfillment_audit.sql");
         sqlx::raw_sql(sqlx::AssertSqlSafe(std::fs::read_to_string(audit_migration).unwrap())).execute(db.pool()).await.unwrap();
+        sqlx::query("ALTER TABLE redemptions DROP COLUMN fulfillment_id").execute(db.pool()).await.unwrap();
+        for path in files.iter().filter(|p|p.to_string_lossy().contains("20260928")) {
+            sqlx::raw_sql(sqlx::AssertSqlSafe(std::fs::read_to_string(path).unwrap())).execute(db.pool()).await.unwrap();
+        }
         let invented_history: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM fulfillment_audit_events")
             .fetch_one(db.pool()).await.unwrap();
         assert_eq!(invented_history, 0, "migration must not reconstruct historical events from current state");
@@ -1078,7 +1100,7 @@ mod tests {
         sqlx::query("INSERT INTO rewards (twitch_id, is_paused, streamer_id, market_item_name, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, created_at, updated_at) VALUES ($1, false, $2, 'AK-47 | Redline', 'Redline', '', 2500, 10, 0, 0, 1, 1, NOW(), NOW())")
             .bind(reward).bind(&channel).execute(db.pool()).await.unwrap();
         for id in [redemption, old_redemption] {
-            sqlx::query("INSERT INTO redemptions (twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, status, market_item_name, created_at, updated_at) VALUES ($1, $2, $3, 'viewer', 'test-link', 100, 'PENDING', 'AK-47 | Redline', NOW(), NOW())")
+            sqlx::query("INSERT INTO redemptions (fulfillment_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, status, market_item_name, created_at, updated_at) VALUES ($1, $2, $3, 'viewer', 'test-link', 100, 'PENDING', 'AK-47 | Redline', NOW(), NOW())")
                 .bind(id).bind(reward).bind(&viewer).execute(db.pool()).await.unwrap();
         }
         // The viewer has no OAuth account or session; EventSub's stable ID suffices.
@@ -1162,7 +1184,7 @@ mod tests {
         assert!(db.mark_inventory_delivered(redemption, &retry_id).await.unwrap());
         assert!(!db.mark_inventory_delivered(redemption, &retry_id).await.unwrap());
         db.set_redemption_order_created(redemption, 9999, Some("AK-47 | Redline"), 1).await.unwrap();
-        let status: String = sqlx::query_scalar("SELECT status FROM redemptions WHERE twitch_redemption_id = $1")
+        let status: String = sqlx::query_scalar("SELECT status FROM redemptions WHERE fulfillment_id = $1")
             .bind(redemption).fetch_one(db.pool()).await.unwrap();
         assert_eq!(status, "COMPLETED");
         assert!(!db.reserve_inventory_refund(redemption, true).await.unwrap());
@@ -1170,7 +1192,7 @@ mod tests {
             .bind(reward).execute(db.pool()).await.unwrap();
         let items = db.get_viewer_inventory(&viewer, None, None, None, 20, 0).await.unwrap();
         assert_eq!(items[0].fixed_price, 2750);
-        let actual_paid: Option<i64> = sqlx::query_scalar("SELECT market_paid_price FROM redemptions WHERE twitch_redemption_id = $1")
+        let actual_paid: Option<i64> = sqlx::query_scalar("SELECT market_paid_price FROM redemptions WHERE fulfillment_id = $1")
             .bind(redemption).fetch_one(db.pool()).await.unwrap();
         assert_eq!(actual_paid, Some(4321), "paid amount is separate from inventory fixed value");
         assert_eq!(items[0].market_order_id.as_deref(), Some("market-456"));
@@ -1202,7 +1224,7 @@ mod tests {
         // Viewer auto-buy OFF creates an owned item with no attempt. Refund and
         // purchase are serialized against the same inventory row.
         let waiting_id = Uuid::new_v4();
-        sqlx::query("INSERT INTO redemptions (twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, status, created_at, updated_at) VALUES ($1,$2,$3,'viewer','',100,'PENDING',NOW(),NOW())")
+        sqlx::query("INSERT INTO redemptions (fulfillment_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, status, created_at, updated_at) VALUES ($1,$2,$3,'viewer','',100,'PENDING',NOW(),NOW())")
             .bind(waiting_id).bind(reward).bind(&viewer).execute(db.pool()).await.unwrap();
         db.create_inventory_item(waiting_id, "M4A4 | Evil Daimyo", 1950, "VIEWER", false).await.unwrap();
         assert!(!db.get_pending_inventory_without_attempt().await.unwrap().iter().any(|i| i.redemption_id == waiting_id));
@@ -1220,7 +1242,7 @@ mod tests {
         assert_eq!(db.get_viewer_inventory(&viewer, Some(&channel), Some("REFUNDED"), Some("Daimyo"), 20, 0).await.unwrap().len(), 1);
 
         let buyer_id = Uuid::new_v4();
-        sqlx::query("INSERT INTO redemptions (twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, status, created_at, updated_at) VALUES ($1,$2,$3,'viewer','',100,'PENDING',NOW(),NOW())")
+        sqlx::query("INSERT INTO redemptions (fulfillment_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, status, created_at, updated_at) VALUES ($1,$2,$3,'viewer','',100,'PENDING',NOW(),NOW())")
             .bind(buyer_id).bind(reward).bind(&viewer).execute(db.pool()).await.unwrap();
         db.create_inventory_item(buyer_id, "Desert Eagle | Printstream", 6200, "VIEWER", false).await.unwrap();
         let buyer_custom = db.begin_inventory_attempt(buyer_id, "test-link", true).await.unwrap().unwrap();
@@ -1240,7 +1262,7 @@ mod tests {
         assert!(!db.mark_inventory_delivered(buyer_id, &buyer_custom).await.unwrap());
 
         let allowed_id = Uuid::new_v4();
-        sqlx::query("INSERT INTO redemptions (twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, status, created_at, updated_at) VALUES ($1,$2,$3,'viewer','',100,'PENDING',NOW(),NOW())")
+        sqlx::query("INSERT INTO redemptions (fulfillment_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, status, created_at, updated_at) VALUES ($1,$2,$3,'viewer','',100,'PENDING',NOW(),NOW())")
             .bind(allowed_id).bind(reward).bind(&viewer).execute(db.pool()).await.unwrap();
         db.create_inventory_item(allowed_id, "USP-S | Cortex", 3900, "VIEWER", true).await.unwrap();
         let first = db.begin_inventory_attempt(allowed_id, "test-link", true).await.unwrap().unwrap();
@@ -1252,7 +1274,7 @@ mod tests {
         assert!(!db.reserve_inventory_refund(allowed_id, true).await.unwrap());
 
         let seller_id = Uuid::new_v4();
-        sqlx::query("INSERT INTO redemptions (twitch_redemption_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, status, created_at, updated_at) VALUES ($1,$2,$3,'viewer','',100,'PENDING',NOW(),NOW())")
+        sqlx::query("INSERT INTO redemptions (fulfillment_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, status, created_at, updated_at) VALUES ($1,$2,$3,'viewer','',100,'PENDING',NOW(),NOW())")
             .bind(seller_id).bind(reward).bind(&viewer).execute(db.pool()).await.unwrap();
         db.create_inventory_item(seller_id, "AWP | Asiimov", 4100, "VIEWER", false).await.unwrap();
         let seller_custom = db.begin_inventory_attempt(seller_id, "test-link", true).await.unwrap().unwrap();
@@ -1299,19 +1321,19 @@ mod tests {
 
         let orphan_id = Uuid::new_v4();
         let orphan = crate::db::redemptions::NewRedemption {
-            twitch_redemption_id: orphan_id, twitch_reward_id: reward,
+            fulfillment_id: orphan_id, twitch_reward_id: reward,
             user_id: viewer.clone(), user_login: "viewer".into(), user_trade_link: String::new(),
             twitch_points_cost: 100, currency: "USD".into(),
             status: crate::db::redemptions::RedemptionStatus::Pending,
             market_item_name: Some("P250 | Asiimov".into()),
         };
         assert!(db.insert_redemption_if_new(&orphan).await.unwrap().is_some());
-        sqlx::query("UPDATE redemptions SET inventory_resolution_claimed_at = NOW() - INTERVAL '6 minutes' WHERE twitch_redemption_id = $1")
+        sqlx::query("UPDATE redemptions SET inventory_resolution_claimed_at = NOW() - INTERVAL '6 minutes' WHERE fulfillment_id = $1")
             .bind(orphan_id).execute(db.pool()).await.unwrap();
         assert_eq!(db.claim_pending_inventory_resolution().await.unwrap(), vec![orphan_id]);
         assert!(db.claim_pending_inventory_resolution().await.unwrap().is_empty());
         db.create_inventory_item(orphan_id, "P250 | Asiimov", 1234, "VIEWER", false).await.unwrap();
-        sqlx::query("UPDATE redemptions SET inventory_resolution_claimed_at = NOW() - INTERVAL '6 minutes' WHERE twitch_redemption_id = $1")
+        sqlx::query("UPDATE redemptions SET inventory_resolution_claimed_at = NOW() - INTERVAL '6 minutes' WHERE fulfillment_id = $1")
             .bind(orphan_id).execute(db.pool()).await.unwrap();
         assert!(db.claim_pending_inventory_resolution().await.unwrap().is_empty());
     }

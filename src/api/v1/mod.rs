@@ -202,6 +202,8 @@ impl utoipa::Modify for SecurityAddon {
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .merge(cs2::router())
+        .merge(crate::scripting::api::router())
+        .route("/me/inventory/{inventory_id}/discard",post(viewer_profile::discard_viewer_inventory))
         .route("/users/me", get(users::get_current_user))
         .route("/users/me/settings", get(users::get_viewer_settings).put(users::update_viewer_settings))
         .route("/broadcasters", get(broadcasters::list_broadcasters))
