@@ -305,7 +305,17 @@ async fn signed(
     {
         return Err(bad("Expected JSON"));
     }
-    let env: Envelope = serde_json::from_slice(&body).map_err(|_| bad("Invalid envelope"))?;
+    let env: Envelope = serde_json::from_slice(&body).map_err(|error| {
+        tracing::warn!(
+            stage = "decode",
+            reason = "invalid_envelope",
+            bytes = body.len(),
+            line = error.line(),
+            column = error.column(),
+            "CS2 request JSON decode failed"
+        );
+        bad("Invalid envelope")
+    })?;
     let _serial = state.cs2.serial(env.device_id).await;
     let mut tx = state.db.pool().begin().await.map_err(db)?;
     let device: Option<(Vec<u8>,String)> = sqlx::query_as("SELECT public_key,channel_id FROM cs2_devices WHERE id=$1 AND revoked_at IS NULL FOR UPDATE")
@@ -327,6 +337,7 @@ async fn signed(
             return Err(bad("Expected signed device action without GSI"));
         }
     } else if env.action.is_some() || !env.gsi.as_ref().is_some_and(|g| g.is_object()) {
+        tracing::warn!(channel_id=%channel, device_id=%env.device_id, session_id=%env.session_id, seq=env.seq, stage="normalize", reason="expected_gsi_object", "Signed CS2 body has no usable GSI object");
         return Err(bad("Expected GSI object"));
     }
     // Global expiry cleanup bounds storage even for devices that no longer send.
@@ -376,8 +387,10 @@ async fn signed(
         };
         let transition = state.cs2.process(source.clone(), &gsi);
         crate::cs2::log_transition(&source, &gsi, &transition);
-        if let Err(error) = crate::scripting::matches::persist(state.db.pool(), &source, &transition).await {
-            tracing::error!(%error, channel_id=%source.channel_id, "Could not persist scripting context; GSI transport remains available");
+        if let Err(error) =
+            crate::scripting::matches::persist(state.db.pool(), &source, &transition).await
+        {
+            tracing::error!(%error, channel_id=%source.channel_id, device_id=%source.device_id, session_id=%source.session_id, seq=source.source_seq, stage="persist", "Could not persist scripting context; GSI transport remains available");
         }
     }
     Ok(axum::http::StatusCode::NO_CONTENT)

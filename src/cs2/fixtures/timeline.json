@@ -44,9 +44,7 @@
         "kind": "match_started"
       }
     ],
-    "resets": [
-      "match_restarted"
-    ],
+    "resets": [],
     "seq": 8
   },
   {

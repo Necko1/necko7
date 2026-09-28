@@ -45,7 +45,7 @@ pub async fn list(
 ) -> Result<Json<Value>, ApiError> {
     auth.require_owner()?;
     let pool = state.db.pool();
-    let projects:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(p) FROM script_projects p WHERE channel_id=$1 AND deleted_at IS NULL ORDER BY created_at").bind(&auth.channel_id).fetch_all(pool).await.map_err(db)?;
+    let projects:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(p) || jsonb_build_object('live_files',r.files) FROM script_projects p LEFT JOIN script_revisions r ON r.project_id=p.id AND r.revision=p.active_revision WHERE channel_id=$1 AND deleted_at IS NULL ORDER BY p.created_at").bind(&auth.channel_id).fetch_all(pool).await.map_err(db)?;
     let revisions:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('project_id',r.project_id,'revision',revision,'has_on_event',has_on_event,'has_on_timer',has_on_timer,'created_at',r.created_at) FROM script_revisions r JOIN script_projects p ON p.id=r.project_id WHERE p.channel_id=$1 ORDER BY r.created_at DESC LIMIT 500").bind(&auth.channel_id).fetch_all(pool).await.map_err(db)?;
     let jobs:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(j) FROM script_jobs j JOIN script_projects p ON p.id=j.project_id WHERE p.channel_id=$1 ORDER BY j.created_at DESC LIMIT 500").bind(&auth.channel_id).fetch_all(pool).await.map_err(db)?;
     let storage:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(s) FROM script_storage s JOIN script_projects p ON p.id=s.project_id WHERE p.channel_id=$1 ORDER BY s.key LIMIT 2000").bind(&auth.channel_id).fetch_all(pool).await.map_err(db)?;
@@ -104,6 +104,10 @@ pub enum Command {
         snapshot_id: i64,
         event_index: usize,
     },
+    Revision {
+        project_id: Uuid,
+        revision: i64,
+    },
     StorageSet {
         project_id: Uuid,
         key: String,
@@ -140,6 +144,7 @@ impl Command {
             | Self::Rollback { project_id, .. }
             | Self::Test { project_id, .. }
             | Self::Snapshot { project_id, .. }
+            | Self::Revision { project_id, .. }
             | Self::StorageSet { project_id, .. }
             | Self::StorageDelete { project_id, .. }
             | Self::StorageClear { project_id, .. }
@@ -162,7 +167,72 @@ pub async fn command(
             return Err(bad("Project not found"));
         }
     }
+    let mut audit_action = match &cmd {
+        Command::Create { .. } => Some("script.project_created"),
+        Command::Rename { .. } => Some("script.project_renamed"),
+        Command::Enable { enabled, .. } => Some(if *enabled {
+            "script.project_enabled"
+        } else {
+            "script.project_disabled"
+        }),
+        Command::Delete { .. } => Some("script.project_deleted"),
+        Command::Publish { .. } => Some("script.project_published"),
+        Command::Rollback { .. } => Some("script.project_rollback"),
+        Command::RunJob { .. } => Some("script.job_run"),
+        Command::CancelJob { .. } => Some("script.job_cancelled"),
+        _ => None,
+    };
+    let project_name: Option<String> = if let Some(id) = project.filter(|_| audit_action.is_some())
+    {
+        sqlx::query_scalar("SELECT name FROM script_projects WHERE id=$1")
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .map_err(db)?
+    } else {
+        None
+    };
+    let mut audit_details = json!({"actor_type":"user","user_id":auth.user_id,"user_login":auth.user_login,"project_id":project,"project_name":project_name});
+    match &cmd {
+        Command::Create { name } => audit_details["project_name"] = json!(name.trim()),
+        Command::Rename { name, .. } => {
+            audit_details["previous_name"] = audit_details["project_name"].clone();
+            audit_details["project_name"] = json!(name.trim());
+        }
+        Command::Rollback { revision, .. } => audit_details["revision"] = json!(revision),
+        Command::RunJob { job_id, .. } | Command::CancelJob { job_id, .. } => {
+            audit_details["job_id"] = json!(job_id);
+            if let Some((key, revision)) = sqlx::query_as::<_, (String, i64)>(
+                "SELECT job_key,revision FROM script_jobs WHERE id=$1 AND project_id=$2",
+            )
+            .bind(job_id)
+            .bind(project)
+            .fetch_optional(pool)
+            .await
+            .map_err(db)?
+            {
+                audit_details["job_key"] = json!(key);
+                audit_details["revision"] = json!(revision);
+            }
+        }
+        _ => {}
+    }
     let result = match cmd {
+        Command::Revision {
+            project_id,
+            revision,
+        } => {
+            let files: Value = sqlx::query_scalar(
+                "SELECT files FROM script_revisions WHERE project_id=$1 AND revision=$2",
+            )
+            .bind(project_id)
+            .bind(revision)
+            .fetch_optional(pool)
+            .await
+            .map_err(db)?
+            .ok_or_else(|| bad("Published version not found"))?;
+            json!({"files":files,"revision":revision})
+        }
         Command::Create { name } => {
             if name.trim().is_empty() || name.len() > 80 {
                 return Err(bad("Name must be 1–80 characters"));
@@ -419,7 +489,10 @@ pub async fn command(
                     sqlx::query("INSERT INTO script_executions(id,project_id,revision,source,job_id,actor_type,actor_user_id) VALUES($1,$2,$3,'timer',$4,'user',$5)").bind(Uuid::new_v4()).bind(id).bind(revision).bind(job_id).bind(&auth.user_id).execute(&mut *tx).await.map_err(db)?;
                 }
                 Command::CancelJob { job_id, .. } => {
-                    sqlx::query("UPDATE script_jobs SET status='cancelled',completed_at=now() WHERE id=$1 AND project_id=$2 AND status IN ('scheduled','blocked','queued')").bind(job_id).bind(id).execute(&mut *tx).await.map_err(db)?;
+                    let changed = sqlx::query("UPDATE script_jobs SET status='cancelled',completed_at=now() WHERE id=$1 AND project_id=$2 AND status IN ('scheduled','blocked','queued')").bind(job_id).bind(id).execute(&mut *tx).await.map_err(db)?.rows_affected();
+                    if changed == 0 {
+                        audit_action = None;
+                    }
                     sqlx::query("UPDATE script_executions SET status='skipped',finished_at=now() WHERE project_id=$1 AND job_id=$2 AND status='queued'").bind(id).bind(job_id).execute(&mut *tx).await.map_err(db)?;
                 }
                 _ => unreachable!(),
@@ -428,12 +501,15 @@ pub async fn command(
             result
         }
     };
-    service::audit(
-        &state,
-        &auth.channel_id,
-        "script.editor",
-        json!({"actor_type":"user","user_id":auth.user_id,"project_id":project}),
-    );
+    if let Some(action) = audit_action {
+        if let Some(id) = result.get("id") {
+            audit_details["project_id"] = id.clone();
+        }
+        if let Some(revision) = result.get("revision") {
+            audit_details["revision"] = revision.clone();
+        }
+        service::audit(&state, &auth.channel_id, action, audit_details);
+    }
     Ok(Json(result))
 }
 

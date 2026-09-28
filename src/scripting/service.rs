@@ -32,15 +32,96 @@ fn preview(value: &Value) -> Value {
 }
 
 pub fn audit(state: &AppState, channel: &str, action: &str, details: Value) {
+    let message = audit_message(action, &details);
     state.channel_logger.log(
         channel,
         crate::db::channel_logs::ChannelLogLevel::Info,
         crate::db::channel_logs::ChannelLogCategory::System,
         action,
-        action,
+        &message,
         Some(details),
         None,
     );
+}
+
+pub fn audit_message(action: &str, details: &Value) -> String {
+    let project = details["project_name"]
+        .as_str()
+        .or_else(|| details["script"]["project_id"].as_str())
+        .unwrap_or("unknown project");
+    let actor = details["user_login"]
+        .as_str()
+        .map(|login| format!("@{login}"))
+        .unwrap_or_else(|| format!("Script \"{project}\""));
+    let revision = details
+        .get("revision")
+        .or_else(|| details["script"].get("revision"));
+    let suffix = revision
+        .map(|r| format!(" (revision {r})"))
+        .unwrap_or_default();
+    let reward = details["reward_alias"]
+        .as_str()
+        .or_else(|| details["reward_id"].as_str())
+        .unwrap_or("unknown reward");
+    let job = details["job_key"]
+        .as_str()
+        .or_else(|| details["job_id"].as_str())
+        .unwrap_or("unknown job");
+    match action {
+        "script.project_created" => format!("{actor} created script project \"{project}\""),
+        "script.project_renamed" => format!(
+            "{actor} renamed script project \"{}\" to \"{project}\"",
+            details["previous_name"].as_str().unwrap_or("unknown")
+        ),
+        "script.project_enabled" => format!("{actor} enabled script project \"{project}\""),
+        "script.project_disabled" => format!("{actor} disabled script project \"{project}\""),
+        "script.project_deleted" => {
+            format!("{actor} deleted script project \"{project}\" and cancelled its pending jobs")
+        }
+        "script.project_published" => {
+            format!("{actor} published script project \"{project}\"{suffix}")
+        }
+        "script.project_rollback" => {
+            format!("{actor} activated an earlier version of \"{project}\"{suffix}")
+        }
+        "script.job_run" => {
+            format!("{actor} requested a manual run of job \"{job}\" for \"{project}\"{suffix}")
+        }
+        "script.job_cancelled" => {
+            format!("{actor} cancelled job \"{job}\" for \"{project}\"{suffix}")
+        }
+        "rewards.set_visible" => format!(
+            "{actor} changed reward \"{reward}\" visibility to {}{suffix}",
+            details["value"]
+        ),
+        "rewards.set_paused" => format!(
+            "{actor} changed reward \"{reward}\" pause state to {}{suffix}",
+            details["value"]
+        ),
+        "reward.script_trigger" => format!(
+            "{actor} triggered reward \"{reward}\" for user {} (fulfillment {}){suffix}",
+            details["user_id"], details["fulfillment_id"]
+        ),
+        "scheduler.after" => format!("{actor} scheduled one-shot job {}{suffix}", details["key"]),
+        "scheduler.cancel" => format!("{actor} cancelled scheduled job {}{suffix}", details["key"]),
+        "rewards.enable_for" => {
+            format!("{actor} made reward \"{reward}\" temporarily visible{suffix}")
+        }
+        "chat.send" | "chat.reply" => format!("{actor} sent a Twitch chat message{suffix}"),
+        _ => format!("{actor}: {action}{suffix}"),
+    }
+}
+
+async fn audit_script(state: &AppState, attr: &Attribution, action: &str, mut details: Value) {
+    if let Ok(Some(name)) =
+        sqlx::query_scalar::<_, String>("SELECT name FROM script_projects WHERE id=$1")
+            .bind(attr.project_id)
+            .fetch_optional(state.db.pool())
+            .await
+    {
+        details["project_name"] = json!(name);
+    }
+    audit(state, &attr.channel_id, action, details);
 }
 
 pub async fn run(
@@ -274,12 +355,12 @@ async fn call(
             let k=key(args)?;
             if dry { return Ok(json!({"ok":true,"planned":true})); }
             let result=schedule(pool,attr,k,args[1].as_i64().ok_or("invalid_duration")?,args[2].clone()).await?;
-            audit(state,&attr.channel_id,method,json!({"actor_type":"script","script":attr,"job":result})); Ok(result)
+            audit_script(state,attr,method,json!({"actor_type":"script","script":attr,"job":result,"key":k})).await; Ok(result)
         }
         "scheduler.exists" => Ok(json!(sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM script_jobs WHERE project_id=$1 AND job_key=$2 AND status IN ('scheduled','blocked','queued'))").bind(attr.project_id).bind(key(args)?).fetch_one(pool).await.map_err(db)?)),
         "scheduler.cancel" => {
-            if !dry { sqlx::query("UPDATE script_jobs SET status='cancelled',completed_at=now() WHERE project_id=$1 AND job_key=$2 AND status IN ('scheduled','blocked')").bind(attr.project_id).bind(key(args)?).execute(pool).await.map_err(db)?;
-                audit(state,&attr.channel_id,method,json!({"actor_type":"script","script":attr,"key":args[0]})); }
+            if !dry { let changed=sqlx::query("UPDATE script_jobs SET status='cancelled',completed_at=now() WHERE project_id=$1 AND job_key=$2 AND status IN ('scheduled','blocked')").bind(attr.project_id).bind(key(args)?).execute(pool).await.map_err(db)?.rows_affected();
+                if changed > 0 { audit_script(state,attr,method,json!({"actor_type":"script","script":attr,"key":args[0]})).await; } }
             Ok(json!({"ok":true}))
         }
         "chat.recent_chatters" | "users.recent_chatters" => recent_chatters(pool,&attr.channel_id,args[0].as_i64().ok_or("invalid_duration")?,serde_json::from_value(args[1].clone()).map_err(db)?,None).await,
@@ -295,7 +376,7 @@ async fn call(
             let (message,reply)=if method=="chat.reply" {(args[1].as_str(),args[0].as_str())} else {(args[0].as_str(),None)};
             let message=message.filter(|m|!m.is_empty() && m.chars().count()<=500).ok_or("invalid_message")?;
             if !dry { state.send_chat_message(&attr.channel_id,message,reply).await.map_err(db)?;
-                audit(state,&attr.channel_id,method,json!({"actor_type":"script","script":attr})); }
+                audit_script(state,attr,method,json!({"actor_type":"script","script":attr})).await; }
             Ok(json!({"ok":true,"planned":dry}))
         }
         "rewards.get" => {
@@ -312,11 +393,11 @@ async fn call(
                 // not a call to on_timer, and needs no user-defined handler.
                 let scheduled=schedule_inner(pool,attr,&format!("visibility:{id}"),args[1].as_i64().ok_or("invalid_duration")?,json!({"reward_id":id}),Some("hide_reward")).await?;
                 mutate_reward(state,&attr.channel_id,id,Some(true),None).await?;
-                audit(state,&attr.channel_id,method,json!({"actor_type":"script","script":attr,"reward_id":id,"job":scheduled}));
+                audit_script(state,attr,method,json!({"actor_type":"script","script":attr,"reward_id":id,"reward_alias":args[0],"job":scheduled})).await;
                 return Ok(scheduled);
             }
             if !dry { mutate_reward(state,&attr.channel_id,id,(method=="rewards.set_visible").then(||args[1].as_bool().unwrap_or(false)),(method=="rewards.set_paused").then(||args[1].as_bool().unwrap_or(false))).await?;
-                audit(state,&attr.channel_id,method,json!({"actor_type":"script","script":attr,"reward_id":id,"value":args[1]})); }
+                audit_script(state,attr,method,json!({"actor_type":"script","script":attr,"reward_id":id,"reward_alias":args[0],"value":args[1]})).await; }
             Ok(json!({"ok":true,"planned":dry}))
         }
         "rewards.trigger" => trigger(state,attr,key(args)?,args[1].as_str().ok_or("invalid_user")?,dry).await,
@@ -431,12 +512,12 @@ pub(super) async fn trigger(
         .await
         .map_err(db)?
         .ok_or("service_unavailable")?;
-    audit(
+    audit_script(
         state,
-        &attr.channel_id,
+        attr,
         "reward.script_trigger",
-        json!({"actor_type":"script","script":attr,"fulfillment_id":fulfillment,"reward_id":id}),
-    );
+        json!({"actor_type":"script","script":attr,"fulfillment_id":fulfillment,"reward_id":id,"reward_alias":alias,"user_id":user}),
+    ).await;
     if let Some(cause) = row.fail_cause {
         let code = match cause.as_str() {
             "chat_requirements_unmet" => "activity_requirement_failed",

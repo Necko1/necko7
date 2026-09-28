@@ -42,6 +42,13 @@ impl Normalizer {
         let mut kinds = Vec::new();
         let previous = self.previous.as_ref().map(|(_, s)| s.clone());
         if let Some((old_source, old)) = &self.previous {
+            if source.session_id == old_source.session_id
+                && source.source_seq > old_source.source_seq + 1
+            {
+                tracing::warn!(channel_id=%source.channel_id, device_id=%source.device_id, session_id=%source.session_id,
+                    previous_seq=old_source.source_seq, seq=source.source_seq, stage="receive", reason="source_sequence_gap",
+                    "CS2 source messages were not received continuously");
+            }
             if source.session_id != old_source.session_id {
                 resets.push(ResetReason::SessionChanged);
             }
@@ -119,13 +126,13 @@ fn derive(old: &Cs2State, new: &Cs2State, resets: &mut Vec<ResetReason>, out: &m
         }
     }
     let mut restarted = false;
+    let mut starting_match = false;
     if same_map {
         let a = old.r#match.as_ref().unwrap();
         let b = new.r#match.as_ref().unwrap();
+        starting_match = a.phase == Some(MatchPhase::Warmup) && b.phase == Some(MatchPhase::Live);
         restarted = (a.phase != b.phase
-            && (b.phase == Some(MatchPhase::Warmup)
-                || a.phase == Some(MatchPhase::GameOver)
-                || (a.phase == Some(MatchPhase::Warmup) && b.phase == Some(MatchPhase::Live))))
+            && (b.phase == Some(MatchPhase::Warmup) || a.phase == Some(MatchPhase::GameOver)))
             || old
                 .round
                 .completed_rounds
@@ -143,7 +150,7 @@ fn derive(old: &Cs2State, new: &Cs2State, resets: &mut Vec<ResetReason>, out: &m
                 out.push(EventKind::MatchEnded);
             }
         }
-        if !restarted {
+        if !restarted && !starting_match {
             if let Some(change) = change(&old.round.phase, &new.round.phase) {
                 out.push(EventKind::RoundPhaseChanged { change });
                 if a.phase == Some(MatchPhase::Live)
@@ -161,7 +168,10 @@ fn derive(old: &Cs2State, new: &Cs2State, resets: &mut Vec<ResetReason>, out: &m
                 // The final round of a half reports intermission and over in
                 // the same snapshot, including its last kill and score update.
                 if a.phase == Some(MatchPhase::Live)
-                    && matches!(b.phase, Some(MatchPhase::Live | MatchPhase::Intermission))
+                    && matches!(
+                        b.phase,
+                        Some(MatchPhase::Live | MatchPhase::Intermission | MatchPhase::GameOver)
+                    )
                     && old.round.phase == Some(RoundPhase::Live)
                     && new.round.phase == Some(RoundPhase::Over)
                     && old
@@ -194,7 +204,7 @@ fn derive(old: &Cs2State, new: &Cs2State, resets: &mut Vec<ResetReason>, out: &m
         if let Some(change) = change(&old.view.activity, &new.view.activity) {
             out.push(EventKind::ActivityChanged { change });
         }
-        if !same_map || restarted {
+        if !same_map || restarted || starting_match {
             return;
         }
         if let Some(change) = change(&a.team, &b.team) {

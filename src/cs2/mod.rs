@@ -1,6 +1,8 @@
 //! Backend-only semantic boundary, deliberately independent of HTTP and SQL.
 #![deny(clippy::all)]
+mod diagnostics;
 pub mod model;
+pub use diagnostics::{log_diagnostic, payload_issues, transition_issues};
 mod normalize;
 mod parse;
 
@@ -98,6 +100,12 @@ impl Pipeline {
 /// Correlation fields are identical on raw/state/event records, including an
 /// empty event list. Event-only DEBUG works without the verbose flag.
 pub fn log_transition(source: &Source, payload: &Value, transition: &Transition) {
+    for field in payload_issues(payload) {
+        log_diagnostic(source, transition, "normalize", field);
+    }
+    for reason in transition_issues(transition) {
+        log_diagnostic(source, transition, "derive", reason);
+    }
     let pipeline =
         std::env::var("CS2_LOG_GSI_PIPELINE").is_ok_and(|v| v.eq_ignore_ascii_case("true"));
     let raw = std::env::var("CS2_LOG_GSI_PAYLOADS").is_ok_and(|v| v.eq_ignore_ascii_case("true"));
@@ -116,7 +124,9 @@ fn log_with_options(
     let span = tracing::debug_span!("cs2_pipeline", device_id=%source.device_id, channel_id=%source.channel_id, session_id=%source.session_id, seq=source.source_seq);
     let _entered = span.enter();
     if pipeline || raw {
-        tracing::debug!(payload=%serde_json::to_string_pretty(payload).unwrap_or_default(), "RAW GSI");
+        let text = serde_json::to_string_pretty(&sanitize(payload.clone())).unwrap_or_default();
+        let bounded: String = text.chars().take(16_384).collect();
+        tracing::debug!(payload=%bounded, truncated=text.len()>bounded.len(), "RAW GSI");
     }
     if pipeline {
         tracing::debug!(previous=%serde_json::to_string_pretty(&transition.previous).unwrap_or_default(), current=%serde_json::to_string_pretty(&transition.current).unwrap_or_default(), resets=?transition.resets, "NORMALIZED STATE");
