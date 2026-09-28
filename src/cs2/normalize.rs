@@ -165,23 +165,31 @@ fn derive(old: &Cs2State, new: &Cs2State, resets: &mut Vec<ResetReason>, out: &m
                 {
                     out.push(EventKind::RoundStarted);
                 }
-                // The final round of a half reports intermission and over in
-                // the same snapshot, including its last kill and score update.
-                if a.phase == Some(MatchPhase::Live)
-                    && matches!(
-                        b.phase,
-                        Some(MatchPhase::Live | MatchPhase::Intermission | MatchPhase::GameOver)
-                    )
-                    && old.round.phase == Some(RoundPhase::Live)
-                    && new.round.phase == Some(RoundPhase::Over)
-                    && old
-                        .round
-                        .completed_rounds
-                        .zip(new.round.completed_rounds)
-                        .is_some_and(|(a, b)| b == a || b == a + 1)
-                {
-                    out.push(EventKind::RoundEnded);
-                }
+            }
+            // The final round of a half reports intermission and over in
+            // the same snapshot, including its last kill and score update.
+            let observed_over = new.round.phase == Some(RoundPhase::Over)
+                && old
+                    .round
+                    .completed_rounds
+                    .zip(new.round.completed_rounds)
+                    .is_some_and(|(a, b)| b == a || b == a + 1);
+            // Valve can finish the last live round directly in gameover/freezetime.
+            let final_advance = b.phase == Some(MatchPhase::GameOver)
+                && old
+                    .round
+                    .completed_rounds
+                    .zip(new.round.completed_rounds)
+                    .is_some_and(|(a, b)| b == a + 1);
+            if a.phase == Some(MatchPhase::Live)
+                && matches!(
+                    b.phase,
+                    Some(MatchPhase::Live | MatchPhase::Intermission | MatchPhase::GameOver)
+                )
+                && old.round.phase == Some(RoundPhase::Live)
+                && (observed_over || final_advance)
+            {
+                out.push(EventKind::RoundEnded);
             }
             let ct = NumberChange::between(a.score.ct, b.score.ct);
             let t = NumberChange::between(a.score.t, b.score.t);

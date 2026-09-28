@@ -3,6 +3,55 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+fn retain_known(target: &mut Value, incoming: Value) {
+    if let Value::Object(fields) = incoming {
+        if !target.is_object() {
+            *target = json!({});
+        }
+        for (key, value) in fields {
+            retain_known(&mut target[key], value);
+        }
+    } else if !incoming.is_null() {
+        *target = incoming;
+    }
+}
+
+fn local_summary(data: &mut Value, source: &Source, t: &Transition, ended: bool) {
+    if t.resets.contains(&ResetReason::ProviderChanged) {
+        data["local_summary"] = Value::Null;
+    }
+    let Some(player) = &t.current.player else {
+        return;
+    };
+    let incoming = json!(player.match_stats);
+    if !incoming
+        .as_object()
+        .is_some_and(|stats| stats.values().any(|v| !v.is_null()))
+    {
+        return;
+    }
+    let summary = &mut data["local_summary"];
+    if summary["steam_id"] != player.steam_id {
+        *summary = json!({"steam_id":player.steam_id,"stats":{},"evidence":{}});
+    }
+    for (name, value) in incoming.as_object().unwrap() {
+        if !value.is_null() {
+            summary["stats"][name] = value.clone();
+            summary["evidence"][name] =
+                json!({"seq":source.source_seq,"at":source.timestamp,"final":ended});
+        }
+    }
+    summary["observed_at"] = json!(source.timestamp);
+    summary["seq"] = json!(source.source_seq);
+    summary["final"] = json!(
+        summary["evidence"]
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|e| e["final"] == true)
+    );
+}
+
 /// Only consume normalized observations. Missing information remains JSON null.
 pub fn advance(mut data: Value, source: &Source, t: &Transition) -> Value {
     if !data.is_object() {
@@ -26,8 +75,10 @@ pub fn advance(mut data: Value, source: &Source, t: &Transition) -> Value {
         .is_some_and(|m| m.phase == Some(MatchPhase::Warmup));
     if warmup {
         data["current_round"] = Value::Null;
+        data["local_summary"] = Value::Null;
         return data;
     }
+    local_summary(&mut data, source, t, ended);
     let new_round = t.resets.iter().any(|r| {
         matches!(
             r,
@@ -66,8 +117,19 @@ pub fn advance(mut data: Value, source: &Source, t: &Transition) -> Value {
             && let Some(last) = data["rounds"]
                 .as_array_mut()
                 .and_then(|rounds| rounds.last_mut())
+            && last["index"].as_u64().map(|index| index + 1)
+                == t.current.round.completed_rounds.map(u64::from)
         {
-            last["score_after"] = json!(t.current.r#match.as_ref().map(|m| &m.score));
+            retain_known(
+                &mut last["score_after"],
+                json!(t.current.r#match.as_ref().map(|m| &m.score)),
+            );
+            if let Some(player) = &t.current.player {
+                retain_known(
+                    &mut last["player"],
+                    json!({"side":player.team,"health":player.health,"match_stats":player.match_stats}),
+                );
+            }
             if t.current.round.winner.is_some() {
                 last["winner"] = json!(t.current.round.winner);
             }
@@ -78,6 +140,17 @@ pub fn advance(mut data: Value, source: &Source, t: &Transition) -> Value {
                     }
                 }
             }
+        }
+        if data["rounds"]
+            .as_array()
+            .and_then(|r| r.last())
+            .is_some_and(|last| {
+                last["index"].as_u64().map(|index| index + 1)
+                    != t.current.round.completed_rounds.map(u64::from)
+            })
+        {
+            data["partial"] = json!(true);
+            crate::cs2::log_diagnostic(source, t, "recorder", "final_boundary_unrecorded");
         }
         if data["current_round"]["completed"] == true {
             data["current_round"] = Value::Null;
@@ -95,23 +168,83 @@ pub fn advance(mut data: Value, source: &Source, t: &Transition) -> Value {
         } else {
             t.current.round.completed_rounds
         };
+        let before = if ending_round {
+            t.previous.as_ref()
+        } else {
+            Some(&t.current)
+        };
         round = json!({"index": index, "started_at":source.timestamp,
-            "completed":false,"start":t.current.player,"score_before":t.current.r#match.as_ref().map(|m|&m.score),"events":[]});
+            "completed":false,"start":before.and_then(|s|s.player.as_ref()),
+            "score_before":before.and_then(|s|s.r#match.as_ref()).map(|m|&m.score),"events":[],
+            "player":{"kills":null,"headshot_kills":null,"side":null,"health":null,"match_stats":null}});
+        if let Some(old) = t.previous.as_ref().and_then(|s| s.r#match.as_ref())
+            && let Some(new) = &t.current.r#match
+            && old.score != new.score
+            && old.score.ct.is_some()
+            && old.score.t.is_some()
+            && old.score.ct == new.score.t
+            && old.score.t == new.score.ct
+            && t.previous.as_ref().and_then(|s| s.round.completed_rounds)
+                == t.current.round.completed_rounds
+            && (old.phase == Some(MatchPhase::Intermission)
+                || t.events
+                    .iter()
+                    .any(|e| matches!(e.event, EventKind::TeamChanged { .. })))
+        {
+            round["side_swap_before"] =
+                json!({"before":old.score,"after":new.score,"seq":source.source_seq});
+        }
         if data["rounds"].as_array().is_some_and(|r| r.is_empty()) && index != Some(0) {
             data["partial"] = json!(true);
         }
     }
     if let Some(player) = &t.current.player {
+        let final_freeze = ending_round
+            && ended
+            && t.current.round.phase == Some(crate::cs2::model::RoundPhase::FreezeTime);
+        // Game-over freezetime can already reset round counters; it cannot establish a missing baseline.
+        let kills = player.round_stats.kills.filter(|new| {
+            !final_freeze
+                || round["player"]["kills"]
+                    .as_u64()
+                    .is_some_and(|old| u64::from(*new) >= old)
+        });
+        let headshots = player.round_stats.headshot_kills.filter(|new| {
+            !final_freeze
+                || round["player"]["headshot_kills"]
+                    .as_u64()
+                    .is_some_and(|old| u64::from(*new) >= old)
+        });
+        if kills.is_none()
+            && let Some(known) = round["player"]["kills"].as_u64()
+        {
+            let confirmed: u64 = t
+                .events
+                .iter()
+                .filter_map(|e| match e.event {
+                    EventKind::PlayerKill { count, .. } => Some(u64::from(count)),
+                    _ => None,
+                })
+                .sum();
+            round["player"]["kills"] = json!(known + confirmed);
+        }
         round["end"] = json!(player);
-        round["player"] = json!({"kills":player.round_stats.kills,"headshot_kills":player.round_stats.headshot_kills,
-            "side":player.team,"health":player.health,"match_stats":player.match_stats});
+        // The normalized player is authoritative; null/spectator snapshots cannot erase it.
+        retain_known(
+            &mut round["player"],
+            json!({"kills":kills,"headshot_kills":headshots,
+            "side":player.team,"health":player.health,"match_stats":player.match_stats}),
+        );
+        round["local_evidence"] =
+            json!({"steam_id":player.steam_id,"seq":source.source_seq,"at":source.timestamp});
     }
-    if t.current.player.is_none() {
-        round["end"] = Value::Null;
-        round["player"] = json!({"kills":null,"headshot_kills":null,"side":null,"health":null,"match_stats":null});
+    retain_known(
+        &mut round["score_after"],
+        json!(t.current.r#match.as_ref().map(|m| &m.score)),
+    );
+    if t.current.round.winner.is_some() {
+        round["winner"] = json!(t.current.round.winner);
     }
-    round["score_after"] = json!(t.current.r#match.as_ref().map(|m| &m.score));
-    round["winner"] = json!(t.current.round.winner);
     if let Some(events) = round["events"].as_array_mut() {
         for event in &t.events {
             if events.len() < 512 {
@@ -232,12 +365,13 @@ pub async fn persist(pool: &PgPool, source: &Source, t: &Transition) -> Result<(
         for (project, revision, queued) in projects {
             let capacity = 1000usize.saturating_sub(queued as usize);
             if capacity < t.events.len() {
-                tracing::warn!(%project,channel=%source.channel_id,seq=source.source_seq,"Script queue full; event delivery truncated");
+                tracing::warn!(%project,revision,channel=%source.channel_id,device_id=%source.device_id,session_id=%source.session_id,seq=source.source_seq,queued,accepted=capacity.min(t.events.len()),events=t.events.len(),"Script queue full; event delivery truncated");
             }
             for index in 0..t.events.len().min(capacity) {
                 sqlx::query("INSERT INTO script_executions(id,project_id,revision,source,snapshot_id,event_index) VALUES($1,$2,$3,'cs2',$4,$5)")
                 .bind(Uuid::new_v4()).bind(project).bind(revision).bind(snapshot).bind(index as i32).execute(&mut *tx).await?;
             }
+            tracing::debug!(%project,revision,channel=%source.channel_id,device_id=%source.device_id,session_id=%source.session_id,seq=source.source_seq,snapshot,accepted=t.events.len().min(capacity),"Script semantic events queued");
         }
     }
     tx.commit().await

@@ -1743,6 +1743,9 @@
         "kind": "round_phase_changed"
       },
       {
+        "kind": "round_ended"
+      },
+      {
         "ct": null,
         "kind": "score_changed",
         "t": {

@@ -75,27 +75,47 @@ async fn timers(state: &AppState) -> Result<(), sqlx::Error> {
     tx.commit().await
 }
 
+pub(super) async fn pending_execution(
+    tx: &mut sqlx::PgConnection,
+    project: Uuid,
+) -> Result<Option<sqlx::postgres::PgRow>, sqlx::Error> {
+    sqlx::query("SELECT id,revision,source,snapshot_id,event_index,job_id,status,actor_type FROM script_executions WHERE project_id=$1 AND status IN ('queued','running') ORDER BY sequence LIMIT 1")
+        .bind(project).fetch_optional(tx).await
+}
+
+pub(super) const PROJECT_CANDIDATE_SQL: &str = "SELECT p.id,p.channel_id,p.enabled AND p.deleted_at IS NULL FROM script_projects p WHERE EXISTS(SELECT 1 FROM script_executions e WHERE e.project_id=p.id AND e.status IN ('queued','running')) ORDER BY (SELECT min(sequence) FROM script_executions e WHERE e.project_id=p.id AND e.status IN ('queued','running')) LIMIT 1 FOR NO KEY UPDATE OF p SKIP LOCKED";
+
 pub(super) async fn step(state: Arc<AppState>) -> Result<bool, sqlx::Error> {
     timers(&state).await?;
     let mut tx = state.db.pool().begin().await?;
-    let project:Option<(Uuid,String,bool)>=sqlx::query_as("SELECT p.id,p.channel_id,p.enabled AND p.deleted_at IS NULL FROM script_projects p WHERE EXISTS(SELECT 1 FROM script_executions e WHERE e.project_id=p.id AND e.status IN ('queued','running')) ORDER BY (SELECT min(sequence) FROM script_executions e WHERE e.project_id=p.id AND e.status IN ('queued','running')) LIMIT 1 FOR NO KEY UPDATE OF p SKIP LOCKED")
-        .fetch_optional(&mut *tx).await?;
+    let project: Option<(Uuid, String, bool)> = sqlx::query_as(PROJECT_CANDIDATE_SQL)
+        .fetch_optional(&mut *tx)
+        .await?;
     let Some((project, channel, enabled)) = project else {
         return Ok(false);
     };
-    let row=sqlx::query("SELECT id,revision,source,snapshot_id,event_index,job_id,status,actor_type FROM script_executions WHERE project_id=$1 AND status IN ('queued','running') ORDER BY sequence LIMIT 1")
-        .bind(project).fetch_one(&mut *tx).await?;
+    // READ COMMITTED can see a drained queue after the candidate statement's snapshot.
+    let Some(row) = pending_execution(&mut tx, project).await? else {
+        tracing::debug!(%project,channel=%channel,"Script candidate queue already drained");
+        tx.commit().await?;
+        return Ok(false);
+    };
     let id: Uuid = row.get("id");
     let revision: i64 = row.get("revision");
     let source: String = row.get("source");
     let job: Option<Uuid> = row.get("job_id");
     let status: String = row.get("status");
     let actor: String = row.get("actor_type");
+    let files_stage = || tracing::error!(execution_id=%id,project_id=%project,revision,stage="revision", "Pinned script revision missing");
     if status == "running" {
         // A previous worker died with ambiguous external effects. Never replay purchases/chat.
         sqlx::query("UPDATE script_executions SET status='interrupted',finished_at=now(),report='{\"error\":\"Worker interrupted; side effects may have occurred. Not replayed.\"}' WHERE id=$1").bind(id).execute(&mut *tx).await?;
         sqlx::query("UPDATE script_jobs SET status='failed',reason='execution_interrupted',completed_at=now() WHERE id=$1").bind(job).execute(&mut *tx).await?;
         tx.commit().await?;
+        state.channel_logger.log(&channel,crate::db::channel_logs::ChannelLogLevel::Warn,
+            crate::db::channel_logs::ChannelLogCategory::System,"script.execution_interrupted",
+            "Script execution interrupted; possible side effects were not replayed",
+            Some(json!({"actor_type":actor,"project_id":project,"revision":revision,"execution_id":id})),None);
         return Ok(true);
     }
     if !enabled && actor != "user" {
@@ -122,22 +142,26 @@ pub(super) async fn step(state: Arc<AppState>) -> Result<bool, sqlx::Error> {
     )
     .bind(project)
     .bind(revision)
-    .fetch_one(&mut *tx)
-    .await?;
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| {
+        files_stage();
+        sqlx::Error::RowNotFound
+    })?;
     let files: Files =
         serde_json::from_value(files).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
     let mut context = if source == "cs2" {
         let snapshot: Option<i64> = row.get("snapshot_id");
         let mut ctx: Value = sqlx::query_scalar("SELECT context FROM script_snapshots WHERE id=$1")
             .bind(snapshot)
-            .fetch_one(&mut *tx)
-            .await?;
+            .fetch_optional(&mut *tx)
+            .await?.ok_or_else(|| { tracing::error!(execution_id=%id,project_id=%project,revision,?snapshot,stage="snapshot","Script execution snapshot missing"); sqlx::Error::RowNotFound })?;
         let index: Option<i32> = row.get("event_index");
         ctx["event"] = ctx["events"][index.unwrap_or(0) as usize].clone();
         ctx.as_object_mut().map(|m| m.remove("events"));
         ctx
     } else {
-        let job:Value=sqlx::query_scalar("SELECT jsonb_build_object('id',id,'key',job_key,'payload',payload,'scheduled_for',scheduled_for,'created_at',created_at,'creating_revision',revision,'host_action',host_action) FROM script_jobs WHERE id=$1").bind(job).fetch_one(&mut *tx).await?;
+        let job:Value=sqlx::query_scalar("SELECT jsonb_build_object('id',id,'key',job_key,'payload',payload,'scheduled_for',scheduled_for,'created_at',created_at,'creating_revision',revision,'host_action',host_action) FROM script_jobs WHERE id=$1").bind(job).fetch_optional(&mut *tx).await?.ok_or_else(|| { tracing::error!(execution_id=%id,project_id=%project,revision,?job,stage="job","Script execution job missing"); sqlx::Error::RowNotFound })?;
         json!({"timer":job,"source":"timer"})
     };
     context["actor_type"] = json!(actor);
@@ -200,11 +224,17 @@ pub(super) async fn step(state: Arc<AppState>) -> Result<bool, sqlx::Error> {
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
-    service::audit(
-        &state,
-        &channel,
-        "script.execution",
-        json!({"actor_type":actor,"script":attr,"success":success}),
-    );
+    tracing::debug!(execution_id=%id,project_id=%project,revision,channel_id=%channel,source=%source,success,"Script execution completed");
+    if !success {
+        state.channel_logger.log(
+            &channel,
+            crate::db::channel_logs::ChannelLogLevel::Warn,
+            crate::db::channel_logs::ChannelLogCategory::System,
+            "script.execution_failed",
+            "Script execution failed",
+            Some(json!({"actor_type":actor,"script":attr,"error":report.error})),
+            None,
+        );
+    }
     Ok(true)
 }

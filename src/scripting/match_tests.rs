@@ -345,6 +345,7 @@ async fn published_file_inspection_is_owner_scoped_and_only_real_lifecycle_actio
             channel_id: channel.clone(),
             role: crate::db::channel_permissions::ChannelRole::Owner,
         },
+        axum::extract::Query(Default::default()),
     )
     .await
     .unwrap()

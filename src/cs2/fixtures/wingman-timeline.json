@@ -611,6 +611,9 @@
         }
       },
       {
+        "kind": "round_ended"
+      },
+      {
         "kind": "score_changed",
         "ct": null,
         "t": {

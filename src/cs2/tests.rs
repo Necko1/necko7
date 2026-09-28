@@ -240,6 +240,7 @@ fn final_gameover_freezetime_is_match_end_not_new_round_or_spawn() {
             "map_phase_changed",
             "match_ended",
             "round_phase_changed",
+            "round_ended",
             "score_changed"
         ]
     );
@@ -562,6 +563,7 @@ fn complete_wingman_match_preserves_halftime_kill_and_side_switch() {
                 }
             );
             assert!(names(&t).contains(&"match_ended".into()));
+            assert!(names(&t).contains(&"round_ended".into()));
             assert!(names(&t).contains(&"player_died".into()));
             assert!(!names(&t).contains(&"round_started".into()));
         }

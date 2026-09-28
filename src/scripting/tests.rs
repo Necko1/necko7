@@ -392,6 +392,16 @@ async fn project_scheduler_storage_and_fulfillment_contracts() {
     assert!(!db.discard_script_item(second_item, "viewer").await.unwrap());
     let audit:Value=sqlx::query_scalar("SELECT details FROM fulfillment_audit_events WHERE redemption_id=$1 AND event_type='reward_redeemed'").bind(fulfillment).fetch_one(pool).await.unwrap();
     assert_eq!(audit["script_execution_id"], attr.execution_id.to_string());
+    let operational: Vec<Value> = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+                let logs: Vec<Value> = sqlx::query_scalar("SELECT details FROM channel_logs WHERE broadcaster_id=$1 AND event_type='reward.script_trigger' AND details->>'fulfillment_id' IN ($2,$3)")
+                .bind(&channel).bind(fulfillment.to_string()).bind(second.to_string()).fetch_all(pool).await.unwrap();
+            if logs.len() == 2 { break logs; }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }).await.unwrap();
+    assert!(operational.iter().all(|l| l["actor_type"] == "script"
+        && l["script"]["execution_id"] == attr.execution_id.to_string()));
     state.shutdown_token.cancel();
 }
 
