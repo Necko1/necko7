@@ -6,11 +6,12 @@ The user-facing documentation lives in the sibling dashboard repository, `necko7
 
 - `api.json` in this directory is the versioned host API/context catalog.
 - `recipes.json` contains complete cookbook files and executable test scenarios.
+- `events.json` contains every semantic CS2 event's field descriptions, observation pair, full-envelope example and native Rhai handler. It generates one reference page with deep-linkable event sections, not one page per event.
 - `src/scripting/runtime.rs` implements native Rhai registration and the sandbox.
 - `service.rs` implements host operations; `worker.rs` implements dispatch and durable timers.
 - The frontend keeps versioned catalog snapshots for independent builds. Its Monaco completion/hover provider consumes that snapshot, not a second handwritten signature list.
 
-After changing APIs or recipes, run `npm run api:sync` in the dashboard repository. This updates both snapshots and generated reference/cookbook pages. `npm run docs:check` rejects stale generated content and cross-repository catalog drift when the backend checkout is available. The backend documentation tests compare the catalog against the engine's actual registered names and overload arities, verify normalized schema keys, execute every API example, and run every cookbook scenario. This is bounded metadata generation, not runtime code generation.
+After changing APIs, events or recipes, run `npm run api:sync` in the dashboard repository. This updates the versioned snapshots and generated reference/cookbook pages. `npm run docs:check` rejects stale generated content and cross-repository catalog drift when the backend checkout is available. The backend documentation tests compare the catalog against the engine's actual registered names and overload arities, verify normalized schema keys, execute every API example, and run every cookbook scenario. Event tests run the documented observation pairs through the real normalizer and compare the complete serialized payloads, with an exhaustive EventKind match requiring coverage for new variants. Every event handler executes with matching, different-kind and nullable-field inputs. This is bounded metadata generation, not runtime code generation; prose still requires review when derivation behavior changes.
 
 The static site's handwritten guides explain behavior not captured by signatures: revision pinning, side effects, dry-run limitations, Owner/Editor security, project-only imports, unknown data and safe failure handling. Update those explanations when behavior changes. See `necko7-frontend/docs/README.md` for build/deployment and link checks.
 

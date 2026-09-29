@@ -87,20 +87,20 @@
     "flash": "Observed exposure | ().",
     "smoke": "Observed exposure | ().",
     "burning": "Observed exposure | ().",
-    "match_stats": "Cumulative MatchStats (not round assists).",
-    "round_stats": "RoundStats {kills, headshot_kills}.",
+    "match_stats": "CS2-reported totals for this player in the current match, across all rounds so far; not this round or lifetime.",
+    "round_stats": "Your player's kills/headshot_kills in this one real round, not totals for the match.",
     "weapons": "Observed array<Weapon> | (); absence does not prove a dropped item."
   },
   "match_stats": {
-    "kills": "Cumulative known local kills | ().",
-    "assists": "Cumulative known local assists | ().",
-    "deaths": "Cumulative known local deaths | ().",
-    "mvps": "Cumulative known local MVP count | ().",
-    "score": "Cumulative known local score | ()."
+    "kills": "Your player's known kill total for the current CS2 match (all rounds so far), or (). Not kills this round or over your lifetime.",
+    "assists": "Your player's known assist total for the current CS2 match (all rounds so far), or (). Not per-round assists.",
+    "deaths": "Your player's known death total for the current CS2 match (all rounds so far), or (). Not deaths this round or over your lifetime.",
+    "mvps": "Your player's known MVP total for the current CS2 match (all rounds so far), or (). No exact award timing is implied.",
+    "score": "Your player's known scoreboard points for the current CS2 match (all rounds so far), or (). Not CT/T team score."
   },
   "round_stats": {
-    "kills": "Known local kills in this real round | ().",
-    "headshot_kills": "Known local headshot kills in this real round | ()."
+    "kills": "Your player's known kills in this one real round, or (). Not the match total. Known zero is 0, unknown is ().",
+    "headshot_kills": "Your player's known headshot kills in this one real round, or (). A subset of round kills, not a separate additional kill total."
   },
   "weapon": {
     "identity": "WeaponIdentity {name, category, finish}.",
@@ -136,7 +136,7 @@
     "updated_at": "Latest observation UTC string.",
     "partial": "true if evidence gaps/incomplete replacement found; absent until necessary, test membership.",
     "end_reason": "game_over or observation_reset when ended; may be absent.",
-    "local_summary": "LocalSummary | (); cumulative stats with per-field authoritative provenance. May be absent before evidence."
+    "local_summary": "LocalSummary | (); your player's totals for the current CS2 match (all rounds so far), with per-field authoritative provenance. May be absent before evidence."
   },
   "r": {
     "index": "Zero-based observed completed-round counter | ().",
@@ -153,17 +153,17 @@
     "events": "Persisted event timeline under advanced inspection; omitted from execution snapshots."
   },
   "r.player": {
-    "kills": "Known local round kills | (); zero is known zero.",
-    "headshot_kills": "Known local round headshot kills | ().",
+    "kills": "Your player's known kills in this one recorded round, or (); zero is known zero. Not the match total.",
+    "headshot_kills": "Your player's known headshot kills in this one recorded round, or (); a subset of kills in that round.",
     "side": "Retained ct/t local side | ().",
     "health": "Last observed local health, not guaranteed round-end health.",
-    "match_stats": "Last-authoritative cumulative counters | (); not per-round assists."
+    "match_stats": "Last-authoritative totals for your player in the current CS2 match (all rounds so far), or (); not per-round assists."
   },
   "local_summary": {
     "steam_id": "Verified local Steam ID.",
-    "stats": "Retained known cumulative MatchStats.",
+    "stats": "Retained known totals for your player in this CS2 match (all rounds so far), not this round, since connection or lifetime.",
     "evidence": "Map per stat -> {seq, at, final}.",
-    "observed_at": "Latest local authoritative cumulative observation time.",
+    "observed_at": "Latest authoritative observation time of your player's counters for this CS2 match.",
     "seq": "Its source sequence.",
     "final": "true only when all retained known fields observed at game over. Otherwise last observed."
   },

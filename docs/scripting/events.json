@@ -1,0 +1,322 @@
+{
+  "schema_version": 1,
+  "envelope": {
+    "device_id": "00000000-0000-0000-0000-000000000001",
+    "channel_id": "123456789",
+    "session_id": "00000000-0000-0000-0000-000000000002",
+    "source_seq": 101,
+    "timestamp": "2026-09-28T19:45:01Z",
+    "reliability": "RELIABLE",
+    "player": { "steam_id": "76561198000000001", "team": "ct" },
+    "match": {
+      "map": "de_vertigo", "mode": "competitive", "phase": "live",
+      "score": { "ct": 0, "t": 0 },
+      "ct": { "consecutive_losses": null, "series_wins": null, "timeouts_remaining": null },
+      "t": { "consecutive_losses": null, "series_wins": null, "timeouts_remaining": null },
+      "series_matches_to_win": null
+    },
+    "round": { "completed_rounds": 0, "phase": "live", "winner": null }
+  },
+  "baseline": {
+    "provider": { "appid": 730, "version": 1, "steamid": "76561198000000001", "timestamp": 1790624700 },
+    "map": { "name": "de_vertigo", "mode": "competitive", "phase": "live", "round": 0, "team_ct": { "score": 0 }, "team_t": { "score": 0 } },
+    "round": { "phase": "live" },
+    "player": {
+      "steamid": "76561198000000001", "team": "CT", "activity": "playing",
+      "state": { "health": 100, "armor": 100, "helmet": true, "defusekit": false, "money": 1000, "equip_value": 3700, "flashed": 0, "smoked": 0, "burning": 0, "round_kills": 0, "round_killhs": 0 },
+      "match_stats": { "kills": 0, "deaths": 0, "assists": 0, "mvps": 0, "score": 0 },
+      "weapons": { "weapon_0": { "name": "weapon_ak47", "type": "Rifle", "state": "active", "ammo_clip": 30, "ammo_clip_max": 30, "ammo_reserve": 90 } }
+    }
+  },
+  "events": [
+    {
+      "kind": "map_changed", "group": "Match and map",
+      "description": "The observed map name changed between two known map snapshots.",
+      "when": "Both snapshots contain a map and their map names differ. A first map observation or disappearing map is not enough to produce this event. A map-context change establishes a new baseline for local gameplay deltas.",
+      "fields": [{ "name": "change", "type": "Change<string>", "description": "Previous and current observed map names, such as de_mirage and de_vertigo." }],
+      "notes": "This is not match_started. Loading a map does not establish that a competitive match has begun.",
+      "previous": { "map": { "name": "de_mirage" } }, "current": {},
+      "payload": { "kind": "map_changed", "change": { "previous": "de_mirage", "current": "de_vertigo" } },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"map_changed\" { return; }\n    log.info(`Map: ${ctx.event.change.previous} -> ${ctx.event.change.current}`);\n}",
+      "related": ["map_phase_changed", "match_started"]
+    },
+    {
+      "kind": "map_phase_changed", "group": "Match and map",
+      "description": "The normalized match phase changed within the same known map and mode.",
+      "when": "Both map names and modes match, both phases are known, and the phase differs. The normalized vocabulary is warmup, live, intermission and game_over, not Valve's raw gameover spelling.",
+      "fields": [{ "name": "change", "type": "Change<MatchPhase>", "description": "Previous and current phase: warmup, live, intermission or game_over." }],
+      "notes": "Intermission is a phase, not a match end. Changing map or losing map context does not guarantee a phase event. Match and round boundary events may accompany this event in the same source update.",
+      "previous": { "map": { "phase": "warmup" } }, "current": {},
+      "payload": { "kind": "map_phase_changed", "change": { "previous": "warmup", "current": "live" } },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"map_phase_changed\" { return; }\n    log.info(`Match phase: ${ctx.event.change.current}`);\n}",
+      "related": ["match_started", "match_ended", "round_ended"]
+    },
+    {
+      "kind": "match_started", "group": "Match and map",
+      "description": "An observed warmup transitioned to live play.",
+      "when": "Within the same known map and mode, match phase changes from warmup to live. Joining an already-live match does not synthesize a match_started event.",
+      "fields": [],
+      "notes": "No event-specific fields. The transition establishes a gameplay baseline; it does not manufacture kills or another round_started. Use ctx.current_match for the retained match observation, not an assumed complete history.",
+      "previous": { "map": { "phase": "warmup" } }, "current": {},
+      "payload": { "kind": "match_started" },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"match_started\" { return; }\n    log.info(\"Observed match start\");\n}",
+      "related": ["map_phase_changed", "round_started", "match_ended"]
+    },
+    {
+      "kind": "match_ended", "group": "Match and map",
+      "description": "Observed live play transitioned directly to game_over.",
+      "when": "Within the same known map and mode, match phase changes from live to game_over. A disconnect, map disappearance or intermission is not this semantic event.",
+      "fields": [],
+      "notes": "No event-specific fields. It can share a payload with the final round_ended, score_changed and local stat changes, even when round.phase is already freeze_time. It does not provide a surrender reason or prove all earlier rounds were observed. Read your retained totals for this match and their final/last-observed provenance in ctx.current_match.local_summary.",
+      "previous": { "map": { "round": 14, "team_ct": { "score": 8 }, "team_t": { "score": 6 } }, "player": { "team": "T" } },
+      "current": { "map": { "phase": "gameover", "round": 15, "team_ct": { "score": 9 }, "team_t": { "score": 6 } }, "round": { "phase": "freezetime", "win_team": "CT" }, "player": { "team": "T" } },
+      "envelope": { "player": { "steam_id": "76561198000000001", "team": "t" }, "match": { "map": "de_vertigo", "mode": "competitive", "phase": "game_over", "score": { "ct": 9, "t": 6 }, "ct": { "consecutive_losses": null, "series_wins": null, "timeouts_remaining": null }, "t": { "consecutive_losses": null, "series_wins": null, "timeouts_remaining": null }, "series_matches_to_win": null }, "round": { "completed_rounds": 15, "phase": "freeze_time", "winner": "ct" } },
+      "payload": { "kind": "match_ended" },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"match_ended\" { return; }\n    log.info(\"Observed game over; inspect the retained match summary\");\n}",
+      "related": ["round_ended", "score_changed", "match_stats_changed"]
+    },
+    {
+      "kind": "round_phase_changed", "group": "Rounds and score",
+      "description": "The observed round phase changed in a comparable match context.",
+      "when": "The same known map/mode is retained, both round phases are known and different, and this is not a match-start/restart baseline. Values are freeze_time, live and over.",
+      "fields": [{ "name": "change", "type": "Change<RoundPhase>", "description": "Previous and current normalized round phase: freeze_time, live or over." }],
+      "notes": "A phase change alone is not a guaranteed round start or end. The stricter round_started/round_ended events verify match phase and completed-round evidence. Do not count every freeze_time transition as a new round, particularly at game over.",
+      "previous": { "round": { "phase": "freezetime" } }, "current": {},
+      "payload": { "kind": "round_phase_changed", "change": { "previous": "freeze_time", "current": "live" } },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"round_phase_changed\" { return; }\n    debug(log, `Round phase: ${ctx.event.change.current}`);\n}",
+      "related": ["round_started", "round_ended"]
+    },
+    {
+      "kind": "round_started", "group": "Rounds and score",
+      "description": "An observed freeze period ended and the real round became live.",
+      "when": "Both match phases are live, round phase changes from freeze_time to live, and the known completed-round counter is unchanged. The same map/mode must be retained and this must not be a restart/start baseline.",
+      "fields": [],
+      "notes": "No event-specific fields. round.completed_rounds counts finished rounds, not the number of the round being played. A first observation already in live play does not fabricate a start event. Consult ctx.current_match.current_round for the recorder's round observation.",
+      "previous": { "round": { "phase": "freezetime" } }, "current": {},
+      "payload": { "kind": "round_started" },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"round_started\" { return; }\n    let completed = ctx.event.round.completed_rounds;\n    if completed != () {\n        log.info(`Round live; ${completed} completed rounds observed`);\n    }\n}",
+      "related": ["round_phase_changed", "round_ended"]
+    },
+    {
+      "kind": "round_ended", "group": "Rounds and score",
+      "description": "A previously-live round has supported completion evidence.",
+      "when": "The previous match and round are live. The new match is live, intermission or game_over, and either (1) the new round phase is over with the known completed counter unchanged or advanced by one, or (2) the match becomes game_over and that counter advances by exactly one, even if the round phase is already freeze_time. The same map/mode must be retained without a restart/start baseline.",
+      "fields": [],
+      "notes": "No event-specific fields. winner can still be unknown, and score/counter updates can arrive later. Do not require round.phase == over in your handler: the final game-over shape can use freeze_time. The recorder retains the correct round and accepts late boundary updates; no extra round is synthesized after game over. Local stats may come from earlier authoritative observations even if the boundary is spectating a teammate. Use the retained round, not an assumed local player at the boundary.",
+      "previous": {},
+      "current": { "map": { "round": 1, "team_ct": { "score": 1 } }, "round": { "phase": "over", "win_team": "CT" } },
+      "envelope": { "match": { "map": "de_vertigo", "mode": "competitive", "phase": "live", "score": { "ct": 1, "t": 0 }, "ct": { "consecutive_losses": null, "series_wins": null, "timeouts_remaining": null }, "t": { "consecutive_losses": null, "series_wins": null, "timeouts_remaining": null }, "series_matches_to_win": null }, "round": { "completed_rounds": 1, "phase": "over", "winner": "ct" } },
+      "payload": { "kind": "round_ended" },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"round_ended\" { return; }\n    let winner = ctx.event.round.winner;\n    if winner == () {\n        log.info(\"Round ended; winner not yet known\");\n    } else {\n        log.info(`Round ended; winning side: ${winner}`);\n    }\n}",
+      "related": ["round_started", "match_ended", "score_changed", "round_stats_changed"]
+    },
+    {
+      "kind": "score_changed", "group": "Rounds and score",
+      "description": "At least one known CT/T score changed.",
+      "when": "The same known map/mode is retained without a match-start/restart baseline. At least one side has different numeric scores in both snapshots. Each side is compared independently.",
+      "fields": [
+        { "name": "ct", "type": "NumberChange | null", "description": "CT score change, or null if unchanged or not comparable." },
+        { "name": "t", "type": "NumberChange | null", "description": "T score change, or null if unchanged or not comparable." }
+      ],
+      "notes": "CT:T describes sides, not fixed rosters. A halftime relabel such as 2:6 -> 6:2 can produce positive and negative changes without awarding six points. This is not a standalone points-won event. Use retained rounds and side_swap_before for round progression. An unknown/unchanged side is null (Rhai unit), not a zero delta. Both sides may change in the same event.",
+      "previous": {}, "current": { "map": { "team_ct": { "score": 1 } } },
+      "envelope": { "match": { "map": "de_vertigo", "mode": "competitive", "phase": "live", "score": { "ct": 1, "t": 0 }, "ct": { "consecutive_losses": null, "series_wins": null, "timeouts_remaining": null }, "t": { "consecutive_losses": null, "series_wins": null, "timeouts_remaining": null }, "series_matches_to_win": null } },
+      "payload": { "kind": "score_changed", "ct": { "previous": 0, "current": 1, "delta": 1 }, "t": null },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"score_changed\" { return; }\n    if ctx.event.ct != () {\n        log.info(`Observed CT score: ${ctx.event.ct.current}`);\n    }\n    if ctx.event.t != () {\n        log.info(`Observed T score: ${ctx.event.t.current}`);\n    }\n}",
+      "related": ["round_ended", "team_changed", "match_ended"]
+    },
+    {
+      "kind": "activity_changed", "group": "Local player",
+      "description": "The verified local player's observed activity changed.",
+      "when": "The previous and current snapshots both identify the same authoritative local player, and both activities are known and different. Values are menu, playing and text_input (normalized from Valve textinput). This comparison can happen even when map context changes.",
+      "fields": [{ "name": "change", "type": "Change<Activity>", "description": "Previous and current observed activity: menu, playing or text_input." }],
+      "notes": "A spectator target's activity is not attributed to the local player. This is not a chat-message event; text_input does not provide typed text.",
+      "previous": { "player": { "activity": "menu" } }, "current": {},
+      "payload": { "kind": "activity_changed", "change": { "previous": "menu", "current": "playing" } },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"activity_changed\" { return; }\n    debug(log, `Local activity: ${ctx.event.change.current}`);\n}",
+      "related": ["team_changed", "map_changed"]
+    },
+    {
+      "kind": "team_changed", "group": "Local player",
+      "description": "The verified local player's side changed between CT and T.",
+      "when": "Comparable same-map/mode snapshots identify the same authoritative local player; both teams are known and differ. Match-start/restart baselines do not emit this event.",
+      "fields": [{ "name": "change", "type": "Change<Team>", "description": "Previous and current local side: ct or t." }],
+      "notes": "A side switch resets player-delta comparisons for this source update; health, ammo and stat changes are not inferred across it. Side switch is not evidence of a kill, death or awarded point. Match/round/score events may still accompany it. It does not describe teammate roster changes.",
+      "previous": {}, "current": { "player": { "team": "T" } },
+      "envelope": { "player": { "steam_id": "76561198000000001", "team": "t" } },
+      "payload": { "kind": "team_changed", "change": { "previous": "ct", "current": "t" } },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"team_changed\" { return; }\n    log.info(`Local side: ${ctx.event.change.previous} -> ${ctx.event.change.current}`);\n}",
+      "related": ["score_changed", "round_started"]
+    },
+    {
+      "kind": "health_changed", "group": "Local player",
+      "description": "The local player's observed health changed within a comparable round.",
+      "when": "The [local-player comparison rules](#comparison-rules) hold and both health values are known and different.",
+      "fields": [{ "name": "change", "type": "NumberChange", "description": "Previous/current health and signed delta. A decrease is not a damage-dealt event." }],
+      "notes": "The event does not identify an attacker, damage source or damage dealt to another player. Reaching zero alone is not enough for player_died; death also needs a corroborating increment in your player's death counter for this match.",
+      "previous": {}, "current": { "player": { "state": { "health": 73 } } },
+      "payload": { "kind": "health_changed", "change": { "previous": 100, "current": 73, "delta": -27 } },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"health_changed\" { return; }\n    debug(log, `Local health: ${ctx.event.change.current}`);\n}",
+      "related": ["player_died", "armor_changed"]
+    },
+    {
+      "kind": "armor_changed", "group": "Local player",
+      "description": "The local player's observed armor changed within a comparable round.",
+      "when": "The [local-player comparison rules](#comparison-rules) hold and both armor values are known and different.",
+      "fields": [{ "name": "change", "type": "NumberChange", "description": "Previous/current armor and signed delta." }],
+      "notes": "An armor change does not establish whether damage, a purchase or another game mechanic caused it. Unknown armor is not known zero.",
+      "previous": {}, "current": { "player": { "state": { "armor": 80 } } },
+      "payload": { "kind": "armor_changed", "change": { "previous": 100, "current": 80, "delta": -20 } },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"armor_changed\" { return; }\n    debug(log, `Local armor: ${ctx.event.change.current}`);\n}",
+      "related": ["health_changed", "helmet_changed"]
+    },
+    {
+      "kind": "helmet_changed", "group": "Local player",
+      "description": "The local player's known helmet flag changed.",
+      "when": "The [local-player comparison rules](#comparison-rules) hold and both helmet flags are known and different.",
+      "fields": [{ "name": "change", "type": "Change<bool>", "description": "Previous/current helmet possession. There is no numeric delta." }],
+      "notes": "The flag describes observed equipment, not an explicit purchase, sale or destruction event.",
+      "previous": {}, "current": { "player": { "state": { "helmet": false } } },
+      "payload": { "kind": "helmet_changed", "change": { "previous": true, "current": false } },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"helmet_changed\" { return; }\n    debug(log, `Local helmet: ${ctx.event.change.current}`);\n}",
+      "related": ["armor_changed", "equipment_value_changed"]
+    },
+    {
+      "kind": "defuse_kit_changed", "group": "Local player",
+      "description": "The local player's known defuse-kit flag changed.",
+      "when": "The [local-player comparison rules](#comparison-rules) hold and both defuse-kit flags are known and different.",
+      "fields": [{ "name": "change", "type": "Change<bool>", "description": "Previous/current defuse-kit possession. There is no numeric delta." }],
+      "notes": "This is equipment state, not a bomb-defuse event. No bomb planter, defuse progress or defuse result is included.",
+      "previous": {}, "current": { "player": { "state": { "defusekit": true } } },
+      "payload": { "kind": "defuse_kit_changed", "change": { "previous": false, "current": true } },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"defuse_kit_changed\" { return; }\n    debug(log, `Local defuse kit: ${ctx.event.change.current}`);\n}",
+      "related": ["equipment_value_changed", "money_changed"]
+    },
+    {
+      "kind": "money_changed", "group": "Local player",
+      "description": "The local player's observed in-game money changed.",
+      "when": "The [local-player comparison rules](#comparison-rules) hold and both money values are known and different.",
+      "fields": [{ "name": "change", "type": "NumberChange", "description": "Previous/current CS2 money and signed delta; not Twitch points or necko7 inventory." }],
+      "notes": "The delta does not identify its cause. Purchases, kill rewards and round economy can all affect money; do not infer a kill from money alone.",
+      "previous": {}, "current": { "player": { "state": { "money": 1300 } } },
+      "payload": { "kind": "money_changed", "change": { "previous": 1000, "current": 1300, "delta": 300 } },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"money_changed\" { return; }\n    debug(log, `Local CS2 money: ${ctx.event.change.current}`);\n}",
+      "related": ["equipment_value_changed", "player_kill"]
+    },
+    {
+      "kind": "equipment_value_changed", "group": "Local player",
+      "description": "The local player's reported equipment value changed.",
+      "when": "The [local-player comparison rules](#comparison-rules) hold and both equipment values are known and different.",
+      "fields": [{ "name": "change", "type": "NumberChange", "description": "Previous/current reported CS2 equipment value and signed delta." }],
+      "notes": "This is not a purchase list or inventory transaction. Missing weapons are not proof that items were dropped, and this value does not reveal which item changed.",
+      "previous": {}, "current": { "player": { "state": { "equip_value": 2700 } } },
+      "payload": { "kind": "equipment_value_changed", "change": { "previous": 3700, "current": 2700, "delta": -1000 } },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"equipment_value_changed\" { return; }\n    debug(log, `Local equipment value: ${ctx.event.change.current}`);\n}",
+      "related": ["money_changed", "weapon_changed"]
+    },
+    {
+      "kind": "exposure_changed", "group": "Local player",
+      "description": "One reported local flash, smoke or burning exposure value changed.",
+      "when": "The [local-player comparison rules](#comparison-rules) hold and both values for the named effect are known and different. A payload changing several effects can emit several exposure_changed events.",
+      "fields": [
+        { "name": "effect", "type": "string", "description": "Exactly flash, smoke or burning." },
+        { "name": "change", "type": "NumberChange", "description": "Previous/current reported exposure value for that effect and signed delta." }
+      ],
+      "notes": "Treat these as reported exposure units, not documented seconds, damage, a grenade entity or an attacker identity. A positive value is not a promise of any particular physical effect duration.",
+      "previous": {}, "current": { "player": { "state": { "flashed": 80 } } },
+      "payload": { "kind": "exposure_changed", "effect": "flash", "change": { "previous": 0, "current": 80, "delta": 80 } },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"exposure_changed\" { return; }\n    debug(log, `Local ${ctx.event.effect} exposure: ${ctx.event.change.current}`);\n}",
+      "related": ["health_changed"]
+    },
+    {
+      "kind": "match_stats_changed", "group": "Kills and statistics",
+      "description": "One or more counters for your player in the current CS2 match changed.",
+      "when": "The [local-player comparison rules](#comparison-rules) hold. Every changed counter known in both snapshots is included; unchanged/unknown counters are omitted from changes.",
+      "fields": [{ "name": "changes", "type": "array<StatChange>", "description": "Non-empty changes for kills, deaths, assists, mvps and/or score accumulated by your player in this match (all rounds so far). Each entry contains stat, previous, current and signed delta." }],
+      "notes": "These are totals for this match, not this round, stream, project or lifetime. They are CS2-reported values, not counters starting when necko7 connected. Negative corrections are reported here; if any comparable match counter decreases, player_kill and player_died are suppressed for that update. There are no per-round assists or exact MVP-award timestamps. The last-authoritative/final match totals also live in the recorder's local_summary. Do not substitute spectator totals.",
+      "previous": {}, "current": { "player": { "state": { "health": 0, "round_kills": 2, "round_killhs": 1 }, "match_stats": { "kills": 2, "deaths": 1, "assists": 1, "mvps": 1, "score": 5 } } },
+      "payload": { "kind": "match_stats_changed", "changes": [{ "stat": "kills", "previous": 0, "current": 2, "delta": 2 }, { "stat": "deaths", "previous": 0, "current": 1, "delta": 1 }, { "stat": "assists", "previous": 0, "current": 1, "delta": 1 }, { "stat": "mvps", "previous": 0, "current": 1, "delta": 1 }, { "stat": "score", "previous": 0, "current": 5, "delta": 5 }] },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"match_stats_changed\" { return; }\n    for item in ctx.event.changes {\n        debug(log, `${item.stat}: ${item.previous} -> ${item.current} (${item.delta})`);\n    }\n}",
+      "related": ["player_kill", "player_died", "round_stats_changed", "match_ended"]
+    },
+    {
+      "kind": "player_kill", "group": "Kills and statistics",
+      "description": "CS2 reported an increase in your player's kill total for the current match.",
+      "when": "The [local-player comparison rules](#comparison-rules) hold, known kills for this match increase, and no comparable match-stat counter decreases in the same update.",
+      "fields": [
+        { "name": "count", "type": "integer", "description": "How many kills were added between the two compared GSI updates. Always positive; can exceed one. If the match kill counter moves from 5 to 7, count is 2." },
+        { "name": "total", "type": "integer", "description": "Your player's CS2-reported kill total for the current match, across all rounds so far. Not kills in this round, since necko7 connected, during this stream or over your lifetime. In the 5 -> 7 example, total is 7." }
+      ],
+      "notes": "There is no victim, attacker object, weapon-at-kill or headshot flag. Use trustworthy round_stats_changed/current_match round data for headshot and multi-kill conditions. Do not assume one callback per victim, infer an ace from total, or add round_stats_changed to player_kill as if they were independent kills. Identity restoration or a new baseline does not infer missed kills.",
+      "previous": { "map": { "round": 5, "team_ct": { "score": 3 }, "team_t": { "score": 2 } }, "player": { "state": { "round_kills": 1, "round_killhs": 1 }, "match_stats": { "kills": 5, "score": 10 } } },
+      "current": { "map": { "round": 5, "team_ct": { "score": 3 }, "team_t": { "score": 2 } }, "player": { "state": { "round_kills": 3, "round_killhs": 2 }, "match_stats": { "kills": 7, "score": 14 } } },
+      "envelope": { "match": { "map": "de_vertigo", "mode": "competitive", "phase": "live", "score": { "ct": 3, "t": 2 }, "ct": { "consecutive_losses": null, "series_wins": null, "timeouts_remaining": null }, "t": { "consecutive_losses": null, "series_wins": null, "timeouts_remaining": null }, "series_matches_to_win": null }, "round": { "completed_rounds": 5, "phase": "live", "winner": null } },
+      "payload": { "kind": "player_kill", "count": 2, "total": 7 },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"player_kill\" { return; }\n    let added = ctx.event.count;\n    let total = ctx.event.total;\n    log.info(`Added ${added} kills; ${total} kills in this match.`);\n}",
+      "related": ["round_stats_changed", "match_stats_changed", "player_died"]
+    },
+    {
+      "kind": "player_died", "group": "Kills and statistics",
+      "description": "Your player's death is corroborated by health and the death counter for the current match.",
+      "when": "The [local-player comparison rules](#comparison-rules) hold, known health moves from a positive value to zero, deaths for this match increase by exactly one, and no comparable match-stat counter decreases.",
+      "fields": [{ "name": "total", "type": "integer", "description": "Your player's CS2-reported death total for the current match, across all rounds so far. Not deaths this round, since necko7 connected or over your lifetime." }],
+      "notes": "Health zero alone, a death counter jump larger than one, or a switch to spectating does not generate this event. No killer, cause, weapon or death location is provided. Absence of an event does not prove survival when the relevant identity/boundary evidence is missing.",
+      "previous": {}, "current": { "player": { "state": { "health": 0 }, "match_stats": { "deaths": 1 } } },
+      "payload": { "kind": "player_died", "total": 1 },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"player_died\" { return; }\n    log.info(`Observed local death; match total ${ctx.event.total}`);\n}",
+      "related": ["health_changed", "match_stats_changed", "round_ended"]
+    },
+    {
+      "kind": "round_stats_changed", "group": "Kills and statistics",
+      "description": "One or both authoritative local round kill counters changed.",
+      "when": "The [local-player comparison rules](#comparison-rules) hold and known round kills/headshot kills differ. Every comparable changed counter is included.",
+      "fields": [{ "name": "changes", "type": "array<StatChange>", "description": "Non-empty changes for round_kills and/or round_headshot_kills. Each entry contains stat, previous, current and signed delta." }],
+      "notes": "Names in this event are round_kills and round_headshot_kills; corresponding state fields are round_stats.kills and round_stats.headshot_kills. Negative observed corrections can appear. A next-round reset is not treated as combat. The recorder retains authoritative values seen before a spectator switch, so completed-round data can be known even when no local player is visible at the end. There are no per-round assists or damage fields.",
+      "previous": {}, "current": { "player": { "state": { "round_kills": 2, "round_killhs": 1 }, "match_stats": { "kills": 2, "score": 4 } } },
+      "payload": { "kind": "round_stats_changed", "changes": [{ "stat": "round_kills", "previous": 0, "current": 2, "delta": 2 }, { "stat": "round_headshot_kills", "previous": 0, "current": 1, "delta": 1 }] },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"round_stats_changed\" { return; }\n    for item in ctx.event.changes {\n        if item.stat == \"round_kills\" {\n            log.info(`Local round kills: ${item.current}`);\n        }\n    }\n}",
+      "related": ["player_kill", "round_ended", "match_stats_changed"]
+    },
+    {
+      "kind": "weapon_changed", "group": "Weapons and ammunition",
+      "description": "The unambiguously selected local weapon changed name or category.",
+      "when": "The [local-player comparison rules](#comparison-rules) hold. Both inventories have exactly one non-holstered weapon (active or reloading), and the selected weapon name or category differs.",
+      "fields": [{ "name": "change", "type": "Change<WeaponIdentity>", "description": "Previous/current selected identities, each containing name, category and nullable finish." }],
+      "notes": "Inventory slot keys are not entity IDs. No weapon event is derived if selection is ambiguous or an inventory is unavailable. A finish-only change does not emit weapon_changed; ammo/status comparison is also suppressed when finishes differ. This is selection, not a pickup/drop/shot event.",
+      "previous": { "player": { "weapons": { "weapon_0": { "name": "weapon_glock", "type": "Pistol", "ammo_clip": 20, "ammo_clip_max": 20, "ammo_reserve": 120 } } } }, "current": {},
+      "payload": { "kind": "weapon_changed", "change": { "previous": { "name": "weapon_glock", "category": "Pistol", "finish": null }, "current": { "name": "weapon_ak47", "category": "Rifle", "finish": null } } },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"weapon_changed\" { return; }\n    debug(log, `Selected weapon: ${ctx.event.change.current.name}`);\n}",
+      "related": ["weapon_state_changed", "ammo_changed", "equipment_value_changed"]
+    },
+    {
+      "kind": "weapon_state_changed", "group": "Weapons and ammunition",
+      "description": "The selected local weapon's observed status changed without changing its identity.",
+      "when": "The [local-player comparison rules](#comparison-rules) hold. Both snapshots have one unambiguous selected weapon; its name, category and finish match, but its status differs.",
+      "fields": [
+        { "name": "weapon", "type": "WeaponIdentity", "description": "Current selected identity: name, category and nullable finish." },
+        { "name": "change", "type": "Change<WeaponStatus>", "description": "Previous/current normalized status. Vocabulary is active, holstered and reloading; see the selection limitation below." }
+      ],
+      "notes": "The selected-weapon comparison excludes holstered weapons. Although holstered is a valid normalized inventory status, this event currently derives active <-> reloading transitions; it is not a general event for every inventory status change. Reload status is observed, not a promise that a reload will complete.",
+      "previous": {}, "current": { "player": { "weapons": { "weapon_0": { "state": "reloading" } } } },
+      "payload": { "kind": "weapon_state_changed", "weapon": { "name": "weapon_ak47", "category": "Rifle", "finish": null }, "change": { "previous": "active", "current": "reloading" } },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"weapon_state_changed\" { return; }\n    debug(log, `${ctx.event.weapon.name}: ${ctx.event.change.current}`);\n}",
+      "related": ["weapon_changed", "ammo_changed"]
+    },
+    {
+      "kind": "ammo_changed", "group": "Weapons and ammunition",
+      "description": "At least one ammo value changed for the same selected local weapon.",
+      "when": "The [local-player comparison rules](#comparison-rules) hold, both snapshots have one unambiguous selected weapon with matching name/category/finish, and at least one ammo value is known in both snapshots and different.",
+      "fields": [
+        { "name": "weapon", "type": "WeaponIdentity", "description": "Current selected identity: name, category and nullable finish." },
+        { "name": "clip", "type": "NumberChange | null", "description": "Clip change, or null if unchanged/not comparable." },
+        { "name": "capacity", "type": "NumberChange | null", "description": "Clip-capacity change, or null if unchanged/not comparable." },
+        { "name": "reserve", "type": "NumberChange | null", "description": "Reported reserve change, or null if unchanged/not comparable." }
+      ],
+      "notes": "Ammo deltas are not shot events. Reloads and other changes affect ammo, and reserve units are whatever CS2 reports; do not assume bullets (some captures use magazine-like units). A weapon/finish switch or ambiguous selection suppresses the comparison. Check each nullable change before reading its members.",
+      "previous": {}, "current": { "player": { "weapons": { "weapon_0": { "ammo_clip": 29 } } } },
+      "payload": { "kind": "ammo_changed", "weapon": { "name": "weapon_ak47", "category": "Rifle", "finish": null }, "clip": { "previous": 30, "current": 29, "delta": -1 }, "capacity": null, "reserve": null },
+      "handler": "fn on_event(ctx) {\n    if ctx.event.kind != \"ammo_changed\" { return; }\n    if ctx.event.clip != () {\n        debug(log, `${ctx.event.weapon.name} clip: ${ctx.event.clip.current}`);\n    }\n}",
+      "related": ["weapon_changed", "weapon_state_changed"]
+    }
+  ]
+}
