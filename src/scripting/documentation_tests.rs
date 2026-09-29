@@ -206,6 +206,8 @@ fn documented_host_signatures_are_registered_and_every_overload_executes() {
         .filter(|s| {
             s.contains("Capability")
                 || s.contains("UserFilter")
+                || s.contains("ActivityFilter")
+                || s.contains("MessageFilter")
                 || s.contains("RewardFilter")
                 || s.contains("Duration")
                 || s.starts_with("last_rounds(")
@@ -219,7 +221,10 @@ fn documented_host_signatures_are_registered_and_every_overload_executes() {
         .map(|f| {
             let ns = f["namespace"].as_str().unwrap();
             let name = f["name"].as_str().unwrap();
-            if ns == "Duration" || name == "create" {
+            if ns == "Duration"
+                || name == "create"
+                || (ns == "MessageFilter" && ["any", "all"].contains(&name))
+            {
                 format!("{ns}::{name}")
             } else {
                 name.to_owned()
@@ -235,6 +240,8 @@ fn documented_host_signatures_are_registered_and_every_overload_executes() {
         .filter(|s| {
             s.contains("Capability")
                 || s.contains("UserFilter")
+                || s.contains("ActivityFilter")
+                || s.contains("MessageFilter")
                 || s.contains("RewardFilter")
                 || s.contains("Duration")
                 || s.starts_with("last_rounds(")
@@ -258,7 +265,9 @@ fn documented_host_signatures_are_registered_and_every_overload_executes() {
         .map(|f| {
             let ns = f["namespace"].as_str().unwrap();
             let name = f["name"].as_str().unwrap();
-            let static_fn = ns == "Duration" || name == "create";
+            let static_fn = ns == "Duration"
+                || name == "create"
+                || (ns == "MessageFilter" && ["any", "all"].contains(&name));
             (
                 if static_fn {
                     format!("{ns}::{name}")

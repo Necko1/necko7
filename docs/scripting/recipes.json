@@ -1,5 +1,21 @@
 [
   {
+    "id": "message-keyword-draw",
+    "title": "Choose a chatter by message content",
+    "description": "After an observed round ends, wait two minutes and choose one chatter who wrote a message containing динозавр OR starting with зверь in this channel's previous ten minutes, among candidates who chatted in the last two minutes. Matching ignores case, including Cyrillic. Configure secret_case with is_visible=false and is_paused=false. This is a recorded-history filter, not a new chat-message event. Use MessageFilter::all() if one message must satisfy both clauses; separate messages cannot satisfy separate AND clauses. No matches means no trigger. One stable job key replaces a still-scheduled earlier draw. Failures are logged, not automatically retried or spammed to chat.",
+    "files": {
+      "main.rhai": "fn on_event(ctx) {\n    if ctx.event.kind != \"round_ended\" { return; }\n    scheduler.after(\"keyword_draw\", Duration::from_mins(2), #{alias: \"secret_case\"});\n}\n\nfn on_timer(ctx) {\n    if ctx.timer.key != \"keyword_draw\" { return; }\n    let filter = UserFilter::create()\n        .messages(MessageFilter::any()\n            .contains(\"динозавр\")\n            .starts_with(\"зверь\")\n            .case_sensitive(false)\n            .during(Duration::from_mins(10)));\n    let users = chat.recent_chatters(Duration::from_mins(2), filter);\n    let winner = random.pick(users);\n    if winner == () {\n        log.info(\"No in-window message matched; no reward triggered.\");\n        return;\n    }\n    let result = rewards.trigger(ctx.timer.payload.alias, winner.id);\n    if result.ok {\n        chat.send(`@${winner.login} won the keyword draw! Check your necko7 inventory.`);\n    } else {\n        let code = if result.contains(\"code\") { result.code } else { \"unknown_result\" };\n        log.warn(`Keyword-draw reward needs review: ${code}. Inspect inventory before retrying.`);\n    }\n}"
+    },
+    "scenarios": [
+      {"entry": "on_event", "context": {"event": {"kind": "round_ended"}}, "calls": ["scheduler.after"]},
+      {"entry": "on_event", "context": {"event": {"kind": "player_kill"}}, "calls": []},
+      {"entry": "on_timer", "context": {"timer": {"key": "keyword_draw", "payload": {"alias": "secret_case"}}}, "calls": ["chat.recent_chatters", "rewards.trigger", "chat.send"]},
+      {"entry": "on_timer", "context": {"timer": {"key": "keyword_draw", "payload": {"alias": "secret_case"}}}, "trigger_failure": true, "calls": ["chat.recent_chatters", "rewards.trigger", "log.warn"]},
+      {"entry": "on_timer", "context": {"timer": {"key": "keyword_draw", "payload": {"alias": "secret_case"}}}, "empty_chat": true, "calls": ["chat.recent_chatters", "log.info"]},
+      {"entry": "on_timer", "context": {"timer": {"key": "other_job"}}, "calls": []}
+    ]
+  },
+  {
     "id": "announce-kill",
     "title": "Announce a local kill",
     "description": "Route the normalized event. count may be greater than one when several kills arrive in one update; it is not a victim list.",
@@ -28,7 +44,7 @@
     "title": "Ace to delayed secret-case giveaway",
     "description": "For 5v5, an ace means at least five observed local round kills. In Wingman, choose a different threshold instead of claiming a two-kill round is a five-player ace. Configure secret_case with is_visible=false and is_paused=false. This example requires three messages and 15 characters in the previous five minutes plus one completed entry_reward redemption in seven days; remove the reward predicate for an open giveaway. Stable winner job key replaces an earlier pending giveaway, not already queued work. Reward triggers are never automatically announced or retried.",
     "files": {
-      "main.rhai": "fn on_event(ctx) {\n    if ctx.event.kind != \"round_ended\" || ctx.current_match == () { return; }\n    let rounds = ctx.current_match.last_rounds(1);\n    if rounds.len == 0 { return; }\n    let r = rounds[0];\n    if r.player.kills == () || r.player.kills < 5 { return; }\n    let key = ctx.event.session_id + \":\" + r.index;\n    if storage.get(\"last_ace\", \"\") == key { return; }\n    storage.set(\"last_ace\", key);\n    chat.send(\"Ace! A secret-case draw starts in two minutes.\");\n    scheduler.after(\"ace_giveaway\", Duration::from_mins(2), #{alias: \"secret_case\"});\n}\n\nfn on_timer(ctx) {\n    if ctx.timer.key != \"ace_giveaway\" { return; }\n    let filter = UserFilter::create().min_messages(3).min_characters(15)\n        .reward_redemptions(RewardFilter::create().reward(\"entry_reward\")\n            .statuses([\"COMPLETED\"]).min_count(1).during(Duration::from_days(7)));\n    let viewers = chat.recent_chatters(Duration::from_mins(5), filter);\n    let winner = random.pick(viewers);\n    if winner == () {\n        log.info(\"No eligible chatters; no reward triggered.\");\n        return;\n    }\n    let result = rewards.trigger(ctx.timer.payload.alias, winner.id);\n    if result.ok {\n        chat.send(`@${winner.login} won the secret case! Check your necko7 inventory.`);\n    } else {\n        let code = if result.contains(\"code\") { result.code } else { \"unknown_result\" };\n        log.warn(`Secret-case outcome: ${code}; inspect Scripts Logs and inventory before retrying.`);\n        // One deliberate, neutral announcement; no per-error spam or automatic retrigger.\n        chat.send(\"The draw finished, but the reward needs review. Check the channel inventory.\");\n    }\n}"
+      "main.rhai": "fn on_event(ctx) {\n    if ctx.event.kind != \"round_ended\" || ctx.current_match == () { return; }\n    let rounds = ctx.current_match.last_rounds(1);\n    if rounds.len == 0 { return; }\n    let r = rounds[0];\n    if r.player.kills == () || r.player.kills < 5 { return; }\n    let key = ctx.event.session_id + \":\" + r.index;\n    if storage.get(\"last_ace\", \"\") == key { return; }\n    storage.set(\"last_ace\", key);\n    chat.send(\"Ace! A secret-case draw starts in two minutes.\");\n    scheduler.after(\"ace_giveaway\", Duration::from_mins(2), #{alias: \"secret_case\"});\n}\n\nfn on_timer(ctx) {\n    if ctx.timer.key != \"ace_giveaway\" { return; }\n    let filter = UserFilter::create()\n        .activity(ActivityFilter::create().min_messages(3).min_characters(15)\n            .during(Duration::from_mins(5)))\n        .reward_redemptions(RewardFilter::create().reward(\"entry_reward\")\n            .statuses([\"COMPLETED\"]).min_count(1).during(Duration::from_days(7)));\n    let viewers = chat.recent_chatters(Duration::from_mins(5), filter);\n    let winner = random.pick(viewers);\n    if winner == () {\n        log.info(\"No eligible chatters; no reward triggered.\");\n        return;\n    }\n    let result = rewards.trigger(ctx.timer.payload.alias, winner.id);\n    if result.ok {\n        chat.send(`@${winner.login} won the secret case! Check your necko7 inventory.`);\n    } else {\n        let code = if result.contains(\"code\") { result.code } else { \"unknown_result\" };\n        log.warn(`Secret-case outcome: ${code}; inspect Scripts Logs and inventory before retrying.`);\n        // One deliberate, neutral announcement; no per-error spam or automatic retrigger.\n        chat.send(\"The draw finished, but the reward needs review. Check the channel inventory.\");\n    }\n}"
     },
     "scenarios": [
       {
@@ -194,9 +210,9 @@
   {
     "id": "eligible-chatters",
     "title": "Choose a recent eligible chatter",
-    "description": "Use query-time activity, not an event timestamp or guessed Twitch subscription state. random.pick returns () on empty arrays. user_stats redemptions covers the same window but does not prove completed Steam delivery.",
+    "description": "Use query-time activity, not an event timestamp or guessed Twitch subscription state. random.pick returns () on empty arrays. user_stats redemptions covers the same window but does not prove completed Steam delivery. Candidate selection uses five minutes; ActivityFilter independently counts messages and characters over thirty minutes. Returned activity/user_stats here still describes five minutes, not the eligibility history.",
     "files": {
-      "main.rhai": "fn on_event(ctx) {\n    if ctx.event.kind != \"match_started\" { return; }\n    let filter = UserFilter::create().min_messages(5).min_characters(100);\n    let candidates = users.recent_chatters(Duration::from_mins(5), filter);\n    let winner = random.pick(candidates);\n    if winner == () { log.info(\"Nobody meets the activity criteria.\"); return; }\n    let activity = users.user_stats(winner.id, Duration::from_mins(5));\n    log.info(`Picked ${winner.login}: ${activity.messages} messages.`);\n}"
+      "main.rhai": "fn on_event(ctx) {\n    if ctx.event.kind != \"match_started\" { return; }\n    let filter = UserFilter::create().activity(\n        ActivityFilter::create().min_messages(5).min_characters(100)\n            .during(Duration::from_mins(30)));\n    let candidates = users.recent_chatters(Duration::from_mins(5), filter);\n    let winner = random.pick(candidates);\n    if winner == () { log.info(\"Nobody meets the activity criteria.\"); return; }\n    let activity = users.user_stats(winner.id, Duration::from_mins(5));\n    log.info(`Picked ${winner.login}: ${activity.messages} messages.`);\n}"
     },
     "scenarios": [
       {
@@ -219,7 +235,7 @@
     "title": "Filter by reward history",
     "description": "Both activity and redemption criteria must pass. min_count(0), the default, disables the redemption predicate. Empty statuses means all statuses; the redemption window is independent of the chat window.",
     "files": {
-      "main.rhai": "fn on_event(ctx) {\n    if ctx.event.kind != \"match_started\" { return; }\n    let reward_filter = RewardFilter::create().reward(\"entry_reward\")\n        .statuses([\"COMPLETED\"]).min_count(2).during(Duration::from_days(7));\n    let filter = UserFilter::create().min_messages(1).reward_redemptions(reward_filter);\n    let viewers = chat.recent_chatters(Duration::from_mins(5), filter);\n    log.info(`Eligible returning viewers: ${viewers.len}`);\n}"
+      "main.rhai": "fn on_event(ctx) {\n    if ctx.event.kind != \"match_started\" { return; }\n    let reward_filter = RewardFilter::create().reward(\"entry_reward\")\n        .statuses([\"COMPLETED\"]).min_count(2).during(Duration::from_days(7));\n    let filter = UserFilter::create().reward_redemptions(reward_filter);\n    let viewers = chat.recent_chatters(Duration::from_mins(5), filter);\n    log.info(`Eligible returning viewers: ${viewers.len}`);\n}"
     },
     "scenarios": [
       {
@@ -397,6 +413,50 @@
         "calls": [
           "log.info"
         ]
+      }
+    ]
+  },
+  {
+    "id": "independent-filter-windows",
+    "title": "Combine four independent eligibility windows",
+    "description": "Candidates must have chatted in the last minute, authored at least three messages and 15 characters in 30 minutes, written динозавр in five minutes, and completed two entry_reward redemptions in seven days. All requirements are ANDed. Omitting during on any nested filter instead reads all retained history for that criterion, never the candidate window. Result messages/characters describe the candidate minute only. This example logs eligibility without triggering real rewards.",
+    "files": {
+      "main.rhai": "fn on_event(ctx) {\n    if ctx.event.kind != \"match_started\" { return; }\n    let filter = UserFilter::create()\n        .activity(ActivityFilter::create().min_messages(3).min_characters(15)\n            .during(Duration::from_mins(30)))\n        .messages(MessageFilter::any().contains(\"динозавр\").case_sensitive(false)\n            .during(Duration::from_mins(5)))\n        .reward_redemptions(RewardFilter::create().reward(\"entry_reward\")\n            .statuses([\"COMPLETED\"]).min_count(2).during(Duration::from_days(7)));\n    let viewers = users.recent_chatters(Duration::from_mins(1), filter);\n    log.info(`Four-window eligible viewers: ${viewers.len}`);\n}"
+    },
+    "scenarios": [
+      {
+        "entry": "on_event",
+        "context": {
+          "event": {
+            "kind": "match_started"
+          }
+        },
+        "calls": [
+          "users.recent_chatters",
+          "log.info"
+        ]
+      },
+      {
+        "entry": "on_event",
+        "context": {
+          "event": {
+            "kind": "match_started"
+          }
+        },
+        "empty_chat": true,
+        "calls": [
+          "users.recent_chatters",
+          "log.info"
+        ]
+      },
+      {
+        "entry": "on_event",
+        "context": {
+          "event": {
+            "kind": "player_kill"
+          }
+        },
+        "calls": []
       }
     ]
   }

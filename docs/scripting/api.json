@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "rhai_version": "1.26.1",
-  "api_version": "0.10.2",
+  "api_version": "0.10.4",
   "properties": {
   "ctx": {
     "event": "Event | (); on_event only. Not present in a live timer context.",
@@ -182,10 +182,10 @@
   "user": {
     "id": "Twitch user ID string.",
     "login": "Observed login; can be absent in user_stats without chat.",
-    "messages": "Known observed message count.",
-    "characters": "Sum of recorded char_count.",
-    "first_activity": "Earliest activity in requested window | ().",
-    "last_activity": "Latest activity in window | ().",
+    "messages": "All recorded messages in recent_chatters' candidate window (or user_stats' requested window), NOT the nested filter windows or only matching text.",
+    "characters": "Sum of stored Unicode character counts in the candidate/requested window, NOT nested eligibility history.",
+    "first_activity": "Earliest recorded activity in the candidate/requested window | ().",
+    "last_activity": "Latest recorded activity in the candidate/requested window | ().",
     "redemptions": "user_stats only: {total, completed, script}."
   },
   "reward": {
@@ -506,21 +506,25 @@
         {
           "name": "window",
           "type": "Duration",
-          "description": "60..31,536,000 seconds, evaluated relative to query time."
+          "description": "60..31,536,000 seconds. Select candidate users who authored recorded messages in this channel during this window, relative to query time."
         },
         {
           "name": "filter",
           "type": "UserFilter",
-          "description": "Create with UserFilter::create(); chain criteria."
+          "description": "UserFilter criteria are ANDed after candidate selection; each nested filter has its own optional window."
         }
       ],
       "returns": "array<User>",
-      "description": "Query eligible recent channel chatters.",
-      "behavior": "At most 1,000 users, newest last_activity first, then ID. Activity must fall inside the chat window. Reward criteria are ANDed with message/character thresholds. Subscription/follower/role data is not available.",
-      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. invalid_chat_window, invalid_reward_filter.",
+      "description": "Select recent candidate chatters, then apply independent history filters.",
+      "behavior": "chat.recent_chatters and users.recent_chatters are aliases. The window selects candidates only: users with recorded channel messages between query time minus window and query time. ActivityFilter, MessageFilter and RewardFilter each use their own .during(...) window; without it they inspect all retained channel history, never implicitly the candidate window. All attached criteria are ANDed. Legacy UserFilter.min_messages/min_characters alone keep their released candidate-window semantics. Returned messages, characters, first_activity and last_activity always describe ALL messages in the candidate window, not the nested filters' windows or only text matches. One database query; at most 1,000 eligible users, newest last_activity first then ID; limit applies AFTER filtering. No qualifying candidates returns []. Future records, other channels and username/display-name text are excluded. No follower/subscriber/role filtering. See [user filtering](../user-filtering).",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. invalid_chat_window, invalid_reward_filter, invalid_activity_filter, invalid_message_filter.",
       "dry_run": "Reads current channel/project data even in dry run.",
-      "example": "chat.recent_chatters(Duration::from_mins(5), UserFilter::create().min_messages(2));",
-      "related": []
+      "example": "chat.recent_chatters(Duration::from_mins(5), UserFilter::create().activity(ActivityFilter::create().min_messages(2).during(Duration::from_mins(30))));",
+      "related": [
+        "UserFilter.activity",
+        "UserFilter.messages",
+        "UserFilter.reward_redemptions"
+      ]
     },
     {
       "namespace": "chat",
@@ -554,21 +558,25 @@
         {
           "name": "window",
           "type": "Duration",
-          "description": "60..31,536,000 seconds, evaluated relative to query time."
+          "description": "60..31,536,000 seconds. Select candidate users who authored recorded messages in this channel during this window, relative to query time."
         },
         {
           "name": "filter",
           "type": "UserFilter",
-          "description": "Create with UserFilter::create(); chain criteria."
+          "description": "UserFilter criteria are ANDed after candidate selection; each nested filter has its own optional window."
         }
       ],
       "returns": "array<User>",
-      "description": "Query eligible recent channel chatters.",
-      "behavior": "At most 1,000 users, newest last_activity first, then ID. Activity must fall inside the chat window. Reward criteria are ANDed with message/character thresholds. Subscription/follower/role data is not available.",
-      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. invalid_chat_window, invalid_reward_filter.",
+      "description": "Select recent candidate chatters, then apply independent history filters.",
+      "behavior": "chat.recent_chatters and users.recent_chatters are aliases. The window selects candidates only: users with recorded channel messages between query time minus window and query time. ActivityFilter, MessageFilter and RewardFilter each use their own .during(...) window; without it they inspect all retained channel history, never implicitly the candidate window. All attached criteria are ANDed. Legacy UserFilter.min_messages/min_characters alone keep their released candidate-window semantics. Returned messages, characters, first_activity and last_activity always describe ALL messages in the candidate window, not the nested filters' windows or only text matches. One database query; at most 1,000 eligible users, newest last_activity first then ID; limit applies AFTER filtering. No qualifying candidates returns []. Future records, other channels and username/display-name text are excluded. No follower/subscriber/role filtering. See [user filtering](../user-filtering).",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. invalid_chat_window, invalid_reward_filter, invalid_activity_filter, invalid_message_filter.",
       "dry_run": "Reads current channel/project data even in dry run.",
-      "example": "users.recent_chatters(Duration::from_mins(5), UserFilter::create().min_messages(2));",
-      "related": []
+      "example": "users.recent_chatters(Duration::from_mins(5), UserFilter::create().activity(ActivityFilter::create().min_messages(2).during(Duration::from_mins(30))));",
+      "related": [
+        "UserFilter.activity",
+        "UserFilter.messages",
+        "UserFilter.reward_redemptions"
+      ]
     },
     {
       "namespace": "users",
@@ -746,7 +754,7 @@
       ],
       "returns": "Duration",
       "description": "Create an explicit duration.",
-      "behavior": "Result must be 1..31,536,000 seconds. Fractional input, zero, negative and excessive values fail. Chat/reward-filter windows must be at least 60 seconds; scheduler supports 1 second.",
+      "behavior": "Result must be 1..31,536,000 seconds. Fractional input, zero, negative and excessive values fail. Candidate chat/user_stats and explicit RewardFilter windows must be at least 60 seconds. ActivityFilter/MessageFilter windows and scheduler support 1 second. Omitting a nested filter's during inspects all retained channel history.",
       "errors": "Throws: Duration must be positive and at most one year.",
       "dry_run": "Pure construction, identical behavior.",
       "example": "Duration::from_secs(1);",
@@ -765,7 +773,7 @@
       ],
       "returns": "Duration",
       "description": "Create an explicit duration.",
-      "behavior": "Result must be 1..31,536,000 seconds. Fractional input, zero, negative and excessive values fail. Chat/reward-filter windows must be at least 60 seconds; scheduler supports 1 second.",
+      "behavior": "Result must be 1..31,536,000 seconds. Fractional input, zero, negative and excessive values fail. Candidate chat/user_stats and explicit RewardFilter windows must be at least 60 seconds. ActivityFilter/MessageFilter windows and scheduler support 1 second. Omitting a nested filter's during inspects all retained channel history.",
       "errors": "Throws: Duration must be positive and at most one year.",
       "dry_run": "Pure construction, identical behavior.",
       "example": "Duration::from_mins(1);",
@@ -784,7 +792,7 @@
       ],
       "returns": "Duration",
       "description": "Create an explicit duration.",
-      "behavior": "Result must be 1..31,536,000 seconds. Fractional input, zero, negative and excessive values fail. Chat/reward-filter windows must be at least 60 seconds; scheduler supports 1 second.",
+      "behavior": "Result must be 1..31,536,000 seconds. Fractional input, zero, negative and excessive values fail. Candidate chat/user_stats and explicit RewardFilter windows must be at least 60 seconds. ActivityFilter/MessageFilter windows and scheduler support 1 second. Omitting a nested filter's during inspects all retained channel history.",
       "errors": "Throws: Duration must be positive and at most one year.",
       "dry_run": "Pure construction, identical behavior.",
       "example": "Duration::from_hours(1);",
@@ -803,7 +811,7 @@
       ],
       "returns": "Duration",
       "description": "Create an explicit duration.",
-      "behavior": "Result must be 1..31,536,000 seconds. Fractional input, zero, negative and excessive values fail. Chat/reward-filter windows must be at least 60 seconds; scheduler supports 1 second.",
+      "behavior": "Result must be 1..31,536,000 seconds. Fractional input, zero, negative and excessive values fail. Candidate chat/user_stats and explicit RewardFilter windows must be at least 60 seconds. ActivityFilter/MessageFilter windows and scheduler support 1 second. Omitting a nested filter's during inspects all retained channel history.",
       "errors": "Throws: Duration must be positive and at most one year.",
       "dry_run": "Pure construction, identical behavior.",
       "example": "Duration::from_days(1);",
@@ -822,7 +830,7 @@
       ],
       "returns": "Duration",
       "description": "Create an explicit duration.",
-      "behavior": "Result must be 1..31,536,000 seconds. Fractional input, zero, negative and excessive values fail. Chat/reward-filter windows must be at least 60 seconds; scheduler supports 1 second.",
+      "behavior": "Result must be 1..31,536,000 seconds. Fractional input, zero, negative and excessive values fail. Candidate chat/user_stats and explicit RewardFilter windows must be at least 60 seconds. ActivityFilter/MessageFilter windows and scheduler support 1 second. Omitting a nested filter's during inspects all retained channel history.",
       "errors": "Throws: Duration must be positive and at most one year.",
       "dry_run": "Pure construction, identical behavior.",
       "example": "Duration::from_weeks(1);",
@@ -835,11 +843,136 @@
       "parameters": [],
       "returns": "UserFilter",
       "description": "Construct an empty filter.",
-      "behavior": "Default message and character minima are zero; no reward restriction.",
+      "behavior": "No activity, reward or message-content restriction. All nested criteria are ANDed. Use .activity(...), .messages(...) and .reward_redemptions(...); each nested filter has its own optional .during(...), defaulting to all retained channel history. Legacy .min_messages/.min_characters keep their original candidate-window behavior. See [user filtering](../user-filtering).",
       "errors": "No host call; pure value.",
       "dry_run": "Identical.",
       "example": "UserFilter::create();",
       "related": []
+    },
+    {
+      "namespace": "UserFilter",
+      "name": "messages",
+      "signature": "UserFilter.messages(filter: MessageFilter) -> UserFilter",
+      "parameters": [
+        {
+          "name": "filter",
+          "type": "MessageFilter",
+          "description": "A nonempty any()/all() builder with 1..16 text clauses."
+        }
+      ],
+      "returns": "UserFilter",
+      "description": "Require one authored message to match content in its own history window.",
+      "behavior": "Return an updated UserFilter; chain or assign. Replaces the previous MessageFilter. ANDed with ActivityFilter, reward_redemptions and legacy candidate-window thresholds. Checks only this user's recorded message text in this channel. MessageFilter.during sets its own independent window; omitted means ALL retained channel history up to query time, never the recent_chatters window. Never checks username/display name or metadata. any() means one message satisfies at least one clause; all() means one message satisfies every clause, not separate messages satisfying separate clauses. No relevant messages means no match. Returned user activity statistics still describe the candidate window. See [message filtering](../message-filtering).",
+      "errors": "Throws invalid_message_filter if the builder is empty, has more than 16 clauses, or a pattern is empty, contains NUL or exceeds 256 Unicode scalar values. Service validates again before querying. Explicit window must be 1..31,536,000 seconds; invalid values throw invalid_message_filter.",
+      "dry_run": "Construction is pure; querying reads real recorded chat data, with identical filtering and no side effects.",
+      "example": "UserFilter::create().messages(MessageFilter::any().contains(\"динозавр\").starts_with(\"зверь\").during(Duration::from_mins(10)));",
+      "related": [
+        "MessageFilter.any",
+        "MessageFilter.all",
+        "MessageFilter.during",
+        "users.recent_chatters"
+      ]
+    },
+    {
+      "namespace": "MessageFilter",
+      "name": "any",
+      "signature": "MessageFilter::any() -> MessageFilter",
+      "parameters": [],
+      "returns": "MessageFilter",
+      "description": "Start a message-content builder with OR composition.",
+      "behavior": "A chatter matches if at least one of their recorded messages in this channel during this builder's own window satisfies at least one clause. Default case_sensitive=false. Add 1..16 clauses before attaching through UserFilter.messages; an empty builder is not a match-all filter. Builders return new values: chain or assign them. No username/display-name matching, regex or access to raw history. See [message filtering](../message-filtering). Its .during(...) window is independent of recent_chatters' candidate window. Omit .during(...) to inspect all retained channel history up to query time, not lifetime data that was never recorded. It never inherits the candidate window. Repeating .during(...) replaces the window.",
+      "errors": "No error constructing the empty value. Attaching an empty builder throws invalid_message_filter.",
+      "dry_run": "Pure construction, identical behavior.",
+      "example": "MessageFilter::any().contains(\"динозавр\").starts_with(\"зверь\");",
+      "related": [
+        "MessageFilter.all",
+        "MessageFilter.case_sensitive",
+        "UserFilter.messages",
+        "MessageFilter.during"
+      ]
+    },
+    {
+      "namespace": "MessageFilter",
+      "name": "all",
+      "signature": "MessageFilter::all() -> MessageFilter",
+      "parameters": [],
+      "returns": "MessageFilter",
+      "description": "Start a message-content builder with AND composition on a single message.",
+      "behavior": "A chatter matches if at least one of their recorded messages in this channel during this builder's own window satisfies EVERY clause at once. Different messages cannot satisfy different clauses: messages 'beast here' and 'a dinosaur' do not satisfy starts_with('beast') AND contains('dinosaur'); 'beast dinosaur' does. Does not require every message by the user to match. Default case_sensitive=false. Add 1..16 clauses before UserFilter.messages; no clauses is an error, not vacuous truth. See [message filtering](../message-filtering). Its .during(...) window is independent of recent_chatters' candidate window. Omit .during(...) to inspect all retained channel history up to query time, not lifetime data that was never recorded. It never inherits the candidate window. Repeating .during(...) replaces the window.",
+      "errors": "No error constructing the empty value. Attaching an empty builder throws invalid_message_filter.",
+      "dry_run": "Pure construction, identical behavior.",
+      "example": "MessageFilter::all().starts_with(\"зверь\").contains(\"динозавр\");",
+      "related": [
+        "MessageFilter.any",
+        "MessageFilter.case_sensitive",
+        "UserFilter.messages",
+        "MessageFilter.during"
+      ]
+    },
+    {
+      "namespace": "MessageFilter",
+      "name": "contains",
+      "signature": "MessageFilter.contains(text: string) -> MessageFilter",
+      "parameters": [{"name": "text", "type": "string", "description": "Literal substring, 1..256 Unicode scalar values; NUL is forbidden."}],
+      "returns": "MessageFilter",
+      "description": "Add a literal substring clause for message text.",
+      "behavior": "Return an updated builder. Match text anywhere within ONE message. Whitespace is not trimmed; %, _ and backslash are literal, not wildcards. No regex. Default case-insensitive Unicode comparison uses PostgreSQL ILIKE with deterministic ICU und-x-icu collation; case_sensitive(true) uses exact, case-sensitive text comparison. No accent removal, Unicode normalization or general equivalence of different spellings. At most 16 clauses. User eligibility follows any()/all() composition, not username/display name.",
+      "errors": "Throws invalid_message_filter for an empty/NUL/over-256-character pattern or a seventeenth clause.",
+      "dry_run": "Pure construction. Query semantics are identical.",
+      "example": "MessageFilter::any().contains(\"динозавр\");",
+      "related": ["MessageFilter.starts_with", "MessageFilter.equals", "MessageFilter.case_sensitive"]
+    },
+    {
+      "namespace": "MessageFilter",
+      "name": "starts_with",
+      "signature": "MessageFilter.starts_with(text: string) -> MessageFilter",
+      "parameters": [{"name": "text", "type": "string", "description": "Literal prefix, 1..256 Unicode scalar values; NUL is forbidden."}],
+      "returns": "MessageFilter",
+      "description": "Add a literal prefix clause anchored to the beginning of a message.",
+      "behavior": "Return an updated builder. 'зверь здесь' matches 'зверь'; 'это зверь' and ' зверь' do not. Whitespace is not trimmed; %, _ and backslash are literal. Default case-insensitive Unicode comparison is controlled for all clauses by case_sensitive(bool). No regex, accent removal or Unicode normalization. At most 16 clauses; any()/all() apply to one message at a time.",
+      "errors": "Throws invalid_message_filter for an empty/NUL/over-256-character pattern or a seventeenth clause.",
+      "dry_run": "Pure construction. Query semantics are identical.",
+      "example": "MessageFilter::any().starts_with(\"зверь\");",
+      "related": ["MessageFilter.ends_with", "MessageFilter.contains", "MessageFilter.case_sensitive"]
+    },
+    {
+      "namespace": "MessageFilter",
+      "name": "ends_with",
+      "signature": "MessageFilter.ends_with(text: string) -> MessageFilter",
+      "parameters": [{"name": "text", "type": "string", "description": "Literal suffix, 1..256 Unicode scalar values; NUL is forbidden."}],
+      "returns": "MessageFilter",
+      "description": "Add a literal suffix clause anchored to the end of a message.",
+      "behavior": "Return an updated builder. 'это зверь' matches 'зверь'; 'зверь здесь' and 'зверь ' do not. Whitespace is not trimmed; %, _ and backslash are literal. Default case-insensitive Unicode comparison is controlled for all clauses by case_sensitive(bool). No regex, accent removal or Unicode normalization. At most 16 clauses; any()/all() apply to one message at a time.",
+      "errors": "Throws invalid_message_filter for an empty/NUL/over-256-character pattern or a seventeenth clause.",
+      "dry_run": "Pure construction. Query semantics are identical.",
+      "example": "MessageFilter::any().ends_with(\"динозавр\");",
+      "related": ["MessageFilter.starts_with", "MessageFilter.equals", "MessageFilter.case_sensitive"]
+    },
+    {
+      "namespace": "MessageFilter",
+      "name": "equals",
+      "signature": "MessageFilter.equals(text: string) -> MessageFilter",
+      "parameters": [{"name": "text", "type": "string", "description": "Literal whole message, 1..256 Unicode scalar values; NUL is forbidden."}],
+      "returns": "MessageFilter",
+      "description": "Add a whole-message equality clause.",
+      "behavior": "Return an updated builder. No substring/prefix/suffix match: 'динозавр' matches, 'динозавр!' and ' динозавр' do not. Whitespace is not trimmed; %, _ and backslash are literal. Default case-insensitive Unicode comparison is controlled for all clauses by case_sensitive(bool). No regex, accent removal or Unicode normalization. At most 16 clauses; any()/all() apply to one message at a time.",
+      "errors": "Throws invalid_message_filter for an empty/NUL/over-256-character pattern or a seventeenth clause.",
+      "dry_run": "Pure construction. Query semantics are identical.",
+      "example": "MessageFilter::any().equals(\"динозавр\");",
+      "related": ["MessageFilter.contains", "MessageFilter.case_sensitive", "UserFilter.messages"]
+    },
+    {
+      "namespace": "MessageFilter",
+      "name": "case_sensitive",
+      "signature": "MessageFilter.case_sensitive(enabled: bool) -> MessageFilter",
+      "parameters": [{"name": "enabled", "type": "bool", "description": "false (default): ignore case; true: preserve case in every text clause."}],
+      "returns": "MessageFilter",
+      "description": "Set the case mode for EVERY clause in this MessageFilter.",
+      "behavior": "Return an updated builder; chain or assign it. Applies to clauses added both BEFORE and AFTER this call, not just the next clause; the last call wins. false is the default and uses PostgreSQL ILIKE with deterministic, locale-neutral ICU und-x-icu collation for Unicode case conversion: 'ДИНОЗАВР' matches 'динозавр', 'ЁЖ' matches 'ёж'. true uses LIKE under C collation for exact case-sensitive matching: those differently-cased pairs do not match. Text is retained as UTF-8, with no transliteration, accent removal, trimming or Unicode normalization; this is PostgreSQL ILIKE behavior, not a promise of full Unicode case-fold equivalence such as ß=ss. Patterns remain literal. Supported PostgreSQL deployments must provide the standard und-x-icu collation; the project's PostgreSQL Docker image does. See [message filtering](../message-filtering).",
+      "errors": "No error for a boolean. A non-boolean causes a Rhai type error. Empty builders still cannot be attached.",
+      "dry_run": "Pure construction. Queries use the same real recorded chat data and case mode.",
+      "example": "MessageFilter::all().contains(\"динозавр\").case_sensitive(true).starts_with(\"зверь\");",
+      "related": ["MessageFilter.any", "MessageFilter.all", "MessageFilter.contains"]
     },
     {
       "namespace": "RewardFilter",
@@ -848,7 +981,7 @@
       "parameters": [],
       "returns": "RewardFilter",
       "description": "Construct an empty filter.",
-      "behavior": "Default min_count is zero, alias/window unset, statuses empty; empty statuses means all statuses. A reward predicate only filters eligibility when min_count > 0.",
+      "behavior": "Default min_count is zero, alias/window unset, statuses empty; empty statuses means all statuses. A reward predicate only filters eligibility when min_count > 0. Its .during(...) window is independent of recent_chatters' candidate window. Omit .during(...) to inspect all retained channel history up to query time, not lifetime data that was never recorded. It never inherits the candidate window. Repeating .during(...) replaces the window.",
       "errors": "No host call; pure value.",
       "dry_run": "Identical.",
       "example": "RewardFilter::create();",
@@ -866,12 +999,15 @@
         }
       ],
       "returns": "UserFilter",
-      "description": "Return an updated filter.",
-      "behavior": "Builder returns a new value; chain it or assign it. Counts must be nonnegative when queried. No follower/subscriber filter exists.",
+      "description": "Compatibility shorthand: require activity in the candidate recent-chatters window.",
+      "behavior": "Preserved released behavior: this threshold counts ALL messages/recorded character counts in recent_chatters' candidate window. It does NOT use ActivityFilter's window. Prefer UserFilter.activity(ActivityFilter::create()...) for independent history windows. Combining this convenience method with .activity(...) ANDs both thresholds; the latter does not override it. Negative counts fail when querying. Builders return updated values: chain or assign. See [migration](../user-filtering#legacy-convenience-methods).",
       "errors": "Negative counts fail at query, not construction.",
       "dry_run": "Identical.",
       "example": "UserFilter::create().min_messages(2);",
-      "related": []
+      "related": [
+        "UserFilter.activity",
+        "ActivityFilter.min_messages"
+      ]
     },
     {
       "namespace": "UserFilter",
@@ -881,16 +1017,19 @@
         {
           "name": "minimum",
           "type": "integer",
-          "description": "Minimum total recorded char_count in the outer window."
+          "description": "Compatibility threshold: total recorded char_count in the candidate recent-chatters window."
         }
       ],
       "returns": "UserFilter",
-      "description": "Return an updated filter.",
-      "behavior": "Builder returns a new value; chain it or assign it. Counts must be nonnegative when queried. No follower/subscriber filter exists.",
+      "description": "Compatibility shorthand: require activity in the candidate recent-chatters window.",
+      "behavior": "Preserved released behavior: this threshold counts ALL messages/recorded character counts in recent_chatters' candidate window. It does NOT use ActivityFilter's window. Prefer UserFilter.activity(ActivityFilter::create()...) for independent history windows. Combining this convenience method with .activity(...) ANDs both thresholds; the latter does not override it. Negative counts fail when querying. Builders return updated values: chain or assign. See [migration](../user-filtering#legacy-convenience-methods).",
       "errors": "Negative counts fail at query, not construction.",
       "dry_run": "Identical.",
       "example": "UserFilter::create().min_characters(2);",
-      "related": []
+      "related": [
+        "UserFilter.activity",
+        "ActivityFilter.min_characters"
+      ]
     },
     {
       "namespace": "UserFilter",
@@ -904,12 +1043,15 @@
         }
       ],
       "returns": "UserFilter",
-      "description": "Return an updated filter.",
-      "behavior": "Builder returns a new value; chain it or assign it. Counts must be nonnegative when queried. No follower/subscriber filter exists.",
-      "errors": "Negative counts fail at query, not construction.",
+      "description": "Attach an independent reward-history predicate.",
+      "behavior": "Returns an updated UserFilter; replaces its previous RewardFilter. ANDed with other user criteria. Uses RewardFilter.during when present; omitted means all retained history for this channel, preserving existing behavior, not the recent_chatters window. Zero min_count disables this predicate. Its .during(...) window is independent of recent_chatters' candidate window. Omit .during(...) to inspect all retained channel history up to query time, not lifetime data that was never recorded. It never inherits the candidate window. Repeating .during(...) replaces the window.",
+      "errors": "Negative min_count or an explicit window outside 60..31,536,000 seconds throws invalid_reward_filter at attachment/query.",
       "dry_run": "Identical.",
       "example": "UserFilter::create().reward_redemptions(RewardFilter::create().min_count(1));",
-      "related": []
+      "related": [
+        "RewardFilter.during",
+        "users.recent_chatters"
+      ]
     },
     {
       "namespace": "RewardFilter",
@@ -924,8 +1066,8 @@
       ],
       "returns": "RewardFilter",
       "description": "Return an updated reward filter.",
-      "behavior": "Builder returns a new value; counts and windows validated when queried. This queries channel fulfillment/redemption history, including SCRIPT origin. No delivery guarantee follows from a count.",
-      "errors": "statuses throws on non-string array items; invalid_reward_filter for negative counts or window < 60 at query.",
+      "behavior": "Returns an updated builder; chain or assign it. Queries only this channel's recorded fulfillment/redemption history, including SCRIPT origin. Zero min_count disables the predicate; empty statuses means all statuses. Its .during(...) window is independent of recent_chatters' candidate window. Omit .during(...) to inspect all retained channel history up to query time, not lifetime data that was never recorded. It never inherits the candidate window. Repeating .during(...) replaces the window. No delivery guarantee follows from a count.",
+      "errors": "Non-string statuses throw a Rhai type error. Negative min_count or an explicit window outside 60..31,536,000 seconds throws invalid_reward_filter at attachment/query.",
       "dry_run": "Identical.",
       "example": "RewardFilter::create().reward(\"secret_case\");",
       "related": []
@@ -943,8 +1085,8 @@
       ],
       "returns": "RewardFilter",
       "description": "Return an updated reward filter.",
-      "behavior": "Builder returns a new value; counts and windows validated when queried. This queries channel fulfillment/redemption history, including SCRIPT origin. No delivery guarantee follows from a count.",
-      "errors": "statuses throws on non-string array items; invalid_reward_filter for negative counts or window < 60 at query.",
+      "behavior": "Returns an updated builder; chain or assign it. Queries only this channel's recorded fulfillment/redemption history, including SCRIPT origin. Zero min_count disables the predicate; empty statuses means all statuses. Its .during(...) window is independent of recent_chatters' candidate window. Omit .during(...) to inspect all retained channel history up to query time, not lifetime data that was never recorded. It never inherits the candidate window. Repeating .during(...) replaces the window. No delivery guarantee follows from a count.",
+      "errors": "Non-string statuses throw a Rhai type error. Negative min_count or an explicit window outside 60..31,536,000 seconds throws invalid_reward_filter at attachment/query.",
       "dry_run": "Identical.",
       "example": "RewardFilter::create().statuses([\"COMPLETED\"]);",
       "related": []
@@ -962,8 +1104,8 @@
       ],
       "returns": "RewardFilter",
       "description": "Return an updated reward filter.",
-      "behavior": "Builder returns a new value; counts and windows validated when queried. This queries channel fulfillment/redemption history, including SCRIPT origin. No delivery guarantee follows from a count.",
-      "errors": "statuses throws on non-string array items; invalid_reward_filter for negative counts or window < 60 at query.",
+      "behavior": "Returns an updated builder; chain or assign it. Queries only this channel's recorded fulfillment/redemption history, including SCRIPT origin. Zero min_count disables the predicate; empty statuses means all statuses. Its .during(...) window is independent of recent_chatters' candidate window. Omit .during(...) to inspect all retained channel history up to query time, not lifetime data that was never recorded. It never inherits the candidate window. Repeating .during(...) replaces the window. No delivery guarantee follows from a count.",
+      "errors": "Non-string statuses throw a Rhai type error. Negative min_count or an explicit window outside 60..31,536,000 seconds throws invalid_reward_filter at attachment/query.",
       "dry_run": "Identical.",
       "example": "RewardFilter::create().min_count(1);",
       "related": []
@@ -981,8 +1123,8 @@
       ],
       "returns": "RewardFilter",
       "description": "Return an updated reward filter.",
-      "behavior": "Builder returns a new value; counts and windows validated when queried. This queries channel fulfillment/redemption history, including SCRIPT origin. No delivery guarantee follows from a count.",
-      "errors": "statuses throws on non-string array items; invalid_reward_filter for negative counts or window < 60 at query.",
+      "behavior": "Returns an updated builder; chain or assign it. Queries only this channel's recorded fulfillment/redemption history, including SCRIPT origin. Zero min_count disables the predicate; empty statuses means all statuses. Its .during(...) window is independent of recent_chatters' candidate window. Omit .during(...) to inspect all retained channel history up to query time, not lifetime data that was never recorded. It never inherits the candidate window. Repeating .during(...) replaces the window. No delivery guarantee follows from a count.",
+      "errors": "Non-string statuses throw a Rhai type error. Negative min_count or an explicit window outside 60..31,536,000 seconds throws invalid_reward_filter at attachment/query.",
       "dry_run": "Identical.",
       "example": "RewardFilter::create().during(Duration::from_days(7));",
       "related": []
@@ -1005,6 +1147,130 @@
       "dry_run": "Reads supplied test context.",
       "example": "ctx.current_match.last_rounds(3);",
       "related": []
+    },
+    {
+      "namespace": "ActivityFilter",
+      "name": "create",
+      "signature": "ActivityFilter::create() -> ActivityFilter",
+      "parameters": [],
+      "returns": "ActivityFilter",
+      "description": "Construct an independent activity-history filter.",
+      "behavior": "Defaults min_messages=0, min_characters=0, no window. Its .during(...) window is independent of recent_chatters' candidate window. Omit .during(...) to inspect all retained channel history up to query time, not lifetime data that was never recorded. It never inherits the candidate window. Repeating .during(...) replaces the window. Count recorded channel messages and their stored Unicode character counts; no text restriction. Thresholds are ANDed; zero is known zero and does not require a message in that nested window. No follower/subscriber/role criteria.",
+      "errors": "No host call; pure value.",
+      "dry_run": "Pure construction; querying uses the same real recorded history without side effects.",
+      "example": "ActivityFilter::create();",
+      "related": [
+        "UserFilter.activity",
+        "users.recent_chatters"
+      ]
+    },
+    {
+      "namespace": "ActivityFilter",
+      "name": "min_messages",
+      "signature": "ActivityFilter.min_messages(minimum: integer) -> ActivityFilter",
+      "parameters": [
+        {
+          "name": "minimum",
+          "type": "integer",
+          "description": "Nonnegative minimum; zero imposes no threshold."
+        }
+      ],
+      "returns": "ActivityFilter",
+      "description": "Require this many recorded channel messages in the activity filter's history.",
+      "behavior": "Returns an updated builder. Its .during(...) window is independent of recent_chatters' candidate window. Omit .during(...) to inspect all retained channel history up to query time, not lifetime data that was never recorded. It never inherits the candidate window. Repeating .during(...) replaces the window. Both activity thresholds are ANDed; content matching does not limit which messages contribute. Last call replaces this threshold.",
+      "errors": "Negative counts throw invalid_activity_filter. Service validates again before SQL.",
+      "dry_run": "Pure construction; querying uses the same real recorded history without side effects.",
+      "example": "ActivityFilter::create().min_messages(3).during(Duration::from_mins(30));",
+      "related": [
+        "UserFilter.activity",
+        "users.recent_chatters"
+      ]
+    },
+    {
+      "namespace": "ActivityFilter",
+      "name": "min_characters",
+      "signature": "ActivityFilter.min_characters(minimum: integer) -> ActivityFilter",
+      "parameters": [
+        {
+          "name": "minimum",
+          "type": "integer",
+          "description": "Nonnegative minimum; zero imposes no threshold."
+        }
+      ],
+      "returns": "ActivityFilter",
+      "description": "Require this many stored Unicode characters across recorded messages in the activity filter's history.",
+      "behavior": "Returns an updated builder. Its .during(...) window is independent of recent_chatters' candidate window. Omit .during(...) to inspect all retained channel history up to query time, not lifetime data that was never recorded. It never inherits the candidate window. Repeating .during(...) replaces the window. Both activity thresholds are ANDed; content matching does not limit which messages contribute. Last call replaces this threshold.",
+      "errors": "Negative counts throw invalid_activity_filter. Service validates again before SQL.",
+      "dry_run": "Pure construction; querying uses the same real recorded history without side effects.",
+      "example": "ActivityFilter::create().min_characters(3).during(Duration::from_mins(30));",
+      "related": [
+        "UserFilter.activity",
+        "users.recent_chatters"
+      ]
+    },
+    {
+      "namespace": "ActivityFilter",
+      "name": "during",
+      "signature": "ActivityFilter.during(window: Duration) -> ActivityFilter",
+      "parameters": [
+        {
+          "name": "window",
+          "type": "Duration",
+          "description": "1..31,536,000 seconds; relative to query time, not candidate selection."
+        }
+      ],
+      "returns": "ActivityFilter",
+      "description": "Set the activity filter's independent history window.",
+      "behavior": "Its .during(...) window is independent of recent_chatters' candidate window. Omit .during(...) to inspect all retained channel history up to query time, not lifetime data that was never recorded. It never inherits the candidate window. Repeating .during(...) replaces the window. Positive Duration required; future records and other channels never count.",
+      "errors": "Invalid Duration construction throws. Invalid serialized windows or negative thresholds throw invalid_activity_filter.",
+      "dry_run": "Pure construction; querying uses the same real recorded history without side effects.",
+      "example": "ActivityFilter::create().min_messages(3).during(Duration::from_mins(30));",
+      "related": [
+        "UserFilter.activity",
+        "users.recent_chatters"
+      ]
+    },
+    {
+      "namespace": "UserFilter",
+      "name": "activity",
+      "signature": "UserFilter.activity(filter: ActivityFilter) -> UserFilter",
+      "parameters": [
+        {
+          "name": "filter",
+          "type": "ActivityFilter",
+          "description": "Message/character thresholds with an optional independent during window."
+        }
+      ],
+      "returns": "UserFilter",
+      "description": "Attach an independent activity-history predicate.",
+      "behavior": "Returns an updated UserFilter; replaces the previous ActivityFilter only. Does NOT replace legacy UserFilter.min_messages/min_characters; all criteria remain ANDed. ActivityFilter.during controls its own history window; omitted means all retained channel history. Returned user statistics still describe the candidate window. See [user filtering](../user-filtering).",
+      "errors": "Negative thresholds or explicit windows outside 1..31,536,000 seconds throw invalid_activity_filter.",
+      "dry_run": "Pure construction; querying uses the same real recorded history without side effects.",
+      "example": "UserFilter::create().activity(ActivityFilter::create().min_messages(5).min_characters(500).during(Duration::from_mins(30)));",
+      "related": [
+        "users.recent_chatters"
+      ]
+    },
+    {
+      "namespace": "MessageFilter",
+      "name": "during",
+      "signature": "MessageFilter.during(window: Duration) -> MessageFilter",
+      "parameters": [
+        {
+          "name": "window",
+          "type": "Duration",
+          "description": "1..31,536,000 seconds; relative to query time independently of candidate selection."
+        }
+      ],
+      "returns": "MessageFilter",
+      "description": "Set the message-content filter's independent history window.",
+      "behavior": "Its .during(...) window is independent of recent_chatters' candidate window. Omit .during(...) to inspect all retained channel history up to query time, not lifetime data that was never recorded. It never inherits the candidate window. Repeating .during(...) replaces the window. any()/all() test authored text within this window. No change to composition, case_sensitive mode or returned candidate-window statistics. No matches without a relevant message.",
+      "errors": "Invalid Duration construction throws. Invalid serialized windows throw invalid_message_filter; empty/oversized/invalid clauses remain errors when attaching.",
+      "dry_run": "Pure construction; querying uses the same real recorded history without side effects.",
+      "example": "MessageFilter::any().contains(\"динозавр\").during(Duration::from_mins(10));",
+      "related": [
+        "users.recent_chatters"
+      ]
     }
   ]
 }

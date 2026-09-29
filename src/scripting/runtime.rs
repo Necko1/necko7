@@ -118,6 +118,101 @@ pub struct UserFilter {
     pub min_messages: i64,
     pub min_characters: i64,
     pub reward: Option<RewardFilter>,
+    #[serde(default)]
+    pub messages: Option<MessageFilter>,
+    #[serde(default)]
+    pub activity: Option<ActivityFilter>,
+}
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct ActivityFilter {
+    pub min_messages: i64,
+    pub min_characters: i64,
+    pub seconds: Option<i64>,
+}
+impl ActivityFilter {
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.min_messages < 0 || self.min_characters < 0 {
+            return Err("invalid_activity_filter".into());
+        }
+        if self
+            .seconds
+            .is_some_and(|seconds| !(1..=31_536_000).contains(&seconds))
+        {
+            return Err("invalid_activity_filter".into());
+        }
+        Ok(())
+    }
+}
+pub const MAX_MESSAGE_CLAUSES: usize = 16;
+pub const MAX_MESSAGE_PATTERN_CHARS: usize = 256;
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageMode {
+    Any,
+    All,
+}
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageOperation {
+    Contains,
+    StartsWith,
+    EndsWith,
+    Equals,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct MessageClause {
+    pub operation: MessageOperation,
+    pub text: String,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct MessageFilter {
+    pub mode: MessageMode,
+    #[serde(default)]
+    pub case_sensitive: bool,
+    pub clauses: Vec<MessageClause>,
+    #[serde(default)]
+    pub seconds: Option<i64>,
+}
+impl MessageFilter {
+    pub fn new(mode: MessageMode) -> Self {
+        Self {
+            mode,
+            case_sensitive: false,
+            clauses: Vec::new(),
+            seconds: None,
+        }
+    }
+    fn valid_pattern(text: &str) -> bool {
+        !text.is_empty()
+            && !text.contains('\0')
+            && text.chars().take(MAX_MESSAGE_PATTERN_CHARS + 1).count() <= MAX_MESSAGE_PATTERN_CHARS
+    }
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.clauses.is_empty()
+            || self.clauses.len() > MAX_MESSAGE_CLAUSES
+            || self.clauses.iter().any(|c| !Self::valid_pattern(&c.text))
+        {
+            return Err("invalid_message_filter".into());
+        }
+        if self
+            .seconds
+            .is_some_and(|seconds| !(1..=31_536_000).contains(&seconds))
+        {
+            return Err("invalid_message_filter".into());
+        }
+        Ok(())
+    }
+    pub fn clause(mut self, operation: MessageOperation, text: &str) -> Result<Self> {
+        if self.clauses.len() >= MAX_MESSAGE_CLAUSES || !Self::valid_pattern(text) {
+            return Err("invalid_message_filter".into());
+        }
+        self.clauses.push(MessageClause {
+            operation,
+            text: text.into(),
+        });
+        Ok(self)
+    }
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct RewardFilter {
@@ -125,6 +220,20 @@ pub struct RewardFilter {
     pub statuses: Vec<String>,
     pub min_count: i64,
     pub seconds: Option<i64>,
+}
+impl RewardFilter {
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.min_count < 0 {
+            return Err("invalid_reward_filter".into());
+        }
+        if self
+            .seconds
+            .is_some_and(|seconds| !(60..=31_536_000).contains(&seconds))
+        {
+            return Err("invalid_reward_filter".into());
+        }
+        Ok(())
+    }
 }
 
 fn safe_value(value: Dynamic) -> Result<Value> {
@@ -199,6 +308,77 @@ pub fn engine(files: Files, host: Host) -> Engine {
     let mut users = Module::new();
     FuncRegistration::new("create").set_into_module(&mut users, UserFilter::default);
     e.register_static_module("UserFilter", users.into());
+    let mut activity = Module::new();
+    FuncRegistration::new("create").set_into_module(&mut activity, ActivityFilter::default);
+    e.register_static_module("ActivityFilter", activity.into());
+    e.register_fn(
+        "min_messages",
+        |mut f: ActivityFilter, n: i64| -> Result<ActivityFilter> {
+            if n < 0 {
+                return Err("invalid_activity_filter".into());
+            }
+            f.min_messages = n;
+            Ok(f)
+        },
+    );
+    e.register_fn(
+        "min_characters",
+        |mut f: ActivityFilter, n: i64| -> Result<ActivityFilter> {
+            if n < 0 {
+                return Err("invalid_activity_filter".into());
+            }
+            f.min_characters = n;
+            Ok(f)
+        },
+    );
+    e.register_fn("during", |mut f: ActivityFilter, d: Duration| {
+        f.seconds = Some(d.0);
+        f
+    });
+    e.register_fn(
+        "activity",
+        |mut f: UserFilter, activity: ActivityFilter| -> Result<UserFilter> {
+            activity
+                .validate()
+                .map_err(|error| -> Box<EvalAltResult> { error.into() })?;
+            f.activity = Some(activity);
+            Ok(f)
+        },
+    );
+    let mut messages = Module::new();
+    FuncRegistration::new("any")
+        .set_into_module(&mut messages, || MessageFilter::new(MessageMode::Any));
+    FuncRegistration::new("all")
+        .set_into_module(&mut messages, || MessageFilter::new(MessageMode::All));
+    e.register_static_module("MessageFilter", messages.into());
+    for (name, operation) in [
+        ("contains", MessageOperation::Contains),
+        ("starts_with", MessageOperation::StartsWith),
+        ("ends_with", MessageOperation::EndsWith),
+        ("equals", MessageOperation::Equals),
+    ] {
+        e.register_fn(name, move |f: MessageFilter, text: &str| {
+            f.clause(operation, text)
+        });
+    }
+    e.register_fn("case_sensitive", |mut f: MessageFilter, enabled: bool| {
+        f.case_sensitive = enabled;
+        f
+    });
+    e.register_fn("during", |mut f: MessageFilter, d: Duration| {
+        f.seconds = Some(d.0);
+        f
+    });
+    e.register_fn(
+        "messages",
+        |mut f: UserFilter, messages: MessageFilter| -> Result<UserFilter> {
+            messages
+                .validate()
+                .map_err(|error| -> Box<EvalAltResult> { error.into() })?;
+            f.messages = Some(messages);
+            Ok(f)
+        },
+    );
     let mut rewards = Module::new();
     FuncRegistration::new("create").set_into_module(&mut rewards, RewardFilter::default);
     e.register_static_module("RewardFilter", rewards.into());
@@ -212,9 +392,11 @@ pub fn engine(files: Files, host: Host) -> Engine {
     });
     e.register_fn(
         "reward_redemptions",
-        |mut f: UserFilter, r: RewardFilter| {
+        |mut f: UserFilter, r: RewardFilter| -> Result<UserFilter> {
+            r.validate()
+                .map_err(|error| -> Box<EvalAltResult> { error.into() })?;
             f.reward = Some(r);
-            f
+            Ok(f)
         },
     );
     e.register_fn("reward", |mut f: RewardFilter, alias: &str| {

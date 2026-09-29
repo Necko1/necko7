@@ -1,4 +1,4 @@
-use super::runtime::{self, Files, UserFilter};
+use super::runtime::{self, Files, MessageMode, MessageOperation, UserFilter};
 use crate::state::AppState;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -309,17 +309,156 @@ pub async fn recent_chatters(
     {
         return Err("invalid_chat_window".into());
     }
-    let reward = filter.reward.unwrap_or_default();
-    if reward
-        .seconds
-        .is_some_and(|s| !(60..=31_536_000).contains(&s))
-        || reward.min_count < 0
-    {
-        return Err("invalid_reward_filter".into());
+    if let Some(reward) = &filter.reward {
+        reward.validate()?;
     }
-    let rows:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',chatter_user_id,'login',max(chatter_user_login),'messages',count(*),'characters',sum(char_count),'first_activity',min(sent_at),'last_activity',max(sent_at)) FROM chat_messages c WHERE broadcaster_id=$1 AND sent_at>=now()-$2*interval '1 second' AND ($3::text IS NULL OR chatter_user_id=$3) AND ($4::bigint=0 OR (SELECT count(*) FROM redemptions d JOIN rewards r ON r.twitch_id=d.twitch_reward_id WHERE r.streamer_id=$1 AND d.user_id=c.chatter_user_id AND ($5::text IS NULL OR r.script_alias=$5) AND (cardinality($6::text[])=0 OR d.status=ANY($6)) AND ($7::float8 IS NULL OR d.created_at>=now()-$7*interval '1 second')) >= $4) GROUP BY chatter_user_id HAVING count(*) >= $8 AND sum(char_count)>=$9 ORDER BY max(sent_at) DESC,chatter_user_id LIMIT 1000")
-        .bind(channel).bind(seconds as f64).bind(user).bind(reward.min_count).bind(reward.alias).bind(reward.statuses).bind(reward.seconds.map(|v|v as f64)).bind(filter.min_messages).bind(filter.min_characters)
-        .fetch_all(pool).await.map_err(db)?;
+    if let Some(activity) = &filter.activity {
+        activity.validate()?;
+    }
+    if let Some(messages) = &filter.messages {
+        messages.validate()?;
+    }
+    let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+        "WITH candidates AS (SELECT chatter_user_id,max(chatter_user_login) AS login,\
+         count(*) AS messages,sum(char_count) AS characters,min(sent_at) AS first_activity,\
+         max(sent_at) AS last_activity FROM chat_messages WHERE broadcaster_id=",
+    );
+    query.push_bind(channel).push(" AND sent_at>=now()-");
+    query
+        .push_bind(seconds as f64)
+        .push("*interval '1 second' AND sent_at<=now()");
+    if let Some(user) = user {
+        query.push(" AND chatter_user_id=").push_bind(user);
+    }
+    query.push(" GROUP BY chatter_user_id)");
+    if let Some(activity) = &filter.activity {
+        query
+            .push(
+                ", activity_eligible AS MATERIALIZED (SELECT c.chatter_user_id FROM candidates c \
+            LEFT JOIN chat_messages a ON a.chatter_user_id=c.chatter_user_id AND a.broadcaster_id=",
+            )
+            .push_bind(channel);
+        if let Some(seconds) = activity.seconds {
+            query
+                .push(" AND a.sent_at>=now()-")
+                .push_bind(seconds as f64)
+                .push("*interval '1 second'");
+        }
+        query
+            .push(" AND a.sent_at<=now() GROUP BY c.chatter_user_id HAVING count(a.id)>=")
+            .push_bind(activity.min_messages);
+        query
+            .push(" AND coalesce(sum(a.char_count),0)>=")
+            .push_bind(activity.min_characters)
+            .push(")");
+    }
+    if let Some(reward) = &filter.reward
+        && reward.min_count > 0
+    {
+        query
+            .push(
+                ", reward_eligible AS MATERIALIZED (SELECT d.user_id FROM candidates c JOIN redemptions d \
+                 ON d.user_id=c.chatter_user_id JOIN rewards r ON r.twitch_id=d.twitch_reward_id \
+                 WHERE r.streamer_id=",
+            )
+            .push_bind(channel);
+        if let Some(alias) = &reward.alias {
+            query.push(" AND r.script_alias=").push_bind(alias);
+        }
+        if !reward.statuses.is_empty() {
+            query
+                .push(" AND d.status=ANY(")
+                .push_bind(&reward.statuses)
+                .push(")");
+        }
+        if let Some(seconds) = reward.seconds {
+            query
+                .push(" AND d.created_at>=now()-")
+                .push_bind(seconds as f64)
+                .push("*interval '1 second'");
+        }
+        query
+            .push(" AND d.created_at<=now() GROUP BY d.user_id HAVING count(*)>=")
+            .push_bind(reward.min_count)
+            .push(")");
+    }
+    if let Some(messages) = &filter.messages {
+        // Each nested predicate reads its own window; only candidate IDs are shared.
+        query
+            .push(
+                ", message_eligible AS MATERIALIZED (SELECT DISTINCT m.chatter_user_id FROM candidates c \
+            JOIN chat_messages m ON m.chatter_user_id=c.chatter_user_id WHERE m.broadcaster_id=",
+            )
+            .push_bind(channel);
+        if let Some(seconds) = messages.seconds {
+            query
+                .push(" AND m.sent_at>=now()-")
+                .push_bind(seconds as f64)
+                .push("*interval '1 second'");
+        }
+        query.push(" AND m.sent_at<=now() AND (");
+        for (index, clause) in messages.clauses.iter().enumerate() {
+            if index > 0 {
+                query.push(match messages.mode {
+                    MessageMode::Any => " OR ",
+                    MessageMode::All => " AND ",
+                });
+            }
+            let mut pattern = String::new();
+            if matches!(
+                clause.operation,
+                MessageOperation::Contains | MessageOperation::EndsWith
+            ) {
+                pattern.push('%');
+            }
+            for ch in clause.text.chars() {
+                if matches!(ch, '%' | '_' | '\\') {
+                    pattern.push('\\');
+                }
+                pattern.push(ch);
+            }
+            if matches!(
+                clause.operation,
+                MessageOperation::Contains | MessageOperation::StartsWith
+            ) {
+                pattern.push('%');
+            }
+            query.push(if messages.case_sensitive {
+                "m.message_text COLLATE \"C\" LIKE "
+            } else {
+                "m.message_text COLLATE \"und-x-icu\" ILIKE "
+            });
+            query.push_bind(pattern).push(" ESCAPE E'\\\\'");
+        }
+        query.push("))");
+    }
+    query.push(
+        " SELECT jsonb_build_object('id',c.chatter_user_id,'login',c.login,\
+        'messages',c.messages,'characters',c.characters,'first_activity',c.first_activity,\
+        'last_activity',c.last_activity) FROM candidates c",
+    );
+    if filter.activity.is_some() {
+        query.push(" JOIN activity_eligible a ON a.chatter_user_id=c.chatter_user_id");
+    }
+    if filter.messages.is_some() {
+        query.push(" JOIN message_eligible m ON m.chatter_user_id=c.chatter_user_id");
+    }
+    if filter.reward.is_some_and(|r| r.min_count > 0) {
+        query.push(" JOIN reward_eligible r ON r.user_id=c.chatter_user_id");
+    }
+    // Released convenience methods retain their candidate-window thresholds.
+    query
+        .push(" WHERE c.messages>=")
+        .push_bind(filter.min_messages);
+    query
+        .push(" AND c.characters>=")
+        .push_bind(filter.min_characters);
+    query.push(" ORDER BY c.last_activity DESC,c.chatter_user_id LIMIT 1000");
+    let rows: Vec<Value> = query
+        .build_query_scalar()
+        .fetch_all(pool)
+        .await
+        .map_err(db)?;
     Ok(json!(rows))
 }
 

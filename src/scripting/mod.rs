@@ -8,6 +8,10 @@ mod access_tests;
 mod live_tests;
 #[cfg(test)]
 mod match_tests;
+#[cfg(test)]
+mod message_filter_tests;
+#[cfg(test)]
+mod filter_window_tests;
 pub mod matches;
 pub mod runtime;
 pub mod service;
