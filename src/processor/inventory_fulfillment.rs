@@ -74,10 +74,7 @@ async fn send_fulfillment_chat(
     if !crate::messages::inventory_chat_allowed(origin, template) { return; }
     let mut vars = vec![("buyer", buyer), ("item", item)];
     vars.extend_from_slice(extra);
-    let effective = crate::messages::inventory_chat_template(
-        origin, template, state.get_chat_message_template(channel_id, template),
-    );
-    let message = crate::messages::render_template(&effective, &vars);
+    let message = state.render_chat_message(channel_id, template, &vars);
     if let Err(e) = state.send_chat_message(channel_id, &message, None).await {
         warn!(error = %e, %channel_id, %template, "Could not send inventory status to channel chat");
     }
@@ -366,7 +363,7 @@ mod tests {
         assert!(accepted.contains("still confirming"));
         assert!(!accepted.contains("Enjoy your skin"));
         let buyer_revert = &crate::messages::CategorizedChatMessages::default().trades.reverted_buyer;
-        assert!(buyer_revert.contains("contact the channel operator"));
+        assert!(buyer_revert.contains("Contact the channel operator"));
         assert!(!buyer_revert.contains("available actions"));
         assert_eq!(rejected_order_template(MarketBuyForErrorKind::NotEnoughFunds), Some(MSG_ORDERS_INSUFFICIENT_FUNDS));
         assert_eq!(rejected_order_template(MarketBuyForErrorKind::PriceOrChanceDeviation), Some(MSG_ORDERS_UNAVAILABLE));

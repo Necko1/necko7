@@ -1540,7 +1540,7 @@ dependencies = [
 
 [[package]]
 name = "necko7"
-version = "0.10.5"
+version = "0.10.6"
 dependencies = [
  "axum",
  "base64",

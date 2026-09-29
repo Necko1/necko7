@@ -69,42 +69,27 @@ pub const MSG_CHAT_REQ_FAILED_BOTH: &str = MSG_CHAT_REQ_FAILED_BOTH_REFUND;
 
 /// Script code owns reward announcements; fulfillment owns actionable delivery notices.
 pub(crate) fn inventory_chat_allowed(origin: &str, message_id: &str) -> bool {
-    origin == "TWITCH" || (origin == "SCRIPT" && script_delivery_template(message_id).is_some())
-}
-
-fn script_delivery_template(message_id: &str) -> Option<&'static str> {
-    Some(match message_id {
-        MSG_ORDERS_TRADE_LINK_REQUIRED => "@{buyer} {item} needs a valid Steam trade link. Save it in your profile and check your inventory for delivery actions; operator-managed items require the channel team.",
-        MSG_ORDERS_INSUFFICIENT_FUNDS => "@{buyer} Market could not order {item} because the channel account has insufficient balance. The item remains in your inventory; check it for available actions or contact the channel operator.",
-        MSG_ORDERS_UNAVAILABLE => "@{buyer} Market could not find {item} at or below {price} with the configured transfer chance. The item remains in your inventory; check it for available actions.",
-        MSG_ORDERS_RECONCILIATION_REQUIRED => "@{buyer} The order or trade status for {item} is unconfirmed. It may still deliver; inventory actions are unavailable until its status is resolved.",
-        MSG_MARKET_ERR_UNKNOWN => "@{buyer} Market returned an unclear response for {item}. An order may already exist; inventory actions are unavailable until its status is resolved.",
-        MSG_MARKET_ERR_TRADE_LINK_CHECK_FAILED => "@{buyer} Market could not verify the trade link for {item}. Check the link and your inventory for available actions.",
-        MSG_MARKET_ERR_INVENTORY_HIDDEN => "@{buyer} Market could not order {item} because your Steam inventory is private. Make it public, then check your inventory for available actions.",
-        MSG_MARKET_ERR_STEAM_BANNED => "@{buyer} Market could not order {item} because your Steam account cannot trade. Check Steam restrictions and your inventory for available actions.",
-        MSG_MARKET_ERR_NO_MOBILE_AUTH => "@{buyer} Market could not order {item} because Steam Guard Mobile Authenticator is not enabled. Check your Steam account and inventory for available actions.",
-        MSG_MARKET_ERR_OFFLINE_TRADES_DISABLED => "@{buyer} Market could not order {item} because offline trade offers are unavailable on your Steam account. Check Steam settings and your inventory for available actions.",
-        MSG_MARKET_ERR_TRADE_LINK_INVALID => "@{buyer} Market rejected the trade link for {item}. Correct the link, then check your inventory for available actions.",
-        MSG_MARKET_ERR_BOT_BANNED => "@{buyer} Market could not verify the trade link for {item} because its checking bot is unavailable. Check your inventory for available actions.",
-        MSG_MARKET_ERR_INVENTORY_FULL => "@{buyer} Market could not order {item} because your CS2 inventory is full. Free up space, then check your inventory for available actions.",
-        MSG_TRADES_CREATED => "@{buyer} Trade offer created. You have {remaining} to accept it: {tradeoffer}",
-        MSG_TRADES_ACCEPTED => "@{buyer} The trade for {item} was accepted. Market is still confirming its final outcome; follow delivery in your inventory.",
-        MSG_TRADES_FAILED_BUYER => "@{buyer} The Steam trade for {item} ended without delivery on the buyer side. Check your inventory for available actions.",
-        MSG_TRADES_FAILED_SELLER => "@{buyer} The Market trade for {item} ended without delivery. Check your inventory for available actions.",
-        MSG_TRADES_REVERTED_BUYER => "@{buyer} You reverted the accepted trade for {item}. Contact the channel operator for help.",
-        MSG_TRADES_REVERTED_SELLER => "@{buyer} The seller reverted the accepted trade for {item}. It is available in your inventory to try delivery again.",
-        _ => return None,
-    })
-}
-
-pub(crate) fn inventory_chat_template(origin: &str, message_id: &str, effective: String) -> String {
-    if origin == "SCRIPT"
-        && let Some(script_default) = script_delivery_template(message_id)
-        && CategorizedChatMessages::get_default_message(message_id).as_deref() == Some(&effective)
-    {
-        return script_default.to_string();
-    }
-    effective
+    origin == "TWITCH" || (origin == "SCRIPT" && matches!(message_id,
+        MSG_ORDERS_TRADE_LINK_REQUIRED |
+        MSG_ORDERS_INSUFFICIENT_FUNDS |
+        MSG_ORDERS_UNAVAILABLE |
+        MSG_ORDERS_RECONCILIATION_REQUIRED |
+        MSG_MARKET_ERR_UNKNOWN |
+        MSG_MARKET_ERR_TRADE_LINK_CHECK_FAILED |
+        MSG_MARKET_ERR_INVENTORY_HIDDEN |
+        MSG_MARKET_ERR_STEAM_BANNED |
+        MSG_MARKET_ERR_NO_MOBILE_AUTH |
+        MSG_MARKET_ERR_OFFLINE_TRADES_DISABLED |
+        MSG_MARKET_ERR_TRADE_LINK_INVALID |
+        MSG_MARKET_ERR_BOT_BANNED |
+        MSG_MARKET_ERR_INVENTORY_FULL |
+        MSG_TRADES_CREATED |
+        MSG_TRADES_ACCEPTED |
+        MSG_TRADES_FAILED_BUYER |
+        MSG_TRADES_FAILED_SELLER |
+        MSG_TRADES_REVERTED_BUYER |
+        MSG_TRADES_REVERTED_SELLER
+    ))
 }
 
 // ── Categorized Structs ────────────────────────────────────────────────────
@@ -131,10 +116,10 @@ impl Default for OrdersMessages {
             created: "@{buyer} Market order created for {item}. Watch for the Steam trade offer; you can follow delivery in your inventory.".to_string(),
             waiting_viewer: "@{buyer} {item} is in your inventory. Your auto-buy preference is off, so no Market order was placed. Start delivery or refund your points from your inventory.".to_string(),
             waiting_operator: "@{buyer} {item} is in your inventory. Auto-buy is off for this reward, so no Market order was placed. The channel team will review delivery.".to_string(),
-            trade_link_required: "@{buyer} {item} needs a valid Steam trade link. Check the link in your reward message or profile, then start delivery from your inventory; your points remain pending.".to_string(),
-            insufficient_funds: "@{buyer} Market could not order {item} because the channel account has insufficient balance. Your points remain pending; try again later or request a refund from your inventory.".to_string(),
-            unavailable: "@{buyer} Market could not find {item} at or below {price} with the configured transfer chance. Your points remain pending; check your inventory for available actions.".to_string(),
-            reconciliation_required: "@{buyer} The order or trade status for {item} is unconfirmed. It may still deliver; your points remain pending and inventory actions are unavailable until its status is resolved.".to_string(),
+            trade_link_required: "@{buyer} {item} needs a valid Steam trade link. Save it in your profile and check your inventory for delivery actions; operator-managed items require the channel team.".to_string(),
+            insufficient_funds: "@{buyer} Market could not order {item} because the channel account has insufficient balance. The item remains in your inventory; check it for available actions or contact the channel operator.".to_string(),
+            unavailable: "@{buyer} Market could not find {item} at or below {price} with the configured transfer chance. The item remains in your inventory; check it for available actions.".to_string(),
+            reconciliation_required: "@{buyer} The order or trade status for {item} is unconfirmed. It may still deliver; inventory actions are unavailable until its status is resolved.".to_string(),
             refunded: "@{buyer} Your channel points for {item} were refunded. Inventory fulfillment is closed.".to_string(),
         }
     }
@@ -156,15 +141,15 @@ pub struct MarketErrorsMessages {
 impl Default for MarketErrorsMessages {
     fn default() -> Self {
         Self {
-            unknown: "@{buyer} Market returned an unclear response for {item}. An order may already exist; your points remain pending and inventory actions are unavailable until its status is resolved.".to_string(),
-            trade_link_check_failed: "@{buyer} Market could not verify the trade link for {item}. Check the link and your inventory for available actions; your points remain pending.".to_string(),
-            inventory_hidden: "@{buyer} Market could not order {item} because your Steam inventory is private. Make it public, then check your inventory for available actions; your points remain pending.".to_string(),
-            steam_banned: "@{buyer} Market could not order {item} because your Steam account cannot trade. Check Steam restrictions and your inventory for available actions; your points remain pending.".to_string(),
-            no_mobile_authenticator: "@{buyer} Market could not order {item} because Steam Guard Mobile Authenticator is not enabled. Check your Steam account and inventory for available actions; your points remain pending.".to_string(),
-            offline_trades_disabled: "@{buyer} Market could not order {item} because offline trade offers are unavailable on your Steam account. Check Steam settings and your inventory for available actions; your points remain pending.".to_string(),
-            trade_link_invalid: "@{buyer} Market rejected the trade link for {item}. Correct the link, then check your inventory for available actions; your points remain pending.".to_string(),
-            trade_check_bot_banned: "@{buyer} Market could not verify the trade link for {item} because its checking bot is unavailable. Check your inventory for available actions; your points remain pending.".to_string(),
-            inventory_full: "@{buyer} Market could not order {item} because your CS2 inventory is full. Free up space, then check your inventory for available actions; your points remain pending.".to_string(),
+            unknown: "@{buyer} Market returned an unclear response for {item}. An order may already exist; inventory actions are unavailable until its status is resolved.".to_string(),
+            trade_link_check_failed: "@{buyer} Market could not verify the trade link for {item}. Check the link and your inventory for available actions.".to_string(),
+            inventory_hidden: "@{buyer} Market could not order {item} because your Steam inventory is private. Make it public, then check your inventory for available actions.".to_string(),
+            steam_banned: "@{buyer} Market could not order {item} because your Steam account cannot trade. Check Steam restrictions and your inventory for available actions.".to_string(),
+            no_mobile_authenticator: "@{buyer} Market could not order {item} because Steam Guard Mobile Authenticator is not enabled. Check your Steam account and inventory for available actions.".to_string(),
+            offline_trades_disabled: "@{buyer} Market could not order {item} because offline trade offers are unavailable on your Steam account. Check Steam settings and your inventory for available actions.".to_string(),
+            trade_link_invalid: "@{buyer} Market rejected the trade link for {item}. Correct the link, then check your inventory for available actions.".to_string(),
+            trade_check_bot_banned: "@{buyer} Market could not verify the trade link for {item} because its checking bot is unavailable. Check your inventory for available actions.".to_string(),
+            inventory_full: "@{buyer} Market could not order {item} because your CS2 inventory is full. Free up space, then check your inventory for available actions.".to_string(),
         }
     }
 }
@@ -212,11 +197,11 @@ impl Default for TradesMessages {
     fn default() -> Self {
         Self {
             created: "@{buyer} Trade offer created. You have {remaining} to accept it: {tradeoffer}".to_string(),
-            accepted: "@{buyer} The trade for {item} was accepted. Market is still confirming its final outcome; your points remain pending.".to_string(),
-            failed_buyer: "@{buyer} The Steam trade for {item} ended without delivery on the buyer side. Your points remain pending; check your inventory for available actions.".to_string(),
-            failed_seller: "@{buyer} The Market trade for {item} ended without delivery. Your points remain pending; check your inventory to retry or request a refund.".to_string(),
-            reverted_buyer: "@{buyer} You reverted the accepted trade for {item}. Your points remain pending; contact the channel operator for help.".to_string(),
-            reverted_seller: "@{buyer} The seller reverted the accepted trade for {item}. It is available in your inventory to try delivery again; your points remain pending.".to_string(),
+            accepted: "@{buyer} The trade for {item} was accepted. Market is still confirming its final outcome; follow delivery in your inventory.".to_string(),
+            failed_buyer: "@{buyer} The Steam trade for {item} ended without delivery on the buyer side. Check your inventory for available actions.".to_string(),
+            failed_seller: "@{buyer} The Market trade for {item} ended without delivery. Check your inventory for available actions.".to_string(),
+            reverted_buyer: "@{buyer} You reverted the accepted trade for {item}. Contact the channel operator for help.".to_string(),
+            reverted_seller: "@{buyer} The seller reverted the accepted trade for {item}. It is available in your inventory to try delivery again.".to_string(),
         }
     }
 }
@@ -681,6 +666,45 @@ pub type ChatMessageTemplates = CategorizedChatMessages;
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    #[ignore = "requires disposable TEST_DATABASE_URL and dummy AppState environment"]
+    async fn delivery_templates_load_from_database_and_use_one_shared_fallback() {
+        let db = crate::db::Db::connect(&std::env::var("TEST_DATABASE_URL").unwrap()).await.unwrap();
+        let channel = format!("template-test-{}", uuid::Uuid::new_v4());
+        sqlx::query("INSERT INTO users(twitch_id,login) VALUES($1,$1)")
+            .bind(&channel).execute(db.pool()).await.unwrap();
+        sqlx::query("INSERT INTO broadcasters(channel_id,channel_login,user_access_token,refresh_token,created_at,updated_at) VALUES($1,$1,'test','test',now(),now())")
+            .bind(&channel).execute(db.pool()).await.unwrap();
+        db.get_or_create_broadcaster_setting(&channel).await.unwrap();
+        let custom = parse_custom_messages(serde_json::json!({
+            "trades": {"created": "@{buyer} Custom trade for {item}: {tradeoffer}", "accepted": "   "},
+            "orders": {"trade_link_required": "Custom points text for {buyer}: {item}"}
+        }));
+        db.update_broadcaster_chat_messages(&channel, &custom).await.unwrap();
+        let state = crate::state::AppState::from_env(db.clone()).await.unwrap();
+        let vars = [("buyer", "viewer"), ("item", "AK-47"), ("tradeoffer", "https://steamcommunity.com/tradeoffer/123/")];
+        assert_eq!(state.render_chat_message(&channel, MSG_TRADES_CREATED, &vars),
+            "@viewer Custom trade for AK-47: https://steamcommunity.com/tradeoffer/123/");
+        assert_eq!(state.render_chat_message(&channel, MSG_ORDERS_TRADE_LINK_REQUIRED, &vars),
+            "Custom points text for viewer: AK-47", "authored text must not be rewritten by origin");
+        for key in [MSG_TRADES_ACCEPTED, MSG_ORDERS_RECONCILIATION_REQUIRED] {
+            let fallback = CategorizedChatMessages::get_default_message(key).unwrap();
+            assert_eq!(state.get_chat_message_template(&channel, key), fallback);
+            assert_eq!(state.get_chat_message_template("missing-channel", key), fallback);
+            assert_eq!(state.get_channel_chat_messages_merged(&channel).get_message(key), Some(fallback.as_str()));
+            assert!(!fallback.contains("points"));
+        }
+        // The same path serves cache updates and subsequent restarts, not just initial loading.
+        let updated = parse_custom_messages(serde_json::json!({"trades": {"created": "Updated: {item}"}}));
+        db.update_broadcaster_chat_messages(&channel, &updated).await.unwrap();
+        state.update_chat_messages_cache(&channel, updated);
+        assert_eq!(state.render_chat_message(&channel, MSG_TRADES_CREATED, &vars), "Updated: AK-47");
+        let restarted = crate::state::AppState::from_env(db).await.unwrap();
+        assert_eq!(restarted.render_chat_message(&channel, MSG_TRADES_CREATED, &vars), "Updated: AK-47");
+        state.shutdown_token.cancel();
+        restarted.shutdown_token.cancel();
+    }
+
     #[test]
     fn script_chat_policy_separates_announcements_from_delivery() {
         use super::*;
@@ -706,16 +730,15 @@ mod tests {
     }
 
     #[test]
-    fn script_delivery_defaults_never_claim_twitch_points_or_refunds() {
+    fn shared_delivery_defaults_never_claim_twitch_points_or_refunds() {
         use super::*;
         let defaults = serde_json::to_value(CategorizedChatMessages::default()).unwrap();
         for (category, messages) in defaults.as_object().unwrap() {
             for key in messages.as_object().unwrap().keys() {
                 let id = format!("{category}.{key}");
                 if !inventory_chat_allowed("SCRIPT", &id) { continue; }
-                let original = CategorizedChatMessages::get_default_message(&id).unwrap();
-                assert_eq!(inventory_chat_template("TWITCH", &id, original.clone()), original);
-                let template = inventory_chat_template("SCRIPT", &id, original);
+                let template = CategorizedChatMessages::get_default_message(&id).unwrap();
+                assert_eq!(CategorizedChatMessages::default().get_message(&id), Some(template.as_str()));
                 assert!(!template.contains("points"), "{id}: {template}");
                 assert!(!template.contains("refund"), "{id}: {template}");
                 let rendered = render_template(&template, &[("buyer", "viewer"), ("item", "AK-47"),
@@ -723,19 +746,24 @@ mod tests {
                 assert!(!rendered.contains('{'), "unresolved placeholder in {id}: {rendered}");
             }
         }
-        let created = script_delivery_template(MSG_TRADES_CREATED).unwrap();
+        let created = CategorizedChatMessages::get_default_message(MSG_TRADES_CREATED).unwrap();
         assert!(created.contains("{tradeoffer}"));
         assert!(created.contains("{remaining}"));
-        assert!(script_delivery_template(MSG_ORDERS_RECONCILIATION_REQUIRED).unwrap().contains("may still deliver"));
+        assert!(CategorizedChatMessages::get_default_message(MSG_ORDERS_RECONCILIATION_REQUIRED).unwrap().contains("may still deliver"));
     }
 
     #[test]
-    fn script_delivery_keeps_custom_channel_templates() {
+    fn shared_delivery_keeps_custom_channel_templates() {
         use super::*;
         for key in [MSG_TRADES_CREATED, MSG_TRADES_ACCEPTED, MSG_ORDERS_TRADE_LINK_REQUIRED,
             MSG_ORDERS_INSUFFICIENT_FUNDS, MSG_TRADES_FAILED_SELLER] {
             let custom = "Custom channel message: @{buyer}, {item}".to_string();
-            assert_eq!(inventory_chat_template("SCRIPT", key, custom.clone()), custom);
+            let (category, name) = resolve_category_and_key(key).unwrap();
+            let overrides = serde_json::json!({category: {name: custom}});
+            let parsed = parse_custom_messages(overrides.clone());
+            assert_eq!(parsed[category][name], custom);
+            let merged = CategorizedChatMessages::merge_with_overrides(&CategorizedChatMessages::default(), &parsed);
+            assert_eq!(merged.get_message(key), Some(custom.as_str()));
         }
     }
     use super::*;
