@@ -25,7 +25,7 @@ pub async fn process_redemption(
     state: Arc<AppState>,
     notification: EventSubNotification,
 ) {
-    process_fulfillment(state, notification.event, false, None).await;
+    process_fulfillment(state, notification.event, false, None, &[]).await;
 }
 
 pub async fn resume_pending_inventory_resolution(state: Arc<AppState>, redemption_id: Uuid) {
@@ -53,7 +53,7 @@ pub async fn resume_pending_inventory_resolution(state: Arc<AppState>, redemptio
             redeemed_at: redemption.created_at,
         },
     };
-    process_fulfillment(state, notification.event, true, None).await;
+    process_fulfillment(state, notification.event, true, None, &[]).await;
 }
 
 pub(crate) async fn process_fulfillment(
@@ -61,6 +61,7 @@ pub(crate) async fn process_fulfillment(
     event: crate::processor::model::RedemptionEvent,
     resuming: bool,
     script: Option<crate::scripting::service::Attribution>,
+    suppress_chat: &[String],
 ) {
     let is_script = script.is_some() || state.db.get_redemption(event.id).await.ok().flatten().is_some_and(|r|r.origin == "SCRIPT");
     let redemption_id = event.id;
@@ -137,7 +138,7 @@ pub(crate) async fn process_fulfillment(
         currency: reward_data.currency.clone(),
         status: RedemptionStatus::Pending,
         market_item_name: initial_item_name.clone(),
-    }, event.redeemed_at, script.as_ref()).await {
+    }, event.redeemed_at, script.as_ref(), suppress_chat).await {
         Ok(Some((_, decision))) => decision,
         Ok(None) => {
             info!(redemption_id = %redemption_id, "Redemption is already being processed, ignoring duplicate");

@@ -499,6 +499,54 @@
       ]
     },
     {
+      "namespace": "rewards",
+      "name": "trigger",
+      "id": "trigger-suppress-chat",
+      "signature": "rewards.trigger(alias: string, user_id: string, suppress_chat: array<string>) -> TriggerResult",
+      "parameters": [
+        {
+          "name": "alias",
+          "type": "string",
+          "description": "Reward script_alias in this channel."
+        },
+        {
+          "name": "user_id",
+          "type": "string",
+          "description": "Twitch user ID, not @login."
+        },
+        {
+          "name": "suppress_chat",
+          "type": "array<string>",
+          "description": "Up to 20 message keys, e.g. [\"trade_link_required\", \"unavailable\"]. Short keys or full category keys are accepted. Only definitive pre-order/actionable buyer-error notices can be selected."
+        }
+      ],
+      "returns": "TriggerResult",
+      "description": "Trigger a reward while replacing selected automatic delivery notices with script-authored chat.",
+      "behavior": "Choose notice keys BEFORE triggering: rewards.trigger returns after synchronous fulfillment notices may already have been sent. These are chat-template keys, not necessarily TriggerResult.code values. Short keys: trade_link_required, insufficient_funds, unavailable, trade_link_check_failed, inventory_hidden, steam_banned, no_mobile_authenticator, offline_trades_disabled, trade_link_invalid, trade_check_bot_banned, inventory_full. Full category keys such as orders.trade_link_required also work. The selection is stored on this fulfillment and survives recovery/later authorized purchase attempts. Order-reconciliation and all trade/order tracking notices cannot be suppressed. Unselected notices still use channel templates. Suppression changes only chat, never reward admission, inventory, purchase, trade, audit, or returned status. Twitch redemptions are unaffected. If replacement chat.send fails, there is no fallback automatic notice for a suppressed key.",
+      "errors": "Non-string elements, more than 20 keys, or unsupported keys (including trade tracking and ambiguous reconciliation) throw invalid_trigger_options before a fulfillment is admitted. Other trigger results follow the two-argument overload.",
+      "dry_run": "Validates the key list and performs the normal trigger dry run; no fulfillment, suppression record, or chat message is created.",
+      "example": "rewards.trigger(\"secret_case\", \"123\", [\"trade_link_required\", \"unavailable\"]);",
+      "related": ["rewards.trigger", "chat.send"]
+    },
+    {
+      "namespace": "rewards",
+      "name": "trigger",
+      "id": "trigger-suppress-one",
+      "signature": "rewards.trigger(alias: string, user_id: string, suppress_chat: string) -> TriggerResult",
+      "parameters": [
+        {"name": "alias", "type": "string", "description": "Reward script_alias in this channel."},
+        {"name": "user_id", "type": "string", "description": "Twitch user ID, not @login."},
+        {"name": "suppress_chat", "type": "string", "description": "One short or full template key from the allowlist of the array overload."}
+      ],
+      "returns": "TriggerResult",
+      "description": "Convenience overload for replacing one suppressible fulfillment notice.",
+      "behavior": "Equivalent to passing a one-element suppress_chat array. Selection is per fulfillment and must be made before rewards.trigger returns. Order reconciliation and trade/order tracking notices remain mandatory. See the array overload for allowed keys and the scope of suppression.",
+      "errors": "An unsupported key throws invalid_trigger_options before a fulfillment is admitted. Other trigger results follow the two-argument overload.",
+      "dry_run": "Validates the key and performs the normal trigger dry run without side effects.",
+      "example": "rewards.trigger(\"secret_case\", \"123\", \"trade_link_required\");",
+      "related": ["rewards.trigger", "chat.send"]
+    },
+    {
       "namespace": "chat",
       "name": "recent_chatters",
       "signature": "chat.recent_chatters(window: Duration, filter: UserFilter) -> array<User>",

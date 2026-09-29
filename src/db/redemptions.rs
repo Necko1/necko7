@@ -114,12 +114,13 @@ impl Db {
         new: &NewRedemption,
         redeemed_at: DateTime<Utc>,
     ) -> DbResult<Option<(Redemption, PurchaseLimitDecision)>> {
-        self.insert_fulfillment_with_limits(new, redeemed_at, None).await
+        self.insert_fulfillment_with_limits(new, redeemed_at, None, &[]).await
     }
 
     pub async fn insert_fulfillment_with_limits(
         &self, new: &NewRedemption, redeemed_at: DateTime<Utc>,
         script: Option<&crate::scripting::service::Attribution>,
+        suppress_chat: &[String],
     ) -> DbResult<Option<(Redemption, PurchaseLimitDecision)>> {
         let mut tx = self.pool.begin().await?;
         let limits: Option<sqlx::types::Json<RewardPurchaseLimitsConfig>> = sqlx::query_scalar(
@@ -160,14 +161,15 @@ impl Db {
         }
 
         let redemption = sqlx::query_as::<_, Redemption>(redemption_insert_returning!(
-            "INSERT INTO redemptions (fulfillment_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, retry_count, market_item_name, purchase_limit_decision, inventory_resolution_claimed_at, created_at, updated_at, origin, script_project_id, script_revision, script_execution_id)
-             VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, NULL, NULL, 0, $9, $10, NOW(), $11, NOW(), $12, $13, $14, $15) ON CONFLICT (fulfillment_id) DO NOTHING"
+            "INSERT INTO redemptions (fulfillment_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, market_paid_price, currency, status, fail_cause, fail_description, retry_count, market_item_name, purchase_limit_decision, inventory_resolution_claimed_at, created_at, updated_at, origin, script_project_id, script_revision, script_execution_id, script_suppressed_chat_keys)
+             VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, NULL, NULL, 0, $9, $10, NOW(), $11, NOW(), $12, $13, $14, $15, $16) ON CONFLICT (fulfillment_id) DO NOTHING"
         ))
         .bind(new.fulfillment_id).bind(new.twitch_reward_id)
         .bind(&new.user_id).bind(&new.user_login).bind(&new.user_trade_link)
         .bind(new.twitch_points_cost).bind(&new.currency).bind(&new.status)
         .bind(&new.market_item_name).bind(sqlx::types::Json(&decision)).bind(redeemed_at)
         .bind(if script.is_some() {"SCRIPT"} else {"TWITCH"}).bind(script.map(|s|s.project_id)).bind(script.map(|s|s.revision)).bind(script.map(|s|s.execution_id))
+        .bind(if script.is_some() { suppress_chat } else { &[] })
         .fetch_optional(&mut *tx).await?;
         tx.commit().await?;
         Ok(redemption.map(|row| (row, decision)))

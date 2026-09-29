@@ -453,6 +453,12 @@ pub fn engine(files: Files, host: Host) -> Engine {
     e.register_fn("trigger", |c: &mut Capability, key: &str, user: &str| {
         c.call("trigger", json!([key, user]))
     });
+    e.register_fn("trigger", |c: &mut Capability, key: &str, user: &str, keys: Array| {
+        c.call("trigger", json!([key, user, safe_value(keys.into())?]))
+    });
+    e.register_fn("trigger", |c: &mut Capability, key: &str, user: &str, key_to_suppress: &str| {
+        c.call("trigger", json!([key, user, key_to_suppress]))
+    });
     e.register_fn(
         "after",
         |c: &mut Capability, key: &str, d: Duration, value: Dynamic| {

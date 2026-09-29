@@ -1,5 +1,18 @@
 [
   {
+    "id": "custom-trigger-notice",
+    "title": "Replace a missing-trade-link notice",
+    "description": "Specify suppressible template keys before rewards.trigger, then branch on the returned code and send your own message. The key trade_link_required affects only this SCRIPT fulfillment; inventory status and later order/trade tracking stay unchanged. Replace the example dashboard URL for your installation. If custom chat fails, the suppressed standard notice is not restored.",
+    "files": {
+      "main.rhai": "fn on_timer(ctx) {\n    let user = ctx.timer.payload;\n    let result = rewards.trigger(\"secret_case\", user.id, [\"trade_link_required\"]);\n    if result.ok {\n        log.info(\"Prize admitted; delivery status remains in inventory.\");\n    } else if result.contains(\"code\") && result.code == \"trade_link_required\" {\n        chat.send(`@${user.login} Your secret prize is in inventory, but add a Steam trade link before delivery: https://xyan.necko.moe/inventory`);\n    } else {\n        let code = if result.contains(\"code\") { result.code } else { \"unknown_result\" };\n        log.warn(`Secret prize needs review: ${code}`);\n    }\n}"
+    },
+    "scenarios": [
+      {"entry": "on_timer", "context": {"timer": {"payload": {"id": "123", "login": "viewer"}}}, "trigger_trade_link_required": true, "calls": ["rewards.trigger", "chat.send"]},
+      {"entry": "on_timer", "context": {"timer": {"payload": {"id": "123", "login": "viewer"}}}, "calls": ["rewards.trigger", "log.info"]},
+      {"entry": "on_timer", "context": {"timer": {"payload": {"id": "123", "login": "viewer"}}}, "trigger_failure": true, "calls": ["rewards.trigger", "log.warn"]}
+    ]
+  },
+  {
     "id": "message-keyword-draw",
     "title": "Choose a chatter by message content",
     "description": "After an observed round ends, wait two minutes and choose one chatter who wrote a message containing динозавр OR starting with зверь in this channel's previous ten minutes, among candidates who chatted in the last two minutes. Matching ignores case, including Cyrillic. Configure secret_case with is_visible=false and is_paused=false. This is a recorded-history filter, not a new chat-message event. Use MessageFilter::all() if one message must satisfy both clauses; separate messages cannot satisfy separate AND clauses. No matches means no trigger. One stable job key replaces a still-scheduled earlier draw. Failures are logged, not automatically retried or spammed to chat.",

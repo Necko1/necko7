@@ -539,9 +539,30 @@ async fn call(
                 audit_script(state,attr,method,json!({"actor_type":"script","script":attr,"reward_id":id,"reward_alias":args[0],"value":args[1]})).await; }
             Ok(json!({"ok":true,"planned":dry}))
         }
-        "rewards.trigger" => trigger(state,attr,key(args)?,args[1].as_str().ok_or("invalid_user")?,dry).await,
+        "rewards.trigger" => {
+            let suppress_chat = suppressed_trigger_chat(args.get(2))?;
+            trigger(state,attr,key(args)?,args[1].as_str().ok_or("invalid_user")?,dry,&suppress_chat).await
+        },
         _ => Err("unknown_capability".into())
     }
+}
+
+fn suppressed_trigger_chat(keys: Option<&Value>) -> Result<Vec<String>, String> {
+    let Some(keys) = keys else { return Ok(Vec::new()); };
+    let values = match keys {
+        Value::Array(values) if values.len() <= 20 => values.clone(),
+        Value::String(key) => vec![Value::String(key.clone())],
+        _ => return Err("invalid_trigger_options".into()),
+    };
+    let mut result = Vec::with_capacity(values.len());
+    for value in &values {
+        let key = value.as_str().and_then(crate::messages::script_suppressible_chat_key)
+            .ok_or("invalid_trigger_options")?;
+        if !result.iter().any(|existing| existing == key) {
+            result.push(key.to_owned());
+        }
+    }
+    Ok(result)
 }
 
 pub(super) async fn trigger(
@@ -550,6 +571,7 @@ pub(super) async fn trigger(
     alias: &str,
     user: &str,
     dry: bool,
+    suppress_chat: &[String],
 ) -> Result<Value, String> {
     let id: Option<Uuid> = sqlx::query_scalar(
         "SELECT twitch_id FROM rewards WHERE streamer_id=$1 AND script_alias=$2 AND NOT is_deleted",
@@ -643,6 +665,7 @@ pub(super) async fn trigger(
         input,
         false,
         Some(attr.clone()),
+        suppress_chat,
     )
     .await;
     let row = state
@@ -739,4 +762,28 @@ pub async fn mutate_reward(
             .map_err(|_| "service_unavailable")?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod trigger_chat_tests {
+    use super::suppressed_trigger_chat;
+    use serde_json::json;
+
+    #[test]
+    fn suppression_keys_are_bounded_normalized_and_cannot_hide_tracking() {
+        assert!(suppressed_trigger_chat(None).unwrap().is_empty());
+        assert_eq!(suppressed_trigger_chat(Some(&json!([
+            "trade_link_required", "orders.trade_link_required",
+            "inventory_hidden", "market_errors.inventory_hidden"
+        ]))).unwrap(), ["orders.trade_link_required", "market_errors.inventory_hidden"]);
+        assert_eq!(suppressed_trigger_chat(Some(&json!("unavailable"))).unwrap(), ["orders.unavailable"]);
+        for invalid in [
+            json!(["trades.created"]), json!(["trades.accepted"]),
+            json!(["orders.reconciliation_required"]), json!(["market_errors.unknown"]),
+            json!(["created"]), json!(["invalid"]), json!([1]), json!({"suppress_chat": []}),
+            json!(vec!["trade_link_required"; 21]),
+        ] {
+            assert_eq!(suppressed_trigger_chat(Some(&invalid)), Err("invalid_trigger_options".into()));
+        }
+    }
 }

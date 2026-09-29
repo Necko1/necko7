@@ -318,21 +318,45 @@ async fn project_scheduler_storage_and_fulfillment_contracts() {
             .iter()
             .any(|r| r.twitch_id == reward)
     );
-    let one = service::trigger(&state, &attr, "skin", "viewer", false)
+    let one = service::trigger(&state, &attr, "skin", "viewer", false, &[])
         .await
         .unwrap();
     assert_eq!(one["ok"], true, "{one}");
-    let two = service::trigger(&state, &attr, "skin", "viewer", false)
+    let two = service::trigger(&state, &attr, "skin", "viewer", false, &[])
         .await
         .unwrap();
     assert_eq!(two["ok"], true, "{two}");
     // A known account need not have chatted when no chat requirement is configured.
-    let known = service::trigger(&state, &attr, "skin", &channel, true)
+    let known = service::trigger(&state, &attr, "skin", &channel, true, &[])
         .await
         .unwrap();
     assert_eq!(known["ok"], true);
     let stats=service::run(state.clone(),BTreeMap::from([("main.rhai".into(),"fn on_event(ctx) { let s=chat.user_stats(\"viewer\",Duration::from_mins(30)); if s.messages != 1 || s.redemptions.script != 2 { throw \"bad stats\"; } storage.set(\"null-test\",()); if storage.get(\"null-test\",42) != () { throw \"lost null\"; } storage.delete(\"null-test\"); if storage.get(\"null-test\",42) != 42 { throw \"missing delete\"; } }".into())]),"on_event".into(),json!({}),attr.clone(),true).await;
     assert!(stats.error.is_none(), "{:?}", stats.error);
+    // The caller can replace one actionable pre-order notice without changing
+    // the inventory status or suppressing later trade tracking.
+    db.save_viewer_settings("viewer", true, None).await.unwrap();
+    sqlx::query("UPDATE rewards SET market_autobuy=true WHERE twitch_id=$1")
+        .bind(reward).execute(pool).await.unwrap();
+    let suppressed = service::trigger(&state, &attr, "skin", "viewer", false,
+        &[crate::messages::MSG_ORDERS_TRADE_LINK_REQUIRED.to_owned()]).await.unwrap();
+    assert_eq!(suppressed["code"], "trade_link_required", "{suppressed}");
+    assert_eq!(suppressed["inventory_status"], "TRADE_LINK_REQUIRED");
+    let suppressed_id = Uuid::parse_str(suppressed["fulfillment_id"].as_str().unwrap()).unwrap();
+    let saved_keys: Vec<String> = sqlx::query_scalar("SELECT script_suppressed_chat_keys FROM redemptions WHERE fulfillment_id=$1")
+        .bind(suppressed_id).fetch_one(pool).await.unwrap();
+    assert_eq!(saved_keys, [crate::messages::MSG_ORDERS_TRADE_LINK_REQUIRED]);
+    let should_send = crate::processor::inventory_fulfillment::should_send_fulfillment_chat;
+    assert!(!should_send(&state, "SCRIPT", Some(suppressed_id), crate::messages::MSG_ORDERS_TRADE_LINK_REQUIRED).await);
+    assert!(should_send(&state, "SCRIPT", Some(suppressed_id), crate::messages::MSG_TRADES_CREATED).await);
+    assert!(should_send(&state, "SCRIPT", Some(suppressed_id), crate::messages::MSG_ORDERS_RECONCILIATION_REQUIRED).await);
+    sqlx::query("UPDATE redemptions SET script_suppressed_chat_keys=array_append(script_suppressed_chat_keys, $2) WHERE fulfillment_id=$1")
+        .bind(suppressed_id).bind(crate::messages::MSG_TRADES_CREATED).execute(pool).await.unwrap();
+    assert!(should_send(&state, "SCRIPT", Some(suppressed_id), crate::messages::MSG_TRADES_CREATED).await);
+    assert!(should_send(&state, "TWITCH", Some(suppressed_id), crate::messages::MSG_ORDERS_TRADE_LINK_REQUIRED).await);
+    assert!(should_send(&state, "SCRIPT", None, crate::messages::MSG_ORDERS_TRADE_LINK_REQUIRED).await);
+    let normal_id = Uuid::parse_str(two["fulfillment_id"].as_str().unwrap()).unwrap();
+    assert!(should_send(&state, "SCRIPT", Some(normal_id), crate::messages::MSG_ORDERS_TRADE_LINK_REQUIRED).await);
     let fulfillment = Uuid::parse_str(one["fulfillment_id"].as_str().unwrap()).unwrap();
     let row = db.get_redemption(fulfillment).await.unwrap().unwrap();
     assert_eq!(row.origin, "SCRIPT");
@@ -352,14 +376,14 @@ async fn project_scheduler_storage_and_fulfillment_contracts() {
         .execute(pool)
         .await
         .unwrap();
-    let rejected = service::trigger(&state, &attr, "skin", "viewer", false)
+    let rejected = service::trigger(&state, &attr, "skin", "viewer", false, &[])
         .await
         .unwrap();
     assert_eq!(
         rejected["code"], "activity_requirement_failed",
         "{rejected}"
     );
-    let simulated = service::trigger(&state, &attr, "skin", "viewer", true)
+    let simulated = service::trigger(&state, &attr, "skin", "viewer", true, &[])
         .await
         .unwrap();
     assert_eq!(simulated["code"], "activity_requirement_failed");
@@ -369,7 +393,7 @@ async fn project_scheduler_storage_and_fulfillment_contracts() {
         .execute(pool)
         .await
         .unwrap();
-    let rejected = service::trigger(&state, &attr, "skin", "viewer", false)
+    let rejected = service::trigger(&state, &attr, "skin", "viewer", false, &[])
         .await
         .unwrap();
     assert_eq!(rejected["code"], "purchase_limit_reached", "{rejected}");

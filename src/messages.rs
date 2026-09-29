@@ -92,6 +92,25 @@ pub(crate) fn inventory_chat_allowed(origin: &str, message_id: &str) -> bool {
     ))
 }
 
+/// Only definitive pre-order/buyer-action notices are replaceable by scripts.
+/// Order reconciliation and trade tracking must keep their normal notifications.
+pub(crate) fn script_suppressible_chat_key(key: &str) -> Option<&'static str> {
+    match key {
+        "trade_link_required" | MSG_ORDERS_TRADE_LINK_REQUIRED => Some(MSG_ORDERS_TRADE_LINK_REQUIRED),
+        "insufficient_funds" | MSG_ORDERS_INSUFFICIENT_FUNDS => Some(MSG_ORDERS_INSUFFICIENT_FUNDS),
+        "unavailable" | MSG_ORDERS_UNAVAILABLE => Some(MSG_ORDERS_UNAVAILABLE),
+        "trade_link_check_failed" | MSG_MARKET_ERR_TRADE_LINK_CHECK_FAILED => Some(MSG_MARKET_ERR_TRADE_LINK_CHECK_FAILED),
+        "inventory_hidden" | MSG_MARKET_ERR_INVENTORY_HIDDEN => Some(MSG_MARKET_ERR_INVENTORY_HIDDEN),
+        "steam_banned" | MSG_MARKET_ERR_STEAM_BANNED => Some(MSG_MARKET_ERR_STEAM_BANNED),
+        "no_mobile_authenticator" | MSG_MARKET_ERR_NO_MOBILE_AUTH => Some(MSG_MARKET_ERR_NO_MOBILE_AUTH),
+        "offline_trades_disabled" | MSG_MARKET_ERR_OFFLINE_TRADES_DISABLED => Some(MSG_MARKET_ERR_OFFLINE_TRADES_DISABLED),
+        "trade_link_invalid" | MSG_MARKET_ERR_TRADE_LINK_INVALID => Some(MSG_MARKET_ERR_TRADE_LINK_INVALID),
+        "trade_check_bot_banned" | MSG_MARKET_ERR_BOT_BANNED => Some(MSG_MARKET_ERR_BOT_BANNED),
+        "inventory_full" | MSG_MARKET_ERR_INVENTORY_FULL => Some(MSG_MARKET_ERR_INVENTORY_FULL),
+        _ => None,
+    }
+}
+
 // ── Categorized Structs ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]

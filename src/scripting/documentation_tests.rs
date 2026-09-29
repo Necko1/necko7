@@ -352,6 +352,7 @@ fn every_public_recipe_compiles_and_exercises_success_failure_empty_and_gap_path
             let calls = Arc::new(Mutex::new(Vec::<String>::new()));
             let observed = calls.clone();
             let failure = scenario["trigger_failure"] == true;
+            let trade_link_required = scenario["trigger_trade_link_required"] == true;
             let empty = scenario["empty_chat"] == true;
             let host: runtime::Host = Arc::new(move |method, _| {
                 observed.lock().push(method.into());
@@ -368,12 +369,15 @@ fn every_public_recipe_compiles_and_exercises_success_failure_empty_and_gap_path
                     }
                     "chat.user_stats" | "users.user_stats" => json!({"messages":5}),
                     "rewards.trigger" => {
-                        if failure {
+                        if trade_link_required {
+                            json!({"ok":false,"code":"trade_link_required"})
+                        } else if failure {
                             json!({"ok":false,"code":"fulfillment_pending"})
                         } else {
                             json!({"ok":true})
                         }
                     }
+                    "chat.send" => json!({"ok":true,"planned":false}),
                     _ => Value::Null,
                 })
             });

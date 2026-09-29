@@ -64,14 +64,47 @@ pub async fn send_inventory_chat(
     state: &Arc<AppState>, channel_id: &str, template: &str, buyer: &str, item: &str,
     extra: &[(&str, &str)],
 ) {
-    send_fulfillment_chat(state, "TWITCH", channel_id, template, buyer, item, extra).await;
+    send_fulfillment_chat(state, "TWITCH", None, channel_id, template, buyer, item, extra).await;
+}
+
+pub(crate) async fn should_send_fulfillment_chat(
+    state: &Arc<AppState>, origin: &str, redemption_id: Option<Uuid>, template: &str,
+) -> bool {
+    if !crate::messages::inventory_chat_allowed(origin, template) { return false; }
+    if origin == "SCRIPT" && crate::messages::script_suppressible_chat_key(template).is_some() {
+        let Some(redemption_id) = redemption_id else {
+            warn!(%template, "Script fulfillment notice has no fulfillment ID");
+            return true;
+        };
+        let suppressed: Option<bool> = match sqlx::query_scalar(
+            "SELECT $2 = ANY(script_suppressed_chat_keys) FROM redemptions WHERE fulfillment_id=$1 AND origin='SCRIPT'"
+        ).bind(redemption_id).bind(template).fetch_optional(state.db.pool()).await {
+            Ok(value) => value,
+            Err(error) => {
+                warn!(%error, %redemption_id, %template, "Could not check script fulfillment chat preference");
+                return true;
+            }
+        };
+        match suppressed {
+            Some(true) => {
+                tracing::debug!(%redemption_id, %template, "Script suppressed a fulfillment chat notice");
+                return false;
+            }
+            Some(false) => {}
+            None => {
+                warn!(%redemption_id, %template, "Script fulfillment missing before chat notice");
+                return true;
+            }
+        }
+    }
+    true
 }
 
 async fn send_fulfillment_chat(
-    state: &Arc<AppState>, origin: &str, channel_id: &str, template: &str, buyer: &str, item: &str,
+    state: &Arc<AppState>, origin: &str, redemption_id: Option<Uuid>, channel_id: &str, template: &str, buyer: &str, item: &str,
     extra: &[(&str, &str)],
 ) {
-    if !crate::messages::inventory_chat_allowed(origin, template) { return; }
+    if !should_send_fulfillment_chat(state, origin, redemption_id, template).await { return; }
     let mut vars = vec![("buyer", buyer), ("item", item)];
     vars.extend_from_slice(extra);
     let message = state.render_chat_message(channel_id, template, &vars);
@@ -83,7 +116,7 @@ async fn send_fulfillment_chat(
 async fn send_attempt_chat(state: &Arc<AppState>, redemption: &crate::db::redemptions::Redemption,
     custom_id: &str, channel_id: &str, template: &str, item: &str, extra: &[(&str, &str)]) {
     match state.db.claim_inventory_attempt_chat(custom_id, template).await {
-        Ok(true) => send_fulfillment_chat(state, &redemption.origin, channel_id, template,
+        Ok(true) => send_fulfillment_chat(state, &redemption.origin, Some(redemption.fulfillment_id), channel_id, template,
             &redemption.user_login, item, extra).await,
         Ok(false) => {},
         Err(e) => warn!(error = %e, %custom_id, %template, "Cannot claim attempt chat event"),
@@ -135,7 +168,7 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
     let parsed = resolve_trade_link(&redemption.user_trade_link, viewer_settings.trade_link.as_deref(), use_saved_link);
     let Some(trade_link) = parsed else {
         if state.db.require_inventory_trade_link(redemption_id).await.map_err(|e| e.to_string())? {
-            send_fulfillment_chat(state, &redemption.origin, &reward.streamer_id, MSG_ORDERS_TRADE_LINK_REQUIRED,
+            send_fulfillment_chat(state, &redemption.origin, Some(redemption_id), &reward.streamer_id, MSG_ORDERS_TRADE_LINK_REQUIRED,
                 &redemption.user_login, &inventory.1, &[]).await;
         }
         return Ok("TRADE_LINK_REQUIRED");
@@ -191,7 +224,7 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
                 } else {
                     MSG_ORDERS_RECONCILIATION_REQUIRED
                 };
-                send_fulfillment_chat(state, &redemption.origin, &reward.streamer_id, template,
+                send_fulfillment_chat(state, &redemption.origin, Some(redemption_id), &reward.streamer_id, template,
                     &redemption.user_login, &inventory.1, &[]).await;
                 return Ok("RECONCILIATION_REQUIRED");
             }
@@ -218,7 +251,7 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
             if changed {
                 if let Some(template) = rejected_order_template(kind) {
                     let price = format_inventory_price(inventory.2, &inventory.3);
-                    send_fulfillment_chat(state, &redemption.origin, &reward.streamer_id, template,
+                    send_fulfillment_chat(state, &redemption.origin, Some(redemption_id), &reward.streamer_id, template,
                         &redemption.user_login, &inventory.1, &[("price", &price)]).await;
                 } else {
                     warn!(?kind, %redemption_id, "No chat template for definitive Market rejection");
@@ -234,7 +267,7 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
                     return Ok(attempt_result(&current.status));
                 }
             }
-            send_fulfillment_chat(state, &redemption.origin, &reward.streamer_id, MSG_ORDERS_RECONCILIATION_REQUIRED,
+            send_fulfillment_chat(state, &redemption.origin, Some(redemption_id), &reward.streamer_id, MSG_ORDERS_RECONCILIATION_REQUIRED,
                 &redemption.user_login, &inventory.1, &[]).await;
             Ok("RECONCILIATION_REQUIRED")
         }
