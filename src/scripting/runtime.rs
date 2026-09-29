@@ -293,7 +293,13 @@ pub fn engine(files: Files, host: Host) -> Engine {
     e.register_fn("reply", |c: &mut Capability, id: &str, message: &str| {
         c.call("reply", json!([id, message]))
     });
-    for level in ["debug", "info", "warn", "error"] {
+    // Rhai's reserved debug() call expects a string from the native overload.
+    // The report receives log.debug; bare debug output remains suppressed.
+    e.register_fn("debug", |c: &mut Capability, message: &str| -> Result<String> {
+        let _ = c.call("debug", json!([message]))?;
+        Ok(message.to_owned())
+    });
+    for level in ["info", "warn", "error"] {
         e.register_fn(level, move |c: &mut Capability, message: &str| {
             c.call(level, json!([message]))
         });

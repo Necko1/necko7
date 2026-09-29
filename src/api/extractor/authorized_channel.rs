@@ -16,6 +16,15 @@ pub struct AuthorizedChannel {
 }
 
 impl AuthorizedChannel {
+    pub fn require_editor(&self) -> Result<(), ApiError> {
+        if !matches!(self.role, ChannelRole::Owner | ChannelRole::Editor) {
+            return Err(ApiError::Forbidden {
+                message: "Editor access required".to_string(),
+            });
+        }
+        Ok(())
+    }
+
     pub fn require_owner(&self) -> Result<(), ApiError> {
         if self.role != ChannelRole::Owner {
             return Err(ApiError::Forbidden {

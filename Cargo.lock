@@ -1540,7 +1540,7 @@ dependencies = [
 
 [[package]]
 name = "necko7"
-version = "0.10.2"
+version = "0.10.3"
 dependencies = [
  "axum",
  "base64",
@@ -2035,6 +2035,7 @@ dependencies = [
  "once_cell",
  "rhai_codegen",
  "serde",
+ "serde_json",
  "smallvec",
  "smartstring",
  "thin-vec",

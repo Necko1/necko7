@@ -49,7 +49,7 @@ pub async fn list(
     auth: AuthorizedChannel,
     Query(filter): Query<ExecutionSearch>,
 ) -> Result<Json<Value>, ApiError> {
-    auth.require_owner()?;
+    auth.require_editor()?;
     let search = filter.execution_search.trim();
     if search.chars().count() > 128 {
         return Err(bad("Execution search is limited to 128 characters"));
@@ -169,7 +169,7 @@ pub async fn command(
     auth: AuthorizedChannel,
     JsonArg(cmd): JsonArg<Command>,
 ) -> Result<Json<Value>, ApiError> {
-    auth.require_owner()?;
+    auth.require_editor()?;
     let pool = state.db.pool();
     let project = cmd.project();
     if let Some(id) = project {

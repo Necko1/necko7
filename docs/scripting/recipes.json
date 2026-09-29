@@ -1,0 +1,403 @@
+[
+  {
+    "id": "announce-kill",
+    "title": "Announce a local kill",
+    "description": "Route the normalized event. count may be greater than one when several kills arrive in one update; it is not a victim list.",
+    "files": {
+      "main.rhai": "fn on_event(ctx) {\n    if ctx.event.kind == \"player_kill\" {\n        chat.send(`Local kills this update: ${ctx.event.count}`);\n        debug(log, `Cumulative kills: ${ctx.event.total}`);\n    }\n}"
+    },
+    "scenarios": [
+      {
+        "entry": "on_event",
+        "context": {
+          "event": {
+            "kind": "player_kill",
+            "count": 1,
+            "total": 8
+          }
+        },
+        "calls": [
+          "chat.send",
+          "log.debug"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "ace-secret-case",
+    "title": "Ace to delayed secret-case giveaway",
+    "description": "For 5v5, an ace means at least five observed local round kills. In Wingman, choose a different threshold instead of claiming a two-kill round is a five-player ace. Configure secret_case with is_visible=false and is_paused=false. This example requires three messages and 15 characters in the previous five minutes plus one completed entry_reward redemption in seven days; remove the reward predicate for an open giveaway. Stable winner job key replaces an earlier pending giveaway, not already queued work. Reward triggers are never automatically announced or retried.",
+    "files": {
+      "main.rhai": "fn on_event(ctx) {\n    if ctx.event.kind != \"round_ended\" || ctx.current_match == () { return; }\n    let rounds = ctx.current_match.last_rounds(1);\n    if rounds.len == 0 { return; }\n    let r = rounds[0];\n    if r.player.kills == () || r.player.kills < 5 { return; }\n    let key = ctx.event.session_id + \":\" + r.index;\n    if storage.get(\"last_ace\", \"\") == key { return; }\n    storage.set(\"last_ace\", key);\n    chat.send(\"Ace! A secret-case draw starts in two minutes.\");\n    scheduler.after(\"ace_giveaway\", Duration::from_mins(2), #{alias: \"secret_case\"});\n}\n\nfn on_timer(ctx) {\n    if ctx.timer.key != \"ace_giveaway\" { return; }\n    let filter = UserFilter::create().min_messages(3).min_characters(15)\n        .reward_redemptions(RewardFilter::create().reward(\"entry_reward\")\n            .statuses([\"COMPLETED\"]).min_count(1).during(Duration::from_days(7)));\n    let viewers = chat.recent_chatters(Duration::from_mins(5), filter);\n    let winner = random.pick(viewers);\n    if winner == () {\n        log.info(\"No eligible chatters; no reward triggered.\");\n        return;\n    }\n    let result = rewards.trigger(ctx.timer.payload.alias, winner.id);\n    if result.ok {\n        chat.send(`@${winner.login} won the secret case! Check your necko7 inventory.`);\n    } else {\n        let code = if result.contains(\"code\") { result.code } else { \"unknown_result\" };\n        log.warn(`Secret-case outcome: ${code}; inspect Scripts Logs and inventory before retrying.`);\n        // One deliberate, neutral announcement; no per-error spam or automatic retrigger.\n        chat.send(\"The draw finished, but the reward needs review. Check the channel inventory.\");\n    }\n}"
+    },
+    "scenarios": [
+      {
+        "entry": "on_event",
+        "context": {
+          "event": {
+            "kind": "round_ended",
+            "session_id": "match-session"
+          },
+          "current_match": {
+            "rounds": [
+              {
+                "index": 3,
+                "completed": true,
+                "player": {
+                  "kills": 5
+                }
+              }
+            ]
+          }
+        },
+        "calls": [
+          "storage.get",
+          "storage.set",
+          "chat.send",
+          "scheduler.after"
+        ]
+      },
+      {
+        "entry": "on_timer",
+        "context": {
+          "timer": {
+            "key": "ace_giveaway",
+            "payload": {
+              "alias": "secret_case"
+            }
+          }
+        },
+        "calls": [
+          "chat.recent_chatters",
+          "rewards.trigger",
+          "chat.send"
+        ]
+      },
+      {
+        "entry": "on_timer",
+        "context": {
+          "timer": {
+            "key": "ace_giveaway",
+            "payload": {
+              "alias": "secret_case"
+            }
+          }
+        },
+        "trigger_failure": true,
+        "calls": [
+          "chat.recent_chatters",
+          "rewards.trigger",
+          "log.warn",
+          "chat.send"
+        ]
+      },
+      {
+        "entry": "on_timer",
+        "context": {
+          "timer": {
+            "key": "ace_giveaway",
+            "payload": {
+              "alias": "secret_case"
+            }
+          }
+        },
+        "empty_chat": true,
+        "calls": [
+          "chat.recent_chatters",
+          "log.info"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "temporary-reward",
+    "title": "Open a reward temporarily",
+    "description": "enable_for persists an internal reversal and needs no on_timer. Disabling the project blocks the hide, so review outstanding jobs before disabling. This only changes visibility, not pause.",
+    "files": {
+      "main.rhai": "fn on_event(ctx) {\n    if ctx.event.kind == \"match_started\" {\n        rewards.enable_for(\"round_drop\", Duration::from_mins(2));\n        log.info(\"Reward visibility window requested.\");\n    }\n}"
+    },
+    "scenarios": [
+      {
+        "entry": "on_event",
+        "context": {
+          "event": {
+            "kind": "match_started"
+          }
+        },
+        "calls": [
+          "rewards.enable_for",
+          "log.info"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "timer-router",
+    "title": "Schedule and route one-shot work",
+    "description": "Jobs retain their creating revision. This explicit hide timer requires on_timer and is useful when you need to store your own payload. exists includes blocked/queued jobs; cancel cannot stop already queued/running work.",
+    "files": {
+      "main.rhai": "fn on_event(ctx) {\n    if ctx.event.kind == \"match_started\" && !scheduler.exists(\"hide_drop\") {\n        rewards.set_visible(\"round_drop\", true);\n        scheduler.after(\"hide_drop\", Duration::from_mins(2), #{alias: \"round_drop\"});\n    }\n}\nfn on_timer(ctx) {\n    if ctx.timer.key == \"hide_drop\" {\n        rewards.set_visible(ctx.timer.payload.alias, false);\n    }\n}"
+    },
+    "scenarios": [
+      {
+        "entry": "on_event",
+        "context": {
+          "event": {
+            "kind": "match_started"
+          }
+        },
+        "calls": [
+          "scheduler.exists",
+          "rewards.set_visible",
+          "scheduler.after"
+        ]
+      },
+      {
+        "entry": "on_timer",
+        "context": {
+          "timer": {
+            "key": "hide_drop",
+            "payload": {
+              "alias": "round_drop"
+            }
+          }
+        },
+        "calls": [
+          "rewards.set_visible"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "persistent-counters",
+    "title": "Keep persistent counters",
+    "description": "Project storage survives revisions and restarts. increment is atomic; multiple calls are not one transaction. Dry run changes only its private overlay.",
+    "files": {
+      "main.rhai": "fn on_event(ctx) {\n    if ctx.event.kind == \"player_kill\" {\n        let total = storage.increment(\"observed_kills\", ctx.event.count);\n        log.info(`Project has observed ${total} kills.`);\n    }\n}"
+    },
+    "scenarios": [
+      {
+        "entry": "on_event",
+        "context": {
+          "event": {
+            "kind": "player_kill",
+            "count": 2
+          }
+        },
+        "calls": [
+          "storage.increment",
+          "log.info"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "eligible-chatters",
+    "title": "Choose a recent eligible chatter",
+    "description": "Use query-time activity, not an event timestamp or guessed Twitch subscription state. random.pick returns () on empty arrays. user_stats redemptions covers the same window but does not prove completed Steam delivery.",
+    "files": {
+      "main.rhai": "fn on_event(ctx) {\n    if ctx.event.kind != \"match_started\" { return; }\n    let filter = UserFilter::create().min_messages(5).min_characters(100);\n    let candidates = users.recent_chatters(Duration::from_mins(5), filter);\n    let winner = random.pick(candidates);\n    if winner == () { log.info(\"Nobody meets the activity criteria.\"); return; }\n    let activity = users.user_stats(winner.id, Duration::from_mins(5));\n    log.info(`Picked ${winner.login}: ${activity.messages} messages.`);\n}"
+    },
+    "scenarios": [
+      {
+        "entry": "on_event",
+        "context": {
+          "event": {
+            "kind": "match_started"
+          }
+        },
+        "calls": [
+          "users.recent_chatters",
+          "users.user_stats",
+          "log.info"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "redemption-filter",
+    "title": "Filter by reward history",
+    "description": "Both activity and redemption criteria must pass. min_count(0), the default, disables the redemption predicate. Empty statuses means all statuses; the redemption window is independent of the chat window.",
+    "files": {
+      "main.rhai": "fn on_event(ctx) {\n    if ctx.event.kind != \"match_started\" { return; }\n    let reward_filter = RewardFilter::create().reward(\"entry_reward\")\n        .statuses([\"COMPLETED\"]).min_count(2).during(Duration::from_days(7));\n    let filter = UserFilter::create().min_messages(1).reward_redemptions(reward_filter);\n    let viewers = chat.recent_chatters(Duration::from_mins(5), filter);\n    log.info(`Eligible returning viewers: ${viewers.len}`);\n}"
+    },
+    "scenarios": [
+      {
+        "entry": "on_event",
+        "context": {
+          "event": {
+            "kind": "match_started"
+          }
+        },
+        "calls": [
+          "chat.recent_chatters",
+          "log.info"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "trigger-safely",
+    "title": "Trigger a hidden reward without failure spam",
+    "description": "Set script_alias=secret_case, visibility off, operational pause off, and ensure the bot/reward is active. Visibility does not prevent script-trigger. An unsuccessful result may include a fulfillment/inventory ID. Never retry an ambiguous result automatically.",
+    "files": {
+      "main.rhai": "fn on_timer(ctx) {\n    let result = rewards.trigger(\"secret_case\", ctx.timer.payload.user_id);\n    if result.ok {\n        log.info(\"Fulfillment admitted; inspect inventory for delivery.\");\n    } else {\n        let code = if result.contains(\"code\") { result.code } else { \"unknown_result\" };\n        log.warn(`Trigger needs review: ${code}`);\n        if result.contains(\"fulfillment_id\") { log.info(result.fulfillment_id); }\n    }\n}"
+    },
+    "scenarios": [
+      {
+        "entry": "on_timer",
+        "context": {
+          "timer": {
+            "payload": {
+              "user_id": "123"
+            }
+          }
+        },
+        "calls": [
+          "rewards.trigger",
+          "log.info"
+        ]
+      },
+      {
+        "entry": "on_timer",
+        "context": {
+          "timer": {
+            "payload": {
+              "user_id": "123"
+            }
+          }
+        },
+        "trigger_failure": true,
+        "calls": [
+          "rewards.trigger",
+          "log.warn"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "safe-round-streaks",
+    "title": "Inspect a recent round streak safely",
+    "description": "An observed index is zero-based, not a guarantee that every real round was captured. Null sides/winners break the streak check rather than being filled with guesses; a CT/T relabel is not a score gain.",
+    "files": {
+      "main.rhai": "fn on_event(ctx) {\n    if ctx.event.kind != \"round_ended\" || ctx.current_match == () { return; }\n    let recent = ctx.current_match.last_rounds(3);\n    if recent.len != 3 { return; }\n    let expected = recent[0].index;\n    for r in recent {\n        if r.index == () || r.index != expected { return; }\n        if r.player.side == () || r.winner == () || r.player.side != r.winner { return; }\n        expected += 1;\n    }\n    log.info(\"Three consecutive observed local-side wins.\");\n}"
+    },
+    "scenarios": [
+      {
+        "entry": "on_event",
+        "context": {
+          "event": {
+            "kind": "round_ended"
+          },
+          "current_match": {
+            "rounds": [
+              {
+                "index": 0,
+                "completed": true,
+                "player": {
+                  "side": "ct"
+                },
+                "winner": "ct"
+              },
+              {
+                "index": 1,
+                "completed": true,
+                "player": {
+                  "side": "ct"
+                },
+                "winner": "ct"
+              },
+              {
+                "index": 2,
+                "completed": true,
+                "player": {
+                  "side": "ct"
+                },
+                "winner": "ct"
+              }
+            ]
+          }
+        },
+        "calls": [
+          "log.info"
+        ]
+      },
+      {
+        "entry": "on_event",
+        "context": {
+          "event": {
+            "kind": "round_ended"
+          },
+          "current_match": {
+            "rounds": [
+              {
+                "index": 0,
+                "completed": true,
+                "player": {
+                  "side": "ct"
+                },
+                "winner": "ct"
+              },
+              {
+                "index": 2,
+                "completed": true,
+                "player": {
+                  "side": "ct"
+                },
+                "winner": "ct"
+              },
+              {
+                "index": 3,
+                "completed": true,
+                "player": {
+                  "side": "ct"
+                },
+                "winner": "ct"
+              }
+            ]
+          }
+        },
+        "calls": []
+      }
+    ]
+  },
+  {
+    "id": "multi-file",
+    "title": "A project with event and timer modules",
+    "description": "Imports resolve from the project root, including inside a module. Moving events/kills.rhai does not rewrite the main import. Save then Validate catches missing imports and even broken orphan files.",
+    "files": {
+      "main.rhai": "import \"events/kills\" as kills;\nimport \"timers/reminder\" as reminder;\nfn on_event(ctx) { kills::handle(ctx); }\nfn on_timer(ctx) { reminder::handle(ctx); }",
+      "events/kills.rhai": "fn handle(ctx) {\n    if ctx.event.kind == \"player_kill\" {\n        storage.increment(\"kills\", ctx.event.count);\n        scheduler.after(\"reminder\", Duration::from_mins(2), #{note: \"Check your inventory\"});\n    }\n}",
+      "timers/reminder.rhai": "fn handle(ctx) {\n    if ctx.timer.key == \"reminder\" { log.info(ctx.timer.payload.note); }\n}"
+    },
+    "scenarios": [
+      {
+        "entry": "on_event",
+        "context": {
+          "event": {
+            "kind": "player_kill",
+            "count": 1
+          }
+        },
+        "calls": [
+          "storage.increment",
+          "scheduler.after"
+        ]
+      },
+      {
+        "entry": "on_timer",
+        "context": {
+          "timer": {
+            "key": "reminder",
+            "payload": {
+              "note": "Check your inventory"
+            }
+          }
+        },
+        "calls": [
+          "log.info"
+        ]
+      }
+    ]
+  }
+]

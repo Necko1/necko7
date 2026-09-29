@@ -1,6 +1,10 @@
 //! Channel-owned automation. User code only runs on bounded blocking workers.
 pub mod api;
 #[cfg(test)]
+mod documentation_tests;
+#[cfg(test)]
+mod access_tests;
+#[cfg(test)]
 mod live_tests;
 #[cfg(test)]
 mod match_tests;

@@ -1,6 +1,6 @@
 [package]
 name = "necko7"
-version = "0.10.2"
+version = "0.10.3"
 edition = "2024"
 
 [dependencies]
@@ -49,4 +49,5 @@ rand = "0.8"
 rhai = { version = "=1.26.1", features = ["sync", "serde"] }
 
 [dev-dependencies]
+rhai = { version = "=1.26.1", features = ["metadata"] }
 tower = { version = "0.5", features = ["util"] }

@@ -89,7 +89,7 @@ pub async fn status(
     State(state): State<Arc<AppState>>,
     auth: AuthorizedChannel,
 ) -> Result<Json<Status>, ApiError> {
-    auth.require_owner()?;
+    auth.require_editor()?;
     Ok(Json(Status {
         device: state.db.cs2_device(&auth.channel_id).await?,
     }))
@@ -159,6 +159,7 @@ pub struct PairResponse {
 #[utoipa::path(post, path="/api/v1/cs2/devices/pair", request_body=PairRequest, responses((status=200, body=PairResponse)), security(), tag="CS2")]
 pub async fn pair(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     JsonArg(req): JsonArg<PairRequest>,
 ) -> Result<Json<PairResponse>, ApiError> {
     PAIR_LIMIT.check().map_err(|_| limited())?;
@@ -183,6 +184,7 @@ pub async fn pair(
             .await
             .map_err(db)?;
     let channel = channel.ok_or_else(|| bad("Invalid or expired pairing code"))?;
+    require_owner_if_session(&state, &channel, &headers).await?;
     sqlx::query("SELECT channel_id FROM broadcasters WHERE channel_id=$1 FOR UPDATE")
         .bind(&channel)
         .fetch_one(&mut *tx)
@@ -232,6 +234,20 @@ pub async fn pair(
             avatar_url: profile.map(|u| u.profile_image_url.clone()).or(avatar_url),
         },
     }))
+}
+// A cookie cannot substitute Editor access for the owner's one-shot device credential.
+// Native desktop clients have no web session and prove the owner grant with the code/key.
+async fn require_owner_if_session(state: &AppState, channel: &str, headers: &HeaderMap) -> Result<(), ApiError> {
+    let cookie = headers.get(axum::http::header::COOKIE).and_then(|h| h.to_str().ok())
+        .and_then(|h| h.split(';').find_map(|part| part.trim().strip_prefix("session_id=")));
+    let Some(cookie) = cookie else { return Ok(()); };
+    let session = Uuid::parse_str(cookie).map_err(|_| denied())?;
+    let user = state.db.get_valid_session(session).await?.ok_or_else(denied)?.user_id;
+    let permission = state.db.get_permission(channel, &user).await?;
+    if !permission.is_some_and(|p| p.role == crate::db::channel_permissions::ChannelRole::Owner) {
+        return Err(ApiError::Forbidden { message: "Owner access required".into() });
+    }
+    Ok(())
 }
 #[utoipa::path(delete, path="/api/v1/broadcasters/{channel_id}/cs2", responses((status=204)), tag="CS2")]
 pub async fn revoke(
@@ -321,6 +337,9 @@ async fn signed(
     let device: Option<(Vec<u8>,String)> = sqlx::query_as("SELECT public_key,channel_id FROM cs2_devices WHERE id=$1 AND revoked_at IS NULL FOR UPDATE")
         .bind(env.device_id).fetch_optional(&mut *tx).await.map_err(db)?;
     let (key, channel) = device.ok_or_else(denied)?;
+    if action == Some("unpair") {
+        require_owner_if_session(&state, &channel, &headers).await?;
+    }
     verify(
         &key,
         headers

@@ -1,0 +1,1010 @@
+{
+  "schema_version": 1,
+  "rhai_version": "1.26.1",
+  "api_version": "0.10.2",
+  "properties": {
+  "ctx": {
+    "event": "Event | (); on_event only. Not present in a live timer context.",
+    "state": "CS2State; state AFTER the source payload, on_event only.",
+    "previous": "CS2State | (); state BEFORE the payload, on_event only.",
+    "current_match": "MatchContext | (); shared authoritative match observation, on_event only.",
+    "meta": "Meta; execution/project/channel/revision/timestamp/source metadata.",
+    "timer": "Timer; live on_timer only. No current game snapshot is implicitly added.",
+    "source": "Source map for CS2, string 'timer' for timers.",
+    "actor_type": "Execution actor: script or explicit scheduler/operator actor."
+  },
+  "ctx.meta": {
+    "project_id": "Project UUID.",
+    "revision": "Pinned live revision, or draft test revision metadata.",
+    "execution_id": "Execution UUID used for audit correlation.",
+    "channel_id": "Channel Twitch ID.",
+    "timestamp": "Execution-time UTC timestamp string.",
+    "source": "Original source map for CS2; timer source string for timer work."
+  },
+  "ctx.timer": {
+    "id": "Job UUID.",
+    "key": "Project-local job key.",
+    "payload": "Your persisted JSON-safe payload.",
+    "scheduled_for": "Original due-time UTC string.",
+    "created_at": "Creation UTC string.",
+    "creating_revision": "Immutable revision that created this job.",
+    "host_action": "Internal host action or (); not a user callback selector."
+  },
+  "ctx.state": {
+    "game": "Provider metadata (not credentials).",
+    "view": "Observed viewed identity; can be spectator.",
+    "match": "MatchState | (). Native Rhai: ctx.state[\"match\"].",
+    "round": "Normalized RoundState.",
+    "player": "Player | (); only when player.steamid matches authoritative provider.steamid."
+  },
+  "ctx.state.game": {
+    "local_steam_id": "Authoritative provider Steam ID | ().",
+    "app_id": "Observed application ID | ().",
+    "build": "Provider build | ().",
+    "name": "Provider name | ().",
+    "observed_at": "Provider epoch timestamp | ()."
+  },
+  "ctx.state.view": {
+    "identity": "local, spectator or unknown.",
+    "steam_id": "Viewed Steam ID | ().",
+    "display_name": "Viewed name | ().",
+    "clan": "Viewed clan | ().",
+    "observer_slot": "Observed slot | ().",
+    "activity": "menu, playing, text_input or ()."
+  },
+  "ctx.state.match": {
+    "map": "Observed map string.",
+    "mode": "Observed mode | ().",
+    "phase": "warmup, live, intermission, game_over or ().",
+    "score": "Score {ct, t}; side labels, not fixed roster identity.",
+    "ct": "TeamInfo.",
+    "t": "TeamInfo.",
+    "series_matches_to_win": "Observed series target | ()."
+  },
+  "team_info": {
+    "consecutive_losses": "Observed count | ().",
+    "series_wins": "Observed count | ().",
+    "timeouts_remaining": "Observed count | ()."
+  },
+  "score": {
+    "ct": "Known CT score integer, or ().",
+    "t": "Known T score integer, or ()."
+  },
+  "ctx.state.round": {
+    "completed_rounds": "Completed game-round counter, incremented at end, or ().",
+    "phase": "freeze_time, live, over or ().",
+    "winner": "ct, t or ()."
+  },
+  "ctx.state.player": {
+    "steam_id": "Verified local Steam ID.",
+    "team": "ct, t or ().",
+    "health": "Observed health | ().",
+    "armor": "Observed armor | ().",
+    "helmet": "bool | ().",
+    "defuse_kit": "bool | ().",
+    "money": "Observed money | ().",
+    "equipment_value": "Observed equipment value | ().",
+    "flash": "Observed exposure | ().",
+    "smoke": "Observed exposure | ().",
+    "burning": "Observed exposure | ().",
+    "match_stats": "Cumulative MatchStats (not round assists).",
+    "round_stats": "RoundStats {kills, headshot_kills}.",
+    "weapons": "Observed array<Weapon> | (); absence does not prove a dropped item."
+  },
+  "match_stats": {
+    "kills": "Cumulative known local kills | ().",
+    "assists": "Cumulative known local assists | ().",
+    "deaths": "Cumulative known local deaths | ().",
+    "mvps": "Cumulative known local MVP count | ().",
+    "score": "Cumulative known local score | ()."
+  },
+  "round_stats": {
+    "kills": "Known local kills in this real round | ().",
+    "headshot_kills": "Known local headshot kills in this real round | ()."
+  },
+  "weapon": {
+    "identity": "WeaponIdentity {name, category, finish}.",
+    "status": "active, holstered or reloading.",
+    "ammo": "Ammo {clip, capacity, reserve}; each field can be ()."
+  },
+  "weapon_identity": {
+    "name": "Observed weapon name.",
+    "category": "Observed type/category.",
+    "finish": "Observed finish | ()."
+  },
+  "ammo": {
+    "clip": "Observed clip units | ().",
+    "capacity": "Observed capacity | ().",
+    "reserve": "Reported reserve units | (); do not assume bullet units."
+  },
+  "ctx.event": {
+    "kind": "Semantic event kind, see Events.",
+    "device_id": "Device UUID.",
+    "channel_id": "Channel Twitch ID.",
+    "session_id": "Signed GSI session UUID.",
+    "source_seq": "Signed payload seq, same across events from one payload.",
+    "timestamp": "Signed observation UTC timestamp; not exact game-event time.",
+    "reliability": "RELIABLE: emitted from supported evidence; does not mean a complete match.",
+    "player": "Verified local {steam_id, team} | ().",
+    "match": "MatchState | (); access ctx.event[\"match\"].",
+    "round": "RoundState; event-specific extra fields are listed in Events."
+  },
+  "ctx.current_match": {
+    "rounds": "Array of completed observed RoundRecords, capped at 256.",
+    "current_round": "Latest observed RoundRecord | (); may be completed until next boundary.",
+    "state": "Latest normalized state.",
+    "updated_at": "Latest observation UTC string.",
+    "partial": "true if evidence gaps/incomplete replacement found; absent until necessary, test membership.",
+    "end_reason": "game_over or observation_reset when ended; may be absent.",
+    "local_summary": "LocalSummary | (); cumulative stats with per-field authoritative provenance. May be absent before evidence."
+  },
+  "r": {
+    "index": "Zero-based observed completed-round counter | ().",
+    "completed": "bool; incomplete observation is not a completed game round.",
+    "started_at": "First observed time in this round.",
+    "ended_at": "Round-end observation time when available.",
+    "score_before": "Score | ().",
+    "score_after": "Score | ().",
+    "winner": "ct, t or ().",
+    "player": "Retained authoritative LocalRoundStats.",
+    "start": "First available verified Player | ().",
+    "end": "Last available verified Player | ().",
+    "side_swap_before": "Optional {before: Score, after: Score, seq} halftime relabel; not points.",
+    "events": "Persisted event timeline under advanced inspection; omitted from execution snapshots."
+  },
+  "r.player": {
+    "kills": "Known local round kills | (); zero is known zero.",
+    "headshot_kills": "Known local round headshot kills | ().",
+    "side": "Retained ct/t local side | ().",
+    "health": "Last observed local health, not guaranteed round-end health.",
+    "match_stats": "Last-authoritative cumulative counters | (); not per-round assists."
+  },
+  "local_summary": {
+    "steam_id": "Verified local Steam ID.",
+    "stats": "Retained known cumulative MatchStats.",
+    "evidence": "Map per stat -> {seq, at, final}.",
+    "observed_at": "Latest local authoritative cumulative observation time.",
+    "seq": "Its source sequence.",
+    "final": "true only when all retained known fields observed at game over. Otherwise last observed."
+  },
+  "result": {
+    "ok": "bool; not a guarantee of completed trade.",
+    "code": "Optional string or (); reason/result code.",
+    "fulfillment_id": "Optional real internal fulfillment UUID.",
+    "inventory_item_id": "Optional inventory UUID.",
+    "selected_item": "Optional selected item name.",
+    "origin": "SCRIPT when supplied.",
+    "inventory_status": "Optional current domain lifecycle status.",
+    "retry_after": "Optional seconds hint.",
+    "planned": "Optional true for dry run.",
+    "validation": "Optional explanation of dry-run checks not simulated."
+  },
+  "user": {
+    "id": "Twitch user ID string.",
+    "login": "Observed login; can be absent in user_stats without chat.",
+    "messages": "Known observed message count.",
+    "characters": "Sum of recorded char_count.",
+    "first_activity": "Earliest activity in requested window | ().",
+    "last_activity": "Latest activity in window | ().",
+    "redemptions": "user_stats only: {total, completed, script}."
+  },
+  "reward": {
+    "id": "Reward UUID.",
+    "alias": "Channel-scoped script alias.",
+    "title": "Reward title.",
+    "is_visible": "Presentation visibility.",
+    "is_paused": "Operational pause: prevents trigger."
+  }
+},
+  "functions": [
+    {
+      "namespace": "storage",
+      "name": "get",
+      "signature": "storage.get(key: string) -> JSON value | ()",
+      "parameters": [
+        {
+          "name": "key",
+          "type": "string",
+          "description": "Non-empty project-local key, at most 128 UTF-8 bytes."
+        }
+      ],
+      "returns": "JSON value | ()",
+      "description": "Read project storage.",
+      "behavior": "Missing key returns (). A stored JSON null also becomes ().",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry.",
+      "dry_run": "Reads current channel/project data even in dry run.",
+      "example": "storage.get(\"counter\");",
+      "related": [
+        "storage.get_default"
+      ]
+    },
+    {
+      "namespace": "storage",
+      "name": "get",
+      "signature": "storage.get(key: string, default: JSON value) -> JSON value",
+      "parameters": [
+        {
+          "name": "key",
+          "type": "string",
+          "description": "Non-empty project-local key, at most 128 UTF-8 bytes."
+        },
+        {
+          "name": "default",
+          "type": "JSON value",
+          "description": "Used only when the key is absent/deleted, not when its stored value is null."
+        }
+      ],
+      "returns": "JSON value",
+      "description": "Read with a default.",
+      "behavior": "Dry-run deleted keys use the default; reads see that run's storage overlay.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry.",
+      "dry_run": "Reads current channel/project data even in dry run.",
+      "example": "storage.get(\"counter\", 0);",
+      "related": [],
+      "id": "get-default"
+    },
+    {
+      "namespace": "storage",
+      "name": "set",
+      "signature": "storage.set(key: string, value: JSON value) -> JSON value",
+      "parameters": [
+        {
+          "name": "key",
+          "type": "string",
+          "description": "Non-empty project-local key, at most 128 UTF-8 bytes."
+        },
+        {
+          "name": "value",
+          "type": "JSON value",
+          "description": "Unit/null, bool, integer/float, string, array or map; no native Duration/filter objects."
+        }
+      ],
+      "returns": "JSON value",
+      "description": "Persist a value.",
+      "behavior": "Returns the written value. Each write is atomic, not a transaction spanning the entire handler. Project namespace survives publish/disable/restart; delete project removes live access. At most 64 KiB/value, 1 MiB and 1,024 keys/project. No TTL.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. storage_value_limit, storage_project_limit.",
+      "dry_run": "Writes only to a private read-after-write overlay; project aggregate quotas are not fully simulated.",
+      "example": "storage.set(\"state\", #{wins: 1});",
+      "related": []
+    },
+    {
+      "namespace": "storage",
+      "name": "delete",
+      "signature": "storage.delete(key: string) -> ()",
+      "parameters": [
+        {
+          "name": "key",
+          "type": "string",
+          "description": "Non-empty project-local key, at most 128 UTF-8 bytes."
+        }
+      ],
+      "returns": "()",
+      "description": "Delete a key.",
+      "behavior": "Missing keys are safe. Does not affect other projects.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry.",
+      "dry_run": "Deletes only in the dry-run overlay.",
+      "example": "storage.delete(\"state\");",
+      "related": []
+    },
+    {
+      "namespace": "storage",
+      "name": "increment",
+      "signature": "storage.increment(key: string, amount: integer) -> integer",
+      "parameters": [
+        {
+          "name": "key",
+          "type": "string",
+          "description": "Non-empty project-local key, at most 128 UTF-8 bytes."
+        },
+        {
+          "name": "amount",
+          "type": "integer",
+          "description": "Signed increment, including negative or zero."
+        }
+      ],
+      "returns": "integer",
+      "description": "Atomically update a counter.",
+      "behavior": "Absent starts at zero. Existing value must be an integer. Checked 64-bit arithmetic, protected by a project quota lock; returns the new value.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. storage_not_integer, storage_integer_overflow.",
+      "dry_run": "Checked update in the overlay, no persisted change.",
+      "example": "storage.increment(\"counter\", 1);",
+      "related": []
+    },
+    {
+      "namespace": "scheduler",
+      "name": "after",
+      "signature": "scheduler.after(key: string, duration: Duration, payload: JSON value) -> JobResult",
+      "parameters": [
+        {
+          "name": "key",
+          "type": "string",
+          "description": "Non-empty project-local key, at most 128 UTF-8 bytes."
+        },
+        {
+          "name": "duration",
+          "type": "Duration",
+          "description": "Positive duration, at most 31,536,000 seconds (365 days)."
+        },
+        {
+          "name": "payload",
+          "type": "JSON value",
+          "description": "Persisted JSON-safe payload, maximum 64 KiB."
+        }
+      ],
+      "returns": "JobResult: #{ok: true, id: string} live; #{ok: true, planned: true} dry run",
+      "description": "Schedule a durable one-shot timer.",
+      "behavior": "Needs on_timer in the creating published revision. Key is project-local; replaces scheduled/blocked same-key jobs, preserving cancelled history. Queued work cannot be replaced. 256 live jobs/project including scheduled, blocked and queued. Job retains the exact creating revision across publish/rollback. No sleep in a worker.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. missing_on_timer, invalid_job, scheduler_project_limit.",
+      "dry_run": "Returns #{ok: true, planned: true}; does not persist a job or fully validate live revision/job quota.",
+      "example": "scheduler.after(\"winner\", Duration::from_mins(2), #{reward: \"secret_case\"});",
+      "related": [
+        "scheduler.exists",
+        "scheduler.cancel"
+      ]
+    },
+    {
+      "namespace": "scheduler",
+      "name": "exists",
+      "signature": "scheduler.exists(key: string) -> bool",
+      "parameters": [
+        {
+          "name": "key",
+          "type": "string",
+          "description": "Non-empty project-local key, at most 128 UTF-8 bytes."
+        }
+      ],
+      "returns": "bool",
+      "description": "Check for a live job.",
+      "behavior": "True for scheduled, blocked or queued; false for running/terminal records. Not a claim that the callback is safe to repeat.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry.",
+      "dry_run": "Reads current channel/project data even in dry run.",
+      "example": "scheduler.exists(\"winner\");",
+      "related": []
+    },
+    {
+      "namespace": "scheduler",
+      "name": "cancel",
+      "signature": "scheduler.cancel(key: string) -> #{ok: bool}",
+      "parameters": [
+        {
+          "name": "key",
+          "type": "string",
+          "description": "Non-empty project-local key, at most 128 UTF-8 bytes."
+        }
+      ],
+      "returns": "#{ok: bool}",
+      "description": "Cancel a pending timer.",
+      "behavior": "Cancels scheduled/blocked jobs only. Queued/running work is not revoked. Returns ok even if nothing was changed; retains history.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry.",
+      "dry_run": "Plans cancellation; live reads still see the original job.",
+      "example": "scheduler.cancel(\"winner\");",
+      "related": []
+    },
+    {
+      "namespace": "rewards",
+      "name": "get",
+      "signature": "rewards.get(alias: string) -> Reward | ()",
+      "parameters": [
+        {
+          "name": "alias",
+          "type": "string",
+          "description": "Reward script_alias in this channel; not its title or Twitch UUID."
+        }
+      ],
+      "returns": "Reward | ()",
+      "description": "Find a reward by alias.",
+      "behavior": "Returns only id, alias, title, is_visible and is_paused. Deleted/missing reward returns (). No inventory or pricing secrets.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry.",
+      "dry_run": "Reads current channel/project data even in dry run.",
+      "example": "rewards.get(\"secret_case\");",
+      "related": []
+    },
+    {
+      "namespace": "rewards",
+      "name": "set_visible",
+      "signature": "rewards.set_visible(alias: string, visible: bool) -> #{ok: bool, planned: bool}",
+      "parameters": [
+        {
+          "name": "alias",
+          "type": "string",
+          "description": "Reward script_alias in this channel; not its title or Twitch UUID."
+        },
+        {
+          "name": "visible",
+          "type": "bool",
+          "description": "Desired state."
+        }
+      ],
+      "returns": "#{ok: bool, planned: bool}",
+      "description": "Change presentation visibility.",
+      "behavior": "Maps to Twitch is_enabled and local is_visible. Does not pause operational processing, price updates or script triggering. Hidden storefront presentation depends separately on show_invisible_rewards.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. reward_not_found, twitch_unavailable.",
+      "dry_run": "Checks alias and plans the mutation without contacting Twitch.",
+      "example": "rewards.set_visible(\"secret_case\", false);",
+      "related": []
+    },
+    {
+      "namespace": "rewards",
+      "name": "set_paused",
+      "signature": "rewards.set_paused(alias: string, paused: bool) -> #{ok: bool, planned: bool}",
+      "parameters": [
+        {
+          "name": "alias",
+          "type": "string",
+          "description": "Reward script_alias in this channel; not its title or Twitch UUID."
+        },
+        {
+          "name": "paused",
+          "type": "bool",
+          "description": "Desired state."
+        }
+      ],
+      "returns": "#{ok: bool, planned: bool}",
+      "description": "Change operational pause.",
+      "behavior": "A paused reward cannot be script-triggered. Manual pause reason is set/cleared; this is not a way to hide a secret reward.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. reward_not_found, twitch_unavailable.",
+      "dry_run": "Checks alias and plans the mutation without contacting Twitch.",
+      "example": "rewards.set_paused(\"secret_case\", false);",
+      "related": []
+    },
+    {
+      "namespace": "rewards",
+      "name": "enable_for",
+      "signature": "rewards.enable_for(alias: string, duration: Duration) -> JobResult",
+      "parameters": [
+        {
+          "name": "alias",
+          "type": "string",
+          "description": "Reward script_alias in this channel; not its title or Twitch UUID."
+        },
+        {
+          "name": "duration",
+          "type": "Duration",
+          "description": "Positive duration, at most 31,536,000 seconds (365 days)."
+        }
+      ],
+      "returns": "JobResult: #{ok: true, id: string} live; #{ok: true, planned: true} dry run",
+      "description": "Show temporarily, then hide.",
+      "behavior": "Persists an internal hide_reward job BEFORE opening visibility; needs no on_timer. Does not unpause. Key visibility:{reward UUID} is project-local. Persists across restart/publish; disable blocks the automatic hide and overdue work requires Run now or explicit hide. This is not atomic across Twitch and DB.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. reward_not_found, scheduler_project_limit, twitch_unavailable.",
+      "dry_run": "Checks alias; returns #{ok: true, planned: true}. No visibility change/job.",
+      "example": "rewards.enable_for(\"round_drop\", Duration::from_mins(2));",
+      "related": []
+    },
+    {
+      "namespace": "rewards",
+      "name": "trigger",
+      "signature": "rewards.trigger(alias: string, user_id: string) -> TriggerResult",
+      "parameters": [
+        {
+          "name": "alias",
+          "type": "string",
+          "description": "Reward script_alias in this channel; not its title or Twitch UUID."
+        },
+        {
+          "name": "user_id",
+          "type": "string",
+          "description": "Twitch user ID, not @login."
+        }
+      ],
+      "returns": "TriggerResult",
+      "description": "Create a real SCRIPT fulfillment.",
+      "behavior": "No Twitch points or fake redemption. Bypasses Twitch-specific cooldown and per-stream/per-user-stream caps, NOT necko7 bot/reward operational state, chat requirements, purchase limits, inventory admission, buyer/trade-link or market constraints. ok means admission/known current state, never a guarantee of completed Steam delivery. Never automatically announces failures in chat.",
+      "errors": "Host/domain failures become #{ok: false, code: string}; pre-host Rhai type/serialization/call-budget errors still throw. Optional result fields are not guaranteed: test membership before reading. See [trigger results](../errors#trigger-results).",
+      "dry_run": "Checks alias/user, pause, current rate/chat/purchase counts without reserving capacity. Success is planned; buyer/market/delivery are not simulated. No inventory or fulfillment mutation.",
+      "example": "rewards.trigger(\"secret_case\", \"123\");",
+      "related": [
+        "rewards.get",
+        "chat.send"
+      ]
+    },
+    {
+      "namespace": "chat",
+      "name": "recent_chatters",
+      "signature": "chat.recent_chatters(window: Duration, filter: UserFilter) -> array<User>",
+      "parameters": [
+        {
+          "name": "window",
+          "type": "Duration",
+          "description": "60..31,536,000 seconds, evaluated relative to query time."
+        },
+        {
+          "name": "filter",
+          "type": "UserFilter",
+          "description": "Create with UserFilter::create(); chain criteria."
+        }
+      ],
+      "returns": "array<User>",
+      "description": "Query eligible recent channel chatters.",
+      "behavior": "At most 1,000 users, newest last_activity first, then ID. Activity must fall inside the chat window. Reward criteria are ANDed with message/character thresholds. Subscription/follower/role data is not available.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. invalid_chat_window, invalid_reward_filter.",
+      "dry_run": "Reads current channel/project data even in dry run.",
+      "example": "chat.recent_chatters(Duration::from_mins(5), UserFilter::create().min_messages(2));",
+      "related": []
+    },
+    {
+      "namespace": "chat",
+      "name": "user_stats",
+      "signature": "chat.user_stats(user_id: string, window: Duration) -> UserStats",
+      "parameters": [
+        {
+          "name": "user_id",
+          "type": "string",
+          "description": "Twitch user ID, not @login."
+        },
+        {
+          "name": "window",
+          "type": "Duration",
+          "description": "60..31,536,000 seconds."
+        }
+      ],
+      "returns": "UserStats",
+      "description": "Read channel activity for a user.",
+      "behavior": "Returns messages, characters, first_activity, last_activity and redemptions {total, completed, script} in the window. No activity gives zero counts and () timestamps; login may be absent. Does not establish account eligibility.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. invalid_chat_window.",
+      "dry_run": "Reads current channel/project data even in dry run.",
+      "example": "chat.user_stats(\"123\", Duration::from_mins(5));",
+      "related": []
+    },
+    {
+      "namespace": "users",
+      "name": "recent_chatters",
+      "signature": "users.recent_chatters(window: Duration, filter: UserFilter) -> array<User>",
+      "parameters": [
+        {
+          "name": "window",
+          "type": "Duration",
+          "description": "60..31,536,000 seconds, evaluated relative to query time."
+        },
+        {
+          "name": "filter",
+          "type": "UserFilter",
+          "description": "Create with UserFilter::create(); chain criteria."
+        }
+      ],
+      "returns": "array<User>",
+      "description": "Query eligible recent channel chatters.",
+      "behavior": "At most 1,000 users, newest last_activity first, then ID. Activity must fall inside the chat window. Reward criteria are ANDed with message/character thresholds. Subscription/follower/role data is not available.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. invalid_chat_window, invalid_reward_filter.",
+      "dry_run": "Reads current channel/project data even in dry run.",
+      "example": "users.recent_chatters(Duration::from_mins(5), UserFilter::create().min_messages(2));",
+      "related": []
+    },
+    {
+      "namespace": "users",
+      "name": "user_stats",
+      "signature": "users.user_stats(user_id: string, window: Duration) -> UserStats",
+      "parameters": [
+        {
+          "name": "user_id",
+          "type": "string",
+          "description": "Twitch user ID, not @login."
+        },
+        {
+          "name": "window",
+          "type": "Duration",
+          "description": "60..31,536,000 seconds."
+        }
+      ],
+      "returns": "UserStats",
+      "description": "Read channel activity for a user.",
+      "behavior": "Returns messages, characters, first_activity, last_activity and redemptions {total, completed, script} in the window. No activity gives zero counts and () timestamps; login may be absent. Does not establish account eligibility.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. invalid_chat_window.",
+      "dry_run": "Reads current channel/project data even in dry run.",
+      "example": "users.user_stats(\"123\", Duration::from_mins(5));",
+      "related": []
+    },
+    {
+      "namespace": "chat",
+      "name": "send",
+      "signature": "chat.send(message: string) -> #{ok: bool, planned: bool}",
+      "parameters": [
+        {
+          "name": "message",
+          "type": "string",
+          "description": "Non-empty, at most 500 Unicode characters."
+        }
+      ],
+      "returns": "#{ok: bool, planned: bool}",
+      "description": "Send to channel chat.",
+      "behavior": "3 calls per execution. Network effects may already happen on a timeout; do not blindly retry.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. invalid_message.",
+      "dry_run": "Records a planned action, sends nothing.",
+      "example": "chat.send(\"Nice round!\");",
+      "related": []
+    },
+    {
+      "namespace": "chat",
+      "name": "reply",
+      "signature": "chat.reply(message_id: string, message: string) -> #{ok: bool, planned: bool}",
+      "parameters": [
+        {
+          "name": "message_id",
+          "type": "string",
+          "description": "Twitch chat message ID to reply to; not a user ID."
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "description": "Non-empty, at most 500 Unicode characters."
+        }
+      ],
+      "returns": "#{ok: bool, planned: bool}",
+      "description": "Reply in channel chat.",
+      "behavior": "3 calls per execution, independently of chat.send. CS2 events do not contain a Twitch message ID.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. invalid_message.",
+      "dry_run": "Records a planned reply, sends nothing.",
+      "example": "chat.reply(\"message-id\", \"Thanks!\");",
+      "related": []
+    },
+    {
+      "namespace": "log",
+      "name": "debug",
+      "signature": "debug(log, message: string) -> ()",
+      "parameters": [
+        {
+          "name": "message",
+          "type": "string",
+          "description": "At most 2,048 UTF-8 bytes."
+        }
+      ],
+      "returns": "()",
+      "description": "Script execution log at debug level. Rhai 1.26.1 reserves debug in method position: use native function syntax debug(log, message), not log.debug(message).",
+      "behavior": "Script execution log in Scripts > Logs. Logging at error level does not throw or automatically mark a successful execution failed. Ordinary successful executions are not INFO operational audits.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. log_message_limit.",
+      "dry_run": "Records the log in the dry-run report.",
+      "example": "debug(log, \"Observed event\");",
+      "call_style": "function",
+      "related": []
+    },
+    {
+      "namespace": "log",
+      "name": "info",
+      "signature": "log.info(message: string) -> ()",
+      "parameters": [
+        {
+          "name": "message",
+          "type": "string",
+          "description": "At most 2,048 UTF-8 bytes."
+        }
+      ],
+      "returns": "()",
+      "description": "Write a info script log.",
+      "behavior": "Script execution log in Scripts > Logs. Logging at error level does not throw or automatically mark a successful execution failed. Ordinary successful executions are not INFO operational audits.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. log_message_limit.",
+      "dry_run": "Records the log in the dry-run report.",
+      "example": "log.info(\"Observed event\");",
+      "related": []
+    },
+    {
+      "namespace": "log",
+      "name": "warn",
+      "signature": "log.warn(message: string) -> ()",
+      "parameters": [
+        {
+          "name": "message",
+          "type": "string",
+          "description": "At most 2,048 UTF-8 bytes."
+        }
+      ],
+      "returns": "()",
+      "description": "Write a warn script log.",
+      "behavior": "Script execution log in Scripts > Logs. Logging at error level does not throw or automatically mark a successful execution failed. Ordinary successful executions are not INFO operational audits.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. log_message_limit.",
+      "dry_run": "Records the log in the dry-run report.",
+      "example": "log.warn(\"Observed event\");",
+      "related": []
+    },
+    {
+      "namespace": "log",
+      "name": "error",
+      "signature": "log.error(message: string) -> ()",
+      "parameters": [
+        {
+          "name": "message",
+          "type": "string",
+          "description": "At most 2,048 UTF-8 bytes."
+        }
+      ],
+      "returns": "()",
+      "description": "Write a error script log.",
+      "behavior": "Script execution log in Scripts > Logs. Logging at error level does not throw or automatically mark a successful execution failed. Ordinary successful executions are not INFO operational audits.",
+      "errors": "Throws a Rhai runtime error on invalid arguments, host failures or exhausted budgets; see [errors](../errors). No automatic retry. log_message_limit.",
+      "dry_run": "Records the log in the dry-run report.",
+      "example": "log.error(\"Observed event\");",
+      "related": []
+    },
+    {
+      "namespace": "random",
+      "name": "pick",
+      "signature": "random.pick(items: array) -> value | ()",
+      "parameters": [
+        {
+          "name": "items",
+          "type": "array",
+          "description": "An array of any Rhai values."
+        }
+      ],
+      "returns": "value | ()",
+      "description": "Choose a random element.",
+      "behavior": "Empty array returns (). Nondeterministic both live and dry run. Local operation, not a host call; normal engine instruction/container limits still apply.",
+      "errors": "Throws if called on a capability other than random.",
+      "dry_run": "Still random; a dry-run winner is not reserved for a live run.",
+      "example": "random.pick([#{id: \"123\", login: \"viewer\"}]);",
+      "related": []
+    },
+    {
+      "namespace": "Duration",
+      "name": "from_secs",
+      "signature": "Duration::from_secs(amount: integer) -> Duration",
+      "parameters": [
+        {
+          "name": "amount",
+          "type": "integer",
+          "description": "Positive integer multiplied by 1; checked overflow."
+        }
+      ],
+      "returns": "Duration",
+      "description": "Create an explicit duration.",
+      "behavior": "Result must be 1..31,536,000 seconds. Fractional input, zero, negative and excessive values fail. Chat/reward-filter windows must be at least 60 seconds; scheduler supports 1 second.",
+      "errors": "Throws: Duration must be positive and at most one year.",
+      "dry_run": "Pure construction, identical behavior.",
+      "example": "Duration::from_secs(1);",
+      "related": []
+    },
+    {
+      "namespace": "Duration",
+      "name": "from_mins",
+      "signature": "Duration::from_mins(amount: integer) -> Duration",
+      "parameters": [
+        {
+          "name": "amount",
+          "type": "integer",
+          "description": "Positive integer multiplied by 60; checked overflow."
+        }
+      ],
+      "returns": "Duration",
+      "description": "Create an explicit duration.",
+      "behavior": "Result must be 1..31,536,000 seconds. Fractional input, zero, negative and excessive values fail. Chat/reward-filter windows must be at least 60 seconds; scheduler supports 1 second.",
+      "errors": "Throws: Duration must be positive and at most one year.",
+      "dry_run": "Pure construction, identical behavior.",
+      "example": "Duration::from_mins(1);",
+      "related": []
+    },
+    {
+      "namespace": "Duration",
+      "name": "from_hours",
+      "signature": "Duration::from_hours(amount: integer) -> Duration",
+      "parameters": [
+        {
+          "name": "amount",
+          "type": "integer",
+          "description": "Positive integer multiplied by 3600; checked overflow."
+        }
+      ],
+      "returns": "Duration",
+      "description": "Create an explicit duration.",
+      "behavior": "Result must be 1..31,536,000 seconds. Fractional input, zero, negative and excessive values fail. Chat/reward-filter windows must be at least 60 seconds; scheduler supports 1 second.",
+      "errors": "Throws: Duration must be positive and at most one year.",
+      "dry_run": "Pure construction, identical behavior.",
+      "example": "Duration::from_hours(1);",
+      "related": []
+    },
+    {
+      "namespace": "Duration",
+      "name": "from_days",
+      "signature": "Duration::from_days(amount: integer) -> Duration",
+      "parameters": [
+        {
+          "name": "amount",
+          "type": "integer",
+          "description": "Positive integer multiplied by 86400; checked overflow."
+        }
+      ],
+      "returns": "Duration",
+      "description": "Create an explicit duration.",
+      "behavior": "Result must be 1..31,536,000 seconds. Fractional input, zero, negative and excessive values fail. Chat/reward-filter windows must be at least 60 seconds; scheduler supports 1 second.",
+      "errors": "Throws: Duration must be positive and at most one year.",
+      "dry_run": "Pure construction, identical behavior.",
+      "example": "Duration::from_days(1);",
+      "related": []
+    },
+    {
+      "namespace": "Duration",
+      "name": "from_weeks",
+      "signature": "Duration::from_weeks(amount: integer) -> Duration",
+      "parameters": [
+        {
+          "name": "amount",
+          "type": "integer",
+          "description": "Positive integer multiplied by 604800; checked overflow."
+        }
+      ],
+      "returns": "Duration",
+      "description": "Create an explicit duration.",
+      "behavior": "Result must be 1..31,536,000 seconds. Fractional input, zero, negative and excessive values fail. Chat/reward-filter windows must be at least 60 seconds; scheduler supports 1 second.",
+      "errors": "Throws: Duration must be positive and at most one year.",
+      "dry_run": "Pure construction, identical behavior.",
+      "example": "Duration::from_weeks(1);",
+      "related": []
+    },
+    {
+      "namespace": "UserFilter",
+      "name": "create",
+      "signature": "UserFilter::create() -> UserFilter",
+      "parameters": [],
+      "returns": "UserFilter",
+      "description": "Construct an empty filter.",
+      "behavior": "Default message and character minima are zero; no reward restriction.",
+      "errors": "No host call; pure value.",
+      "dry_run": "Identical.",
+      "example": "UserFilter::create();",
+      "related": []
+    },
+    {
+      "namespace": "RewardFilter",
+      "name": "create",
+      "signature": "RewardFilter::create() -> RewardFilter",
+      "parameters": [],
+      "returns": "RewardFilter",
+      "description": "Construct an empty filter.",
+      "behavior": "Default min_count is zero, alias/window unset, statuses empty; empty statuses means all statuses. A reward predicate only filters eligibility when min_count > 0.",
+      "errors": "No host call; pure value.",
+      "dry_run": "Identical.",
+      "example": "RewardFilter::create();",
+      "related": []
+    },
+    {
+      "namespace": "UserFilter",
+      "name": "min_messages",
+      "signature": "UserFilter.min_messages(minimum: integer) -> UserFilter",
+      "parameters": [
+        {
+          "name": "minimum",
+          "type": "integer",
+          "description": "Minimum messages in the outer recent-chatters window."
+        }
+      ],
+      "returns": "UserFilter",
+      "description": "Return an updated filter.",
+      "behavior": "Builder returns a new value; chain it or assign it. Counts must be nonnegative when queried. No follower/subscriber filter exists.",
+      "errors": "Negative counts fail at query, not construction.",
+      "dry_run": "Identical.",
+      "example": "UserFilter::create().min_messages(2);",
+      "related": []
+    },
+    {
+      "namespace": "UserFilter",
+      "name": "min_characters",
+      "signature": "UserFilter.min_characters(minimum: integer) -> UserFilter",
+      "parameters": [
+        {
+          "name": "minimum",
+          "type": "integer",
+          "description": "Minimum total recorded char_count in the outer window."
+        }
+      ],
+      "returns": "UserFilter",
+      "description": "Return an updated filter.",
+      "behavior": "Builder returns a new value; chain it or assign it. Counts must be nonnegative when queried. No follower/subscriber filter exists.",
+      "errors": "Negative counts fail at query, not construction.",
+      "dry_run": "Identical.",
+      "example": "UserFilter::create().min_characters(2);",
+      "related": []
+    },
+    {
+      "namespace": "UserFilter",
+      "name": "reward_redemptions",
+      "signature": "UserFilter.reward_redemptions(filter: RewardFilter) -> UserFilter",
+      "parameters": [
+        {
+          "name": "filter",
+          "type": "RewardFilter",
+          "description": "Reward-history restriction combined with chat activity."
+        }
+      ],
+      "returns": "UserFilter",
+      "description": "Return an updated filter.",
+      "behavior": "Builder returns a new value; chain it or assign it. Counts must be nonnegative when queried. No follower/subscriber filter exists.",
+      "errors": "Negative counts fail at query, not construction.",
+      "dry_run": "Identical.",
+      "example": "UserFilter::create().reward_redemptions(RewardFilter::create().min_count(1));",
+      "related": []
+    },
+    {
+      "namespace": "RewardFilter",
+      "name": "reward",
+      "signature": "RewardFilter.reward(alias: string) -> RewardFilter",
+      "parameters": [
+        {
+          "name": "alias",
+          "type": "string",
+          "description": "Restrict to this channel's reward alias; omitted means any reward."
+        }
+      ],
+      "returns": "RewardFilter",
+      "description": "Return an updated reward filter.",
+      "behavior": "Builder returns a new value; counts and windows validated when queried. This queries channel fulfillment/redemption history, including SCRIPT origin. No delivery guarantee follows from a count.",
+      "errors": "statuses throws on non-string array items; invalid_reward_filter for negative counts or window < 60 at query.",
+      "dry_run": "Identical.",
+      "example": "RewardFilter::create().reward(\"secret_case\");",
+      "related": []
+    },
+    {
+      "namespace": "RewardFilter",
+      "name": "statuses",
+      "signature": "RewardFilter.statuses(statuses: array<string>) -> RewardFilter",
+      "parameters": [
+        {
+          "name": "statuses",
+          "type": "array<string>",
+          "description": "Match any given domain status; empty means all. PENDING, MANUAL_HOLD, ORDER_CREATED, COMPLETED, FAILED_REFUND, FAILED_PENALTY. Unknown strings simply match nothing, no enum validation."
+        }
+      ],
+      "returns": "RewardFilter",
+      "description": "Return an updated reward filter.",
+      "behavior": "Builder returns a new value; counts and windows validated when queried. This queries channel fulfillment/redemption history, including SCRIPT origin. No delivery guarantee follows from a count.",
+      "errors": "statuses throws on non-string array items; invalid_reward_filter for negative counts or window < 60 at query.",
+      "dry_run": "Identical.",
+      "example": "RewardFilter::create().statuses([\"COMPLETED\"]);",
+      "related": []
+    },
+    {
+      "namespace": "RewardFilter",
+      "name": "min_count",
+      "signature": "RewardFilter.min_count(minimum: integer) -> RewardFilter",
+      "parameters": [
+        {
+          "name": "minimum",
+          "type": "integer",
+          "description": "At least this many redemptions; nonnegative, zero disables reward-history predicate."
+        }
+      ],
+      "returns": "RewardFilter",
+      "description": "Return an updated reward filter.",
+      "behavior": "Builder returns a new value; counts and windows validated when queried. This queries channel fulfillment/redemption history, including SCRIPT origin. No delivery guarantee follows from a count.",
+      "errors": "statuses throws on non-string array items; invalid_reward_filter for negative counts or window < 60 at query.",
+      "dry_run": "Identical.",
+      "example": "RewardFilter::create().min_count(1);",
+      "related": []
+    },
+    {
+      "namespace": "RewardFilter",
+      "name": "during",
+      "signature": "RewardFilter.during(window: Duration) -> RewardFilter",
+      "parameters": [
+        {
+          "name": "window",
+          "type": "Duration",
+          "description": "Separate redemption window, 60 seconds..365 days. Omitted means all stored history, not the outer chat window."
+        }
+      ],
+      "returns": "RewardFilter",
+      "description": "Return an updated reward filter.",
+      "behavior": "Builder returns a new value; counts and windows validated when queried. This queries channel fulfillment/redemption history, including SCRIPT origin. No delivery guarantee follows from a count.",
+      "errors": "statuses throws on non-string array items; invalid_reward_filter for negative counts or window < 60 at query.",
+      "dry_run": "Identical.",
+      "example": "RewardFilter::create().during(Duration::from_days(7));",
+      "related": []
+    },
+    {
+      "namespace": "ctx.current_match",
+      "name": "last_rounds",
+      "signature": "ctx.current_match.last_rounds(count: integer) -> array<RoundRecord>",
+      "parameters": [
+        {
+          "name": "count",
+          "type": "integer",
+          "description": "0..256, zero returns []."
+        }
+      ],
+      "returns": "array<RoundRecord>",
+      "description": "Read the most recent completed observed rounds.",
+      "behavior": "Oldest to newest within the returned suffix. Missing observations are not invented. Check indices for consecutiveness. current_match may be () and must be guarded before calling.",
+      "errors": "Throws: Round count must be 0..256.",
+      "dry_run": "Reads supplied test context.",
+      "example": "ctx.current_match.last_rounds(3);",
+      "related": []
+    }
+  ]
+}
