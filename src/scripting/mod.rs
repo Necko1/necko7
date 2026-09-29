@@ -1,5 +1,8 @@
 //! Channel-owned automation. User code only runs on bounded blocking workers.
 pub mod api;
+pub mod history;
+#[cfg(test)]
+mod history_tests;
 #[cfg(test)]
 mod documentation_tests;
 #[cfg(test)]

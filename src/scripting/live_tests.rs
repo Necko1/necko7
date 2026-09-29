@@ -371,6 +371,7 @@ async fn live_postgres_match_dispatch_search_and_audit_policy() {
         auth(&channel),
         axum::extract::Query(api::ExecutionSearch {
             execution_search: "player_kill".into(),
+            include_executions: true,
         }),
     )
     .await

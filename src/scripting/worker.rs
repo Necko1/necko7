@@ -63,7 +63,7 @@ async fn timers(state: &AppState) -> Result<(), sqlx::Error> {
                     sqlx::query("UPDATE script_jobs SET status='blocked',reason='missing_on_timer' WHERE id=$1").bind(job).execute(&mut *tx).await?;
                     continue;
                 }
-                sqlx::query("INSERT INTO script_executions(id,project_id,revision,source,job_id,actor_type) VALUES($1,$2,$3,'timer',$4,'scheduler') ON CONFLICT(job_id) DO NOTHING")
+                sqlx::query("INSERT INTO script_executions(id,project_id,revision,source,job_id,actor_type) VALUES($1,$2,$3,'timer',$4,'scheduler') ON CONFLICT(job_id) WHERE status <> 'skipped' DO NOTHING")
                     .bind(Uuid::new_v4()).bind(project).bind(revision).bind(job).execute(&mut *tx).await?;
                 sqlx::query("UPDATE script_jobs SET status='queued' WHERE id=$1")
                     .bind(job)
@@ -129,11 +129,7 @@ pub(super) async fn step(state: Arc<AppState>) -> Result<bool, sqlx::Error> {
         .bind(job)
         .execute(&mut *tx)
         .await?;
-        // A blocked job has no actual execution yet; permit a new manual execution.
-        sqlx::query("UPDATE script_executions SET job_id=NULL WHERE id=$1")
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
+        // The partial unique index permits manual admission while retaining this skipped attempt.
         tx.commit().await?;
         return Ok(true);
     }

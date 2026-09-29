@@ -37,13 +37,20 @@ pub fn router() -> Router<Arc<AppState>> {
             "/broadcasters/{channel_id}/scripts",
             get(list).post(command),
         )
+        .route("/broadcasters/{channel_id}/scripts/executions", get(execution_history))
         .layer(DefaultBodyLimit::max(512 * 1024))
 }
-#[derive(Default, Deserialize)]
+#[derive(Deserialize)]
 pub struct ExecutionSearch {
     #[serde(default)]
     pub execution_search: String,
+    #[serde(default = "include_executions")]
+    pub include_executions: bool,
 }
+impl Default for ExecutionSearch {
+    fn default() -> Self { Self { execution_search: String::new(), include_executions: true } }
+}
+fn include_executions() -> bool { true }
 pub async fn list(
     State(state): State<Arc<AppState>>,
     auth: AuthorizedChannel,
@@ -57,11 +64,11 @@ pub async fn list(
     let pool = state.db.pool();
     let projects:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(p) || jsonb_build_object('live_files',r.files) FROM script_projects p LEFT JOIN script_revisions r ON r.project_id=p.id AND r.revision=p.active_revision WHERE channel_id=$1 AND deleted_at IS NULL ORDER BY p.created_at").bind(&auth.channel_id).fetch_all(pool).await.map_err(db)?;
     let revisions:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('project_id',r.project_id,'revision',revision,'has_on_event',has_on_event,'has_on_timer',has_on_timer,'created_at',r.created_at) FROM script_revisions r JOIN script_projects p ON p.id=r.project_id WHERE p.channel_id=$1 ORDER BY r.created_at DESC LIMIT 500").bind(&auth.channel_id).fetch_all(pool).await.map_err(db)?;
-    let jobs:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(j) FROM script_jobs j JOIN script_projects p ON p.id=j.project_id WHERE p.channel_id=$1 ORDER BY j.created_at DESC LIMIT 500").bind(&auth.channel_id).fetch_all(pool).await.map_err(db)?;
+    let jobs = super::history::jobs(pool, &auth.channel_id).await.map_err(db)?;
     let storage:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(s) FROM script_storage s JOIN script_projects p ON p.id=s.project_id WHERE p.channel_id=$1 ORDER BY s.key LIMIT 2000").bind(&auth.channel_id).fetch_all(pool).await.map_err(db)?;
     // Search retained history before limiting it, rather than searching only the latest 200.
-    let mut executions:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(e) || jsonb_build_object('event',s.context->'events'->e.event_index,'source_meta',s.context->'source') FROM script_executions e JOIN script_projects p ON p.id=e.project_id LEFT JOIN script_snapshots s ON s.id=e.snapshot_id WHERE p.channel_id=$1 AND ($2='' OR strpos(lower((to_jsonb(e) || jsonb_build_object('event',s.context->'events'->e.event_index,'source_meta',s.context->'source'))::text || p.name),lower($2))>0) ORDER BY e.sequence DESC LIMIT 200").bind(&auth.channel_id).bind(search).fetch_all(pool).await.map_err(db)?;
-    let reports:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(e) FROM script_editor_reports e JOIN script_projects p ON p.id=e.project_id WHERE p.channel_id=$1 AND ($2='' OR strpos(lower(to_jsonb(e)::text || p.name),lower($2))>0) ORDER BY e.created_at DESC LIMIT 100").bind(&auth.channel_id).bind(search).fetch_all(pool).await.map_err(db)?;
+    let mut executions:Vec<Value> = if filter.include_executions { sqlx::query_scalar("SELECT to_jsonb(e) || jsonb_build_object('event',s.context->'events'->e.event_index,'source_meta',s.context->'source') FROM script_executions e JOIN script_projects p ON p.id=e.project_id LEFT JOIN script_snapshots s ON s.id=e.snapshot_id WHERE p.channel_id=$1 AND ($2='' OR strpos(lower((to_jsonb(e) || jsonb_build_object('event',s.context->'events'->e.event_index,'source_meta',s.context->'source'))::text || p.name),lower($2))>0) ORDER BY e.sequence DESC LIMIT 200").bind(&auth.channel_id).bind(search).fetch_all(pool).await.map_err(db)? } else { vec![] };
+    let reports:Vec<Value> = if filter.include_executions { sqlx::query_scalar("SELECT to_jsonb(e) FROM script_editor_reports e JOIN script_projects p ON p.id=e.project_id WHERE p.channel_id=$1 AND ($2='' OR strpos(lower(to_jsonb(e)::text || p.name),lower($2))>0) ORDER BY e.created_at DESC LIMIT 100").bind(&auth.channel_id).bind(search).fetch_all(pool).await.map_err(db)? } else { vec![] };
     executions.extend(reports);
     executions.sort_by(|a, b| b["created_at"].as_str().cmp(&a["created_at"].as_str()));
     executions.truncate(200);
@@ -70,6 +77,14 @@ pub async fn list(
     Ok(Json(
         json!({"projects":projects,"revisions":revisions,"jobs":jobs,"storage":storage,"executions":executions,"matches":matches,"snapshots":snapshots}),
     ))
+}
+pub async fn execution_history(
+    State(state): State<Arc<AppState>>, auth: AuthorizedChannel,
+    Query(filter): Query<super::history::Filter>,
+) -> Result<Json<Value>, ApiError> {
+    auth.require_editor()?;
+    filter.validate().map_err(bad)?;
+    Ok(Json(super::history::page(state.db.pool(), &auth.channel_id, &filter).await.map_err(db)?))
 }
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]

@@ -86,9 +86,13 @@ async fn editor_scripts_access_and_owner_only_device_authority_through_http() {
         .with_state(state);
     let scripts = format!("/broadcasters/{channel}/scripts");
     let cs2 = format!("/broadcasters/{channel}/cs2");
+    for session in [owner, editor] {
+        assert_eq!(request(&router, "GET", &format!("{scripts}/executions"), session, Value::Null, None).await.0, StatusCode::OK);
+    }
     for session in [Some(sessions[2]), Some(sessions[3]), None] {
         for (method, path, body) in [
             ("GET", scripts.clone(), Value::Null),
+            ("GET", format!("{scripts}/executions"), Value::Null),
             (
                 "POST",
                 scripts.clone(),
