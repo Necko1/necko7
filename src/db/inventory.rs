@@ -446,8 +446,9 @@ impl Db {
     }
 
     pub async fn claim_inventory_attempt_chat(&self, custom_id: &str, event_key: &str) -> DbResult<bool> {
-        Ok(sqlx::query("INSERT INTO inventory_attempt_chat_events (custom_id, event_key) SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM inventory_order_attempts a JOIN inventory_items i ON i.id=a.inventory_id JOIN redemptions r ON r.fulfillment_id=i.redemption_id WHERE a.custom_id=$1 AND r.origin='TWITCH') ON CONFLICT DO NOTHING")
-            .bind(custom_id).bind(event_key).execute(&self.pool).await?.rows_affected() > 0)
+        let script_allowed = crate::messages::inventory_chat_allowed("SCRIPT", event_key);
+        Ok(sqlx::query("INSERT INTO inventory_attempt_chat_events (custom_id, event_key) SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM inventory_order_attempts a JOIN inventory_items i ON i.id=a.inventory_id JOIN redemptions r ON r.fulfillment_id=i.redemption_id WHERE a.custom_id=$1 AND (r.origin='TWITCH' OR (r.origin='SCRIPT' AND $3))) ON CONFLICT DO NOTHING")
+            .bind(custom_id).bind(event_key).bind(script_allowed).execute(&self.pool).await?.rows_affected() > 0)
     }
 
     pub async fn schedule_market_attempt_poll(&self, custom_id: &str) -> DbResult<()> {
@@ -763,6 +764,103 @@ mod tests {
         sqlx::query("UPDATE inventory_items SET lifecycle_status='ORDER_PENDING', market_custom_id=$2 WHERE redemption_id=$1")
             .bind(redemption).bind(&custom_id).execute(db.pool()).await.unwrap();
         (redemption, custom_id)
+    }
+
+    async fn script_inventory_fixture() -> (Db, Uuid, Uuid, String) {
+        let pool = sqlx::PgPool::connect(&std::env::var("TEST_DATABASE_URL").unwrap()).await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let db = Db { pool };
+        let channel = format!("script-delivery-{}", Uuid::new_v4());
+        let reward = Uuid::new_v4();
+        let project = Uuid::new_v4();
+        let viewer = format!("viewer-{}", Uuid::new_v4());
+        sqlx::query("INSERT INTO users (twitch_id, login) VALUES ($1, 'streamer')")
+            .bind(&channel).execute(db.pool()).await.unwrap();
+        sqlx::query("INSERT INTO broadcasters (channel_id, channel_login, user_access_token, refresh_token, created_at, updated_at) VALUES ($1,$1,'test','test',NOW(),NOW())")
+            .bind(&channel).execute(db.pool()).await.unwrap();
+        sqlx::query("INSERT INTO rewards (twitch_id, is_paused, streamer_id, market_item_name, twitch_title, twitch_description, current_market_price, permissible_market_price_deviation, twitch_price_markup_percentage, global_cooldown_seconds, max_redemptions_per_stream, max_redemptions_per_user_per_stream, created_at, updated_at) VALUES ($1,false,$2,'AK-47 | Redline','Redline','',2500,10,0,0,1,1,NOW(),NOW())")
+            .bind(reward).bind(&channel).execute(db.pool()).await.unwrap();
+        sqlx::query("INSERT INTO script_projects (id, channel_id, name) VALUES ($1,$2,'Delivery test')")
+            .bind(project).bind(&channel).execute(db.pool()).await.unwrap();
+        (db, reward, project, viewer)
+    }
+
+    async fn new_script_inventory(db: &Db, reward: Uuid, project: Uuid, viewer: &str, mode: &str) -> Uuid {
+        let fulfillment = Uuid::new_v4();
+        sqlx::query("INSERT INTO redemptions (fulfillment_id, twitch_reward_id, user_id, user_login, user_trade_link, twitch_points_cost, origin, script_project_id, script_revision, script_execution_id, status, created_at, updated_at) VALUES ($1,$2,$3,'viewer','',0,'SCRIPT',$4,1,$5,'PENDING',NOW(),NOW())")
+            .bind(fulfillment).bind(reward).bind(viewer).bind(project).bind(Uuid::new_v4())
+            .execute(db.pool()).await.unwrap();
+        db.create_inventory_item(fulfillment, "AK-47 | Redline", 2750, mode, false).await.unwrap();
+        fulfillment
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable PostgreSQL database in TEST_DATABASE_URL"]
+    async fn script_delivery_chat_claims_are_origin_scoped_and_durable() {
+        use crate::messages::*;
+        let (db, reward, project, viewer) = script_inventory_fixture().await;
+        let script = new_script_inventory(&db, reward, project, &viewer, "VIEWER").await;
+        let custom = db.begin_inventory_attempt(script, "test-link", true).await.unwrap().unwrap();
+        for event in [MSG_ORDERS_CREATED, MSG_ORDERS_REDEEMED, MSG_ORDERS_POOL_CREATED,
+            MSG_ORDERS_WAITING_VIEWER, MSG_ORDERS_WAITING_OPERATOR, MSG_ORDERS_REFUNDED, "unknown.event"] {
+            assert!(!db.claim_inventory_attempt_chat(&custom, event).await.unwrap(), "{event}");
+        }
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM inventory_attempt_chat_events WHERE custom_id=$1")
+            .bind(&custom).fetch_one(db.pool()).await.unwrap();
+        assert_eq!(count, 0, "suppressed announcements must not consume a delivery claim");
+        let transition = db.observe_market_attempt(script, &custom,
+            &market_observation("1", true, true, false, None, None)).await.unwrap();
+        assert!(transition.order_created && transition.trade_created && transition.chat_eligible);
+        let (first, concurrent) = tokio::join!(
+            db.claim_inventory_attempt_chat(&custom, MSG_TRADES_CREATED),
+            db.claim_inventory_attempt_chat(&custom, MSG_TRADES_CREATED),
+        );
+        assert_ne!(first.unwrap(), concurrent.unwrap(), "one concurrent sender wins");
+        let reconnected = Db { pool: sqlx::PgPool::connect(&std::env::var("TEST_DATABASE_URL").unwrap()).await.unwrap() };
+        assert!(!reconnected.claim_inventory_attempt_chat(&custom, MSG_TRADES_CREATED).await.unwrap());
+        let acceptance = db.observe_market_attempt(script, &custom,
+            &market_observation("1", true, true, true, None, None)).await.unwrap();
+        assert!(acceptance.trade_accepted && acceptance.chat_eligible);
+        assert!(db.claim_inventory_attempt_chat(&custom, MSG_TRADES_ACCEPTED).await.unwrap());
+        assert!(!db.claim_inventory_attempt_chat(&custom, MSG_TRADES_ACCEPTED).await.unwrap());
+        for event in [MSG_TRADES_FAILED_BUYER, MSG_TRADES_FAILED_SELLER, MSG_TRADES_REVERTED_BUYER,
+            MSG_TRADES_REVERTED_SELLER, MSG_ORDERS_RECONCILIATION_REQUIRED] {
+            assert!(db.claim_inventory_attempt_chat(&custom, event).await.unwrap(), "{event}");
+            assert!(!db.claim_inventory_attempt_chat(&custom, event).await.unwrap(), "{event}");
+        }
+        db.observe_market_attempt(script, &custom, &market_observation("2", true, true, true, None, None)).await.unwrap();
+        assert!(!db.claim_inventory_twitch_fulfillment(script).await.unwrap(), "SCRIPT cannot update a Twitch redemption");
+        assert!(!db.reserve_inventory_refund(script, true).await.unwrap(), "SCRIPT has no points refund");
+        let (_, twitch_custom) = new_tracking_attempt(&db, reward, &viewer, false).await;
+        for event in [MSG_ORDERS_CREATED, MSG_TRADES_CREATED, MSG_TRADES_ACCEPTED, MSG_TRADES_FAILED_SELLER] {
+            assert!(db.claim_inventory_attempt_chat(&twitch_custom, event).await.unwrap(), "Twitch: {event}");
+            assert!(!db.claim_inventory_attempt_chat(&twitch_custom, event).await.unwrap());
+        }
+        assert!(!db.claim_inventory_attempt_chat("missing-attempt", MSG_TRADES_CREATED).await.unwrap());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable PostgreSQL database in TEST_DATABASE_URL"]
+    async fn script_inventory_missing_link_can_continue_without_retrigger() {
+        let (db, reward, project, viewer) = script_inventory_fixture().await;
+        let fulfillment = new_script_inventory(&db, reward, project, &viewer, "AUTO").await;
+        assert!(db.get_viewer_settings(&viewer).await.unwrap().trade_link.is_none());
+        assert!(db.require_inventory_trade_link(fulfillment).await.unwrap());
+        assert!(!db.require_inventory_trade_link(fulfillment).await.unwrap(), "only the transition should notify");
+        assert!(db.latest_inventory_attempt(fulfillment).await.unwrap().is_none());
+        let item = db.get_inventory_core(fulfillment).await.unwrap().unwrap();
+        let link = "https://steamcommunity.com/tradeoffer/new/?partner=22&token=xyz";
+        db.save_viewer_settings(&viewer, true, Some(link)).await.unwrap();
+        let saved = db.get_viewer_settings(&viewer).await.unwrap();
+        let custom = db.begin_inventory_attempt_as(fulfillment, saved.trade_link.as_deref().unwrap(), true,
+            "viewer", Some(&viewer)).await.unwrap().unwrap();
+        assert_eq!(custom, fulfillment.to_string());
+        let resumed = db.get_inventory_core(fulfillment).await.unwrap().unwrap();
+        assert_eq!(resumed.0, item.0);
+        assert_eq!(resumed.1, item.1);
+        assert_eq!(resumed.2, item.2);
+        assert!(db.begin_inventory_attempt(fulfillment, link, true).await.unwrap().is_none(), "no duplicate order");
+        assert!(!db.claim_inventory_attempt_chat(&custom, crate::messages::MSG_ORDERS_CREATED).await.unwrap());
     }
 
     #[tokio::test]

@@ -379,10 +379,14 @@ async fn project_scheduler_storage_and_fulfillment_contracts() {
         .unwrap()
         .unwrap();
     assert!(
-        !db.claim_inventory_attempt_chat(&second.to_string(), "orders_created")
+        !db.claim_inventory_attempt_chat(&second.to_string(), crate::messages::MSG_ORDERS_CREATED)
             .await
             .unwrap()
     );
+    assert!(db.claim_inventory_attempt_chat(&second.to_string(), crate::messages::MSG_TRADES_CREATED)
+        .await.unwrap());
+    assert!(!db.claim_inventory_attempt_chat(&second.to_string(), crate::messages::MSG_TRADES_CREATED)
+        .await.unwrap());
     let inherited:Value=sqlx::query_scalar("SELECT details FROM fulfillment_audit_events WHERE redemption_id=$1 AND event_type='inventory_created'").bind(second).fetch_one(pool).await.unwrap();
     assert_eq!(
         inherited["script_execution_id"],
