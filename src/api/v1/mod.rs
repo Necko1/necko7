@@ -7,6 +7,7 @@ pub mod redemptions;
 pub mod manual_orders;
 #[cfg(test)]
 mod manual_orders_tests;
+mod manual_preview_timing;
 pub mod stats;
 pub mod users;
 pub mod chat_stats;

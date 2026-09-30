@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use std::{
     collections::HashMap,
-    sync::atomic::{AtomicU16, Ordering},
+    sync::atomic::{AtomicU16, AtomicU64, Ordering},
 };
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -26,6 +26,8 @@ struct MockMarket {
     info: Arc<RwLock<Value>>,
     currency: Arc<RwLock<Option<String>>>,
     buy_status: Arc<AtomicU16>,
+    money_delay_ms: Arc<AtomicU64>,
+    search_delay_ms: Arc<AtomicU64>,
 }
 
 async fn response(
@@ -162,10 +164,15 @@ async fn manual_orders_database_api_and_mocked_delivery() {
         info: Arc::new(RwLock::new(json!({"success":false,"data":false}))),
         currency: Arc::new(RwLock::new(Some("RUB".into()))),
         buy_status: Arc::new(AtomicU16::new(200)),
+        money_delay_ms: Arc::default(),
+        search_delay_ms: Arc::default(),
     };
     let mock_router = Router::new()
-        .route("/get-money",get(|State(mock):State<MockMarket>| async move { Json(json!({"success":true,"money":1000,"money_settlement":0,"currency":mock.currency.read().clone()})) }))
+        .route("/get-money",get(|State(mock):State<MockMarket>| async move {
+            tokio::time::sleep(std::time::Duration::from_millis(mock.money_delay_ms.load(Ordering::SeqCst))).await;
+            Json(json!({"success":true,"money":1000,"money_settlement":0,"currency":mock.currency.read().clone()})) }))
         .route("/search-item-by-hash-name",get(|State(mock):State<MockMarket>,Query(query):Query<HashMap<String,String>>| async move {
+            tokio::time::sleep(std::time::Duration::from_millis(mock.search_delay_ms.load(Ordering::SeqCst))).await;
             Json(json!({"success":true,"currency":mock.currency.read().clone(),"data":[
                 {"market_hash_name":query["hash_name"],"price":3000,"class":1,"instance":0,"count":1},
                 {"market_hash_name":query["hash_name"],"price":2500,"class":2,"instance":0,"count":1}]}))
@@ -254,6 +261,47 @@ async fn manual_orders_database_api_and_mocked_delivery() {
     assert_eq!(preview.0, StatusCode::OK);
     assert_eq!(preview.1["min_price"], 2500);
     assert_eq!(preview.1["chance_to_transfer"], 80);
+    // Read-only latency reproduction: this localhost mock delays responses;
+    // no buy request has been issued, and production latency is not inferred.
+    mock.money_delay_ms.store(4000, Ordering::SeqCst);
+    mock.search_delay_ms.store(4500, Ordering::SeqCst);
+    let timed = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("{base}/preview"))
+                .header("Content-Type", "application/json")
+                .header("Cookie", format!("session_id={editor}"))
+                .body(Body::from(
+                    json!({"item_name":"Glock-18 | Vogue (Field-Tested)"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(timed.status(), StatusCode::OK);
+    let header = timed.headers()["Server-Timing"].to_str().unwrap();
+    println!("MOCK_PREVIEW_SERVER_TIMING: {header}");
+    let measurements: HashMap<&str, f64> = header
+        .split(", ")
+        .map(|metric| {
+            let (name, duration) = metric.split_once(";dur=").unwrap();
+            (name, duration.parse().unwrap())
+        })
+        .collect();
+    assert!(measurements["money_http"] >= 3900.0);
+    assert!(measurements["search_http"] >= 4400.0);
+    assert!(measurements["total"] >= 8400.0);
+    assert!(
+        measurements["auth_extract"] + measurements["settings_db"] + measurements["local_other"]
+            < 1000.0
+    );
+    assert!(measurements["money_parse"] + measurements["search_parse"] < 100.0);
+    assert!(Uuid::parse_str(timed.headers()["X-Preview-Request-Id"].to_str().unwrap()).is_ok());
+    assert!(mock.calls.lock().is_empty());
+    mock.money_delay_ms.store(0, Ordering::SeqCst);
+    mock.search_delay_ms.store(0, Ordering::SeqCst);
     *mock.currency.write() = None;
     assert_eq!(
         response(
@@ -285,8 +333,15 @@ async fn manual_orders_database_api_and_mocked_delivery() {
     assert_eq!(first.attempts[0].max_price, 2750);
     assert_eq!(first.attempts[0].chance_to_transfer, 81);
     assert!(first.can_retry && first.can_close);
-    assert!(sqlx::query("UPDATE manual_orders SET closed_at=NOW(),closed_by='qa',close_reason=NULL WHERE id=$1")
-        .bind(id).execute(db.pool()).await.is_err());
+    assert!(
+        sqlx::query(
+            "UPDATE manual_orders SET closed_at=NOW(),closed_by='qa',close_reason=NULL WHERE id=$1"
+        )
+        .bind(id)
+        .execute(db.pool())
+        .await
+        .is_err()
+    );
     let fields: (Option<Uuid>, Option<String>) = sqlx::query_as(
         "SELECT redemption_id,viewer_id FROM inventory_items WHERE manual_order_id=$1",
     )

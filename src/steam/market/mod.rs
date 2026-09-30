@@ -7,6 +7,20 @@ pub mod account;
 pub mod prices;
 pub mod errors;
 
+/// Read-only request timing. Contains no URL, API key, recipient or response body.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MarketReadTimings {
+    pub limiter_ms: f64,
+    pub http_ms: f64,
+    pub body_ms: f64,
+    pub parse_ms: f64,
+    pub total_ms: f64,
+}
+
+pub(crate) fn elapsed_ms(start: std::time::Instant) -> f64 {
+    start.elapsed().as_secs_f64() * 1000.0
+}
+
 pub struct MarketClient {
     http_client: reqwest::Client,
     api_base: String,

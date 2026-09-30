@@ -1,3 +1,4 @@
+use super::manual_preview_timing::PreviewTiming;
 use crate::{
     api::{
         error::ApiError,
@@ -14,8 +15,9 @@ use crate::{
     steam::{market, trade_link::TradeLink},
 };
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::State,
+    middleware,
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
@@ -152,20 +154,25 @@ fn normalize_metadata(description: &mut String, tags: &mut Vec<String>) -> Resul
 async fn account(
     state: &Arc<AppState>,
     channel: &str,
+    timing: Option<&PreviewTiming>,
 ) -> Result<(BroadcasterSetting, String), ApiError> {
-    let settings = state
-        .db
-        .get_broadcaster_setting(channel)
-        .await?
-        .ok_or_else(|| invalid("market_not_configured", "channel_id"))?;
+    let started = std::time::Instant::now();
+    let settings = state.db.get_broadcaster_setting(channel).await;
+    if let Some(timing) = timing {
+        timing.record("settings_db", market::elapsed_ms(started));
+    }
+    let settings = settings?.ok_or_else(|| invalid("market_not_configured", "channel_id"))?;
     if settings.market_api_key.trim().is_empty() {
         return Err(invalid("market_not_configured", "channel_id"));
     }
-    let balance = state
+    let (balance, measured) = state
         .market_client
-        .get_money(&settings.market_api_key)
-        .await
-        .map_err(|_| invalid("market_unavailable", "channel_id"))?;
+        .get_money_measured(&settings.market_api_key)
+        .await;
+    if let Some(timing) = timing {
+        timing.market("money", measured);
+    }
+    let balance = balance.map_err(|_| invalid("market_unavailable", "channel_id"))?;
     if !balance.success {
         return Err(invalid("market_unavailable", "channel_id"));
     }
@@ -184,8 +191,9 @@ async fn quote(
     state: &Arc<AppState>,
     channel: &str,
     body: PreviewBody,
+    timing: Option<&PreviewTiming>,
 ) -> Result<PreviewResponse, ApiError> {
-    let (settings, currency) = account(state, channel).await?;
+    let (settings, currency) = account(state, channel, timing).await?;
     if body
         .currency
         .as_ref()
@@ -197,11 +205,14 @@ async fn quote(
     if item_name.is_empty() || item_name.chars().count() > 512 {
         return Err(invalid("invalid_item", "item_name"));
     }
-    let found = state
+    let (found, measured) = state
         .market_client
-        .search_item(&settings.market_api_key, item_name)
-        .await
-        .map_err(|_| invalid("market_unavailable", "item_name"))?;
+        .search_item_measured(&settings.market_api_key, item_name)
+        .await;
+    if let Some(timing) = timing {
+        timing.market("search", measured);
+    }
+    let found = found.map_err(|_| invalid("market_unavailable", "item_name"))?;
     if !found.success {
         return Err(invalid("market_unavailable", "item_name"));
     }
@@ -277,7 +288,7 @@ pub async fn catalog(
     QueryArg(query): QueryArg<CatalogQuery>,
 ) -> Result<Json<CatalogResponse>, ApiError> {
     auth.require_editor()?;
-    let (_, currency) = account(&state, &auth.channel_id).await?;
+    let (_, currency) = account(&state, &auth.channel_id, None).await?;
     let prices = state
         .get_cached_or_fetch_prices(&currency)
         .await
@@ -326,10 +337,14 @@ pub async fn catalog(
 pub async fn preview(
     auth: AuthorizedChannel,
     State(state): State<Arc<AppState>>,
+    Extension(timing): Extension<PreviewTiming>,
     JsonArg(body): JsonArg<PreviewBody>,
 ) -> Result<Json<PreviewResponse>, ApiError> {
+    timing.extracted();
     auth.require_editor()?;
-    Ok(Json(quote(&state, &auth.channel_id, body).await?))
+    Ok(Json(
+        quote(&state, &auth.channel_id, body, Some(&timing)).await?,
+    ))
 }
 
 #[utoipa::path(get, path="/api/v1/broadcasters/{channel_id}/manual-orders", tag="Manual Orders", params(("channel_id"=String,Path),OrderQuery),
@@ -419,6 +434,7 @@ pub async fn create(
             chance_to_transfer: Some(body.parameters.chance_to_transfer),
             trade_link: Some(body.parameters.trade_link.clone()),
         },
+        None,
     )
     .await?;
     let (id, new, matches) = state
@@ -592,7 +608,7 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route(
             "/broadcasters/{channel_id}/manual-orders/preview",
-            post(preview),
+            post(preview).layer(middleware::from_fn(super::manual_preview_timing::measure)),
         )
         .route(
             "/broadcasters/{channel_id}/manual-orders/{id}",
