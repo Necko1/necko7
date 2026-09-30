@@ -4,6 +4,9 @@ pub mod permissions;
 pub mod proxy;
 pub mod rewards;
 pub mod redemptions;
+pub mod manual_orders;
+#[cfg(test)]
+mod manual_orders_tests;
 pub mod stats;
 pub mod users;
 pub mod chat_stats;
@@ -21,6 +24,8 @@ use crate::api::error::{ErrorBody, ErrorDetail};
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        manual_orders::catalog, manual_orders::preview, manual_orders::list, manual_orders::detail, manual_orders::audit,
+        manual_orders::create, manual_orders::retry, manual_orders::metadata, manual_orders::close,
         cs2::status, cs2::create_code, cs2::pair, cs2::revoke, cs2::ingest, cs2::unpair, cs2::heartbeat,
         crate::api::auth::bot_login_redirect,
         crate::api::auth::streamer_login_redirect,
@@ -80,6 +85,10 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         viewer_profile::request_operator_inventory_refund,
     ),
     components(schemas(
+        manual_orders::CreateManualOrder, manual_orders::MetadataBody, manual_orders::CloseBody, manual_orders::PreviewBody,
+        manual_orders::PreviewResponse, manual_orders::CatalogItem, manual_orders::CatalogResponse, manual_orders::OrderList,
+        crate::db::manual_orders::AttemptParameters, crate::db::manual_orders::ManualOrder,
+        crate::db::manual_orders::ManualAttempt, crate::db::manual_orders::ManualAuditEvent,
         cs2::Status, cs2::PairingCode, cs2::PairRequest, cs2::PairResponse, cs2::Channel, cs2::Envelope, crate::db::cs2::Device,
         crate::api::auth::LogoutResponse,
         users::UserResponse,
@@ -163,6 +172,7 @@ use crate::api::error::{ErrorBody, ErrorDetail};
         crate::db::channel_logs::ChannelLogCategory,
     )),
     tags(
+        (name = "Manual Orders", description = "Operator-created skin deliveries independent of Twitch rewards"),
         (name = "CS2", description = "Owner-managed desktop pairing and Ed25519-signed GSI; rewards coming soon"),
         (name = "Auth", description = "Twitch OAuth 2.0 authentication flows and session management"),
         (name = "Users", description = "User profile and session information"),
@@ -201,6 +211,7 @@ impl utoipa::Modify for SecurityAddon {
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
+        .merge(manual_orders::router())
         .merge(cs2::router())
         .merge(crate::scripting::api::router())
         .route("/me/inventory/{inventory_id}/discard",post(viewer_profile::discard_viewer_inventory))

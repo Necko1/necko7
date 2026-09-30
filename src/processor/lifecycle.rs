@@ -67,7 +67,10 @@ pub async fn start_background_tasks(state: Arc<AppState>) {
         loop {
             tokio::select! {
                 _ = market_token.cancelled() => return,
-                _ = interval.tick() => poll_due_inventory_attempts(state_market.clone()).await,
+                _ = interval.tick() => {
+                    poll_due_inventory_attempts(state_market.clone()).await;
+                    crate::processor::manual_orders::recover_initial_orders(&state_market).await;
+                },
             }
         }
     });
@@ -239,7 +242,7 @@ async fn poll_due_inventory_attempts(state: Arc<AppState>) {
         if state.shutdown_token.is_cancelled() { return; }
         let worker_state = state.clone();
         running.spawn(async move {
-            if let Err(e) = inventory_fulfillment::reconcile(&worker_state, redemption_id, &custom_id).await {
+            if let Err(e) = inventory_fulfillment::reconcile_delivery(&worker_state, redemption_id, &custom_id).await {
                 warn!(error = %e, %custom_id, "Market attempt observation failed");
             }
             if let Err(e) = worker_state.db.schedule_market_attempt_poll(&custom_id).await {

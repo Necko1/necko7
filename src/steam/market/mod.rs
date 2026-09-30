@@ -9,6 +9,7 @@ pub mod errors;
 
 pub struct MarketClient {
     http_client: reqwest::Client,
+    api_base: String,
     limiter: DefaultKeyedRateLimiter<String>,
 }
 
@@ -17,9 +18,16 @@ impl MarketClient {
         let quota = Quota::with_period(Duration::from_millis(250)).unwrap();
 
         Self {
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::Client::builder().timeout(Duration::from_secs(30)).build().expect("Market HTTP client"),
+            api_base: "https://market.csgo.com/api/v2".into(),
             limiter: RateLimiter::keyed(quota),
         }
+    }
+    #[cfg(test)]
+    pub fn for_test(base: String) -> Self {
+        let mut client = Self::new();
+        client.api_base = base;
+        client
     }
 }
 
@@ -41,4 +49,4 @@ pub fn major_to_minor(amount: f64, currency: &str) -> i64 {
     } else { 100.0 };
 
     (amount * mul).round() as i64
-}
+}

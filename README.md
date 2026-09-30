@@ -88,6 +88,43 @@ OpenAPI specification:
 http(s)://<APP_URL>/api-docs/openapi.json
 ```
 
+## Manual deliveries
+
+The **Manual deliveries / Ручные выдачи** dashboard tab lets a channel OWNER or EDITOR choose an exact skin, review a Steam recipient and purchase parameters, and start delivery using that channel's Market account. It works with Twitch automation switched off. Recipients do not need an application login. No redemption, viewer inventory entry, Twitch notice or CS2 action is created.
+
+Routes under `/api/v1/broadcasters/{channel_id}/manual-orders` are documented in Swagger:
+
+| Method and suffix | Behavior |
+| --- | --- |
+| `GET /catalog` | Search the shared price catalog with `search`, `limit`, `offset` |
+| `POST /preview` | Validate recipient/parameters and fetch the exact current minimum; no purchase |
+| `GET /` | Paginated list with `search`, `status`, `tag`, `limit`, `offset` |
+| `POST /` | Save an order and launch its first attempt |
+| `GET /{id}`, `GET /{id}/audit` | Channel-scoped details, available actions and permanent history |
+| `POST /{id}/retry` | Explicit new attempt after a confirmed failure |
+| `PATCH /{id}` | Edit only description and tags in any status |
+| `POST /{id}/close` | Close safely with an obligatory reason; does not cancel/refund a Market purchase |
+
+Creation and retry require a UUID `request_id`. Reusing it with identical parameters returns the saved result; changing parameters with the same ID returns 409. `max_price` uses existing Market minor units (RUB ×100, USD/EUR ×1000), and `chance_to_transfer` is an integer from 0 through 100. Currency comes from the channel account; unknown currency is rejected. Price refreshes never increase an administrator's confirmed ceiling.
+
+Orders have their own `manual_orders` identity and share durable `inventory_items` / `inventory_order_attempts` tracking. Every attempt saves its ceiling, chance, destination and `custom_id` before calling Market. An untouched first attempt resumes after restart. A saved attempt with an unknown result is checked using the same `custom_id` without buying again. Further attempts always require an administrator. Accepted Steam trades remain pending until Market stage 2. Active or uncertain deliveries block retry and closing; classified failures permit retry, while confirmed terminal unclassified failures permit closing only.
+
+Deploy the backend with migration `20260930120000_manual_orders.sql` before deploying the frontend. Existing Twitch/Script identities and history remain valid. Manual audit is append-only and permanent; ordinary MANUAL logs follow normal retention and link to the order. API keys and trade tokens are excluded from those logs.
+
+Validation uses a disposable PostgreSQL database and a localhost Market mock, never real purchases:
+
+```powershell
+# Set TEST_DATABASE_URL to a disposable database and the required AppState
+# environment variables to dummy values, as described under Configuration.
+cargo test --offline
+cargo test --offline manual_orders -- --include-ignored --nocapture
+cargo test --offline db::inventory::tests -- --include-ignored --test-threads=1
+# From ../necko7-frontend:
+npm run typecheck
+npm run build
+npx playwright test tests/manualOrders.spec.ts
+```
+
 ## CS2 Integration
 
 The CS2 companion uses this backend's existing Axum API, session cookies, OWNER permissions, broadcaster relation, SQLx migrations and tracing. Migration `20260927120000_cs2_integration.sql` adds hashed one-time pairing codes, public-key devices and bounded replay sessions. It is applied by the normal startup migrator.

@@ -5,6 +5,7 @@ pub mod order_watcher;
 pub mod price_updater;
 pub mod redemption;
 pub mod inventory_fulfillment;
+pub mod manual_orders;
 pub mod chat;
 
 pub use lifecycle::{start_background_tasks, start_broadcaster_tasks, stop_broadcaster_tasks};

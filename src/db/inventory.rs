@@ -233,12 +233,17 @@ impl Db {
     }
 
     pub async fn latest_inventory_attempt(&self, redemption_id: Uuid) -> DbResult<Option<InventoryAttempt>> {
+        let Some(core) = self.get_inventory_core(redemption_id).await? else { return Ok(None); };
+        self.latest_delivery_attempt(core.0).await
+    }
+
+    pub async fn latest_delivery_attempt(&self, inventory_id: Uuid) -> DbResult<Option<InventoryAttempt>> {
         Ok(sqlx::query_as::<_, InventoryAttempt>(
             "SELECT a.custom_id, a.inventory_id, a.item_name, a.max_price, a.market_order_id,
                     a.status, a.outcome_kind, a.trade_link, a.trade_id, a.created_at
              FROM inventory_order_attempts a JOIN inventory_items i ON i.id = a.inventory_id
-             WHERE i.redemption_id = $1 ORDER BY a.attempt_id DESC LIMIT 1"
-        ).bind(redemption_id).fetch_optional(&self.pool).await?)
+             WHERE i.id = $1 ORDER BY a.attempt_id DESC LIMIT 1"
+        ).bind(inventory_id).fetch_optional(&self.pool).await?)
     }
     pub async fn get_inventory_core(&self, redemption_id: Uuid) -> DbResult<Option<(Uuid, String, i64, String, String, bool)>> {
         Ok(sqlx::query_as(
@@ -246,19 +251,35 @@ impl Db {
         ).bind(redemption_id).fetch_optional(&self.pool).await?)
     }
 
+    pub async fn get_delivery_core(&self, inventory_id: Uuid) -> DbResult<Option<(Uuid, String, i64, String, String, bool)>> {
+        Ok(sqlx::query_as(
+            "SELECT id, item_name, fixed_price, currency, fulfillment_mode, buyer_retry_allowed FROM inventory_items WHERE id = $1"
+        ).bind(inventory_id).fetch_optional(&self.pool).await?)
+    }
+
     pub async fn require_inventory_trade_link(&self, redemption_id: Uuid) -> DbResult<bool> {
-        let changed = sqlx::query("UPDATE inventory_items SET lifecycle_status = 'TRADE_LINK_REQUIRED' WHERE redemption_id = $1 AND lifecycle_status IN ('WAITING_VIEWER','ORDER_PENDING','RETRY_AVAILABLE','INSUFFICIENT_FUNDS')")
-            .bind(redemption_id).execute(&self.pool).await?;
+        let inventory_id = self.get_inventory_core(redemption_id).await?.ok_or(sqlx::Error::RowNotFound)?.0;
+        self.require_delivery_trade_link(inventory_id).await
+    }
+
+    pub async fn require_delivery_trade_link(&self, inventory_id: Uuid) -> DbResult<bool> {
+        let changed = sqlx::query("UPDATE inventory_items SET lifecycle_status = 'TRADE_LINK_REQUIRED' WHERE id = $1 AND lifecycle_status IN ('WAITING_VIEWER','ORDER_PENDING','RETRY_AVAILABLE','INSUFFICIENT_FUNDS')")
+            .bind(inventory_id).execute(&self.pool).await?;
         Ok(changed.rows_affected() > 0)
     }
 
     pub async fn require_inventory_reconciliation(&self, redemption_id: Uuid, custom_id: &str) -> DbResult<bool> {
+        let inventory_id = self.get_inventory_core(redemption_id).await?.ok_or(sqlx::Error::RowNotFound)?.0;
+        self.require_delivery_reconciliation(inventory_id, custom_id).await
+    }
+
+    pub async fn require_delivery_reconciliation(&self, inventory_id: Uuid, custom_id: &str) -> DbResult<bool> {
         let mut tx = self.pool.begin().await?;
-        let id: Uuid = sqlx::query_scalar("SELECT id FROM inventory_items WHERE redemption_id = $1 FOR UPDATE")
-            .bind(redemption_id).fetch_one(&mut *tx).await?;
+        let id: Uuid = sqlx::query_scalar("SELECT id FROM inventory_items WHERE id = $1 FOR UPDATE")
+            .bind(inventory_id).fetch_one(&mut *tx).await?;
         sqlx::query("UPDATE inventory_order_attempts SET status = 'RECONCILIATION_REQUIRED' WHERE inventory_id = $1 AND custom_id = $2 AND status IN ('CALLING','ORDER_CREATED','TRADE_WAITING')")
             .bind(id).bind(custom_id).execute(&mut *tx).await?;
-        let changed = sqlx::query("UPDATE inventory_items SET lifecycle_status = 'RECONCILIATION_REQUIRED' WHERE id = $1 AND market_custom_id = $2 AND lifecycle_status NOT IN ('RECONCILIATION_REQUIRED','DELIVERED','REFUNDING','REFUNDED')")
+        let changed = sqlx::query("UPDATE inventory_items SET lifecycle_status = 'RECONCILIATION_REQUIRED' WHERE id = $1 AND market_custom_id = $2 AND lifecycle_status NOT IN ('RECONCILIATION_REQUIRED','DELIVERED','REFUNDING','REFUNDED','CANCELLED','DISCARDED')")
             .bind(id).bind(custom_id).execute(&mut *tx).await?.rows_affected() > 0;
         tx.commit().await?;
         Ok(changed)
@@ -273,7 +294,14 @@ impl Db {
     }
 
     pub async fn begin_inventory_attempt_as(&self, redemption_id: Uuid, trade_link: &str, viewer_action: bool,
-        initiator_kind: &str, initiator_user_id: Option<&str>) -> DbResult<Option<String>> {
+        initiator_kind: &str, actor: Option<&str>) -> DbResult<Option<String>> {
+        let chance: i16 = sqlx::query_scalar("SELECT COALESCE((SELECT b.market_chance_to_transfer FROM redemptions r JOIN rewards rw ON rw.twitch_id=r.twitch_reward_id JOIN broadcaster_settings b ON b.channel_id=rw.streamer_id WHERE r.fulfillment_id=$1),0)::SMALLINT")
+            .bind(redemption_id).fetch_one(&self.pool).await?;
+        self.begin_inventory_attempt_with_chance(redemption_id, trade_link, viewer_action, initiator_kind, actor, chance).await
+    }
+
+    pub async fn begin_inventory_attempt_with_chance(&self, redemption_id: Uuid, trade_link: &str, viewer_action: bool,
+        initiator_kind: &str, initiator_user_id: Option<&str>, chance: i16) -> DbResult<Option<String>> {
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query(
             "SELECT id, lifecycle_status, fulfillment_mode, buyer_retry_allowed, last_action_at
@@ -316,10 +344,10 @@ impl Db {
         let item: (String, i64) = sqlx::query_as("SELECT item_name, fixed_price FROM inventory_items WHERE id = $1")
             .bind(inventory_id).fetch_one(&mut *tx).await?;
         sqlx::query(
-            "INSERT INTO inventory_order_attempts (custom_id, inventory_id, item_name, max_price, trade_link, status, next_poll_at, initiator_kind, initiator_user_id)
-             VALUES ($1, $2, $3, $4, $5, 'CALLING', NOW(), $6, $7)"
+            "INSERT INTO inventory_order_attempts (custom_id, inventory_id, item_name, max_price, trade_link, status, next_poll_at, initiator_kind, initiator_user_id, chance_to_transfer)
+             VALUES ($1, $2, $3, $4, $5, 'CALLING', NOW(), $6, $7, $8)"
         ).bind(&custom_id).bind(inventory_id).bind(&item.0).bind(item.1).bind(trade_link)
-            .bind(initiator_kind).bind(initiator_user_id).execute(&mut *tx).await?;
+            .bind(initiator_kind).bind(initiator_user_id).bind(chance).execute(&mut *tx).await?;
         sqlx::query("UPDATE inventory_items SET lifecycle_status = 'ORDER_PENDING', last_action_at = NOW(), market_custom_id = $2, market_order_id = NULL WHERE id = $1")
             .bind(inventory_id).bind(&custom_id).execute(&mut *tx).await?;
         tx.commit().await?;
@@ -327,9 +355,14 @@ impl Db {
     }
 
     pub async fn mark_attempt_rejected(&self, redemption_id: Uuid, custom_id: &str, kind: &str, detail: &str) -> DbResult<bool> {
+        let inventory_id = self.get_inventory_core(redemption_id).await?.ok_or(sqlx::Error::RowNotFound)?.0;
+        self.mark_delivery_rejected(inventory_id, custom_id, kind, detail).await
+    }
+
+    pub async fn mark_delivery_rejected(&self, inventory_id: Uuid, custom_id: &str, kind: &str, detail: &str) -> DbResult<bool> {
         let mut tx = self.pool.begin().await?;
-        let row = sqlx::query("SELECT id, lifecycle_status FROM inventory_items WHERE redemption_id = $1 FOR UPDATE")
-            .bind(redemption_id).fetch_one(&mut *tx).await?;
+        let row = sqlx::query("SELECT id, lifecycle_status FROM inventory_items WHERE id = $1 FOR UPDATE")
+            .bind(inventory_id).fetch_one(&mut *tx).await?;
         let inventory_id: Uuid = row.try_get("id")?;
         let lifecycle: String = row.try_get("lifecycle_status")?;
         let changed = sqlx::query("UPDATE inventory_order_attempts SET status = 'REJECTED', outcome_kind = $3, outcome_detail = $4, resolved_at = NOW(), next_poll_at = NULL WHERE inventory_id = $1 AND custom_id = $2 AND status = 'CALLING'")
@@ -339,16 +372,21 @@ impl Db {
             sqlx::query("UPDATE inventory_items SET lifecycle_status = $2 WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM inventory_order_attempts a WHERE a.inventory_id = $1 AND a.status IN ('CALLING','ORDER_CREATED','TRADE_WAITING','RECONCILIATION_REQUIRED'))")
                 .bind(inventory_id).bind(next).execute(&mut *tx).await?;
         }
-        sqlx::query("UPDATE redemptions SET status = 'PENDING', fail_cause = NULL, fail_description = NULL, updated_at = NOW() WHERE fulfillment_id = $1 AND status = 'ORDER_CREATED' AND EXISTS (SELECT 1 FROM inventory_items i WHERE i.redemption_id = $1 AND i.lifecycle_status IN ('RETRY_AVAILABLE','INSUFFICIENT_FUNDS','TRADE_LINK_REQUIRED'))")
-            .bind(redemption_id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE redemptions SET status = 'PENDING', fail_cause = NULL, fail_description = NULL, updated_at = NOW() WHERE fulfillment_id = (SELECT redemption_id FROM inventory_items WHERE id = $1) AND status = 'ORDER_CREATED' AND EXISTS (SELECT 1 FROM inventory_items i WHERE i.id = $1 AND i.lifecycle_status IN ('RETRY_AVAILABLE','INSUFFICIENT_FUNDS','TRADE_LINK_REQUIRED'))")
+            .bind(inventory_id).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(changed)
     }
 
     pub async fn mark_attempt_ambiguous(&self, redemption_id: Uuid, custom_id: &str, detail: &str) -> DbResult<()> {
+        let inventory_id = self.get_inventory_core(redemption_id).await?.ok_or(sqlx::Error::RowNotFound)?.0;
+        self.mark_delivery_ambiguous(inventory_id, custom_id, detail).await
+    }
+
+    pub async fn mark_delivery_ambiguous(&self, inventory_id: Uuid, custom_id: &str, detail: &str) -> DbResult<()> {
         let mut tx = self.pool.begin().await?;
-        let row = sqlx::query("SELECT id FROM inventory_items WHERE redemption_id = $1 FOR UPDATE")
-            .bind(redemption_id).fetch_one(&mut *tx).await?;
+        let row = sqlx::query("SELECT id FROM inventory_items WHERE id = $1 FOR UPDATE")
+            .bind(inventory_id).fetch_one(&mut *tx).await?;
         let id: Uuid = row.try_get("id")?;
         sqlx::query("UPDATE inventory_order_attempts SET status = 'RECONCILIATION_REQUIRED', outcome_detail = $3 WHERE inventory_id = $1 AND custom_id = $2 AND status = 'CALLING'")
             .bind(id).bind(custom_id).bind(detail).execute(&mut *tx).await?;
@@ -405,7 +443,14 @@ impl Db {
     }
 
     pub async fn attach_inventory_order(&self, redemption_id: Uuid, custom_id: &str, order_id: Option<&str>, item_name: &str) -> DbResult<()> {
+        let inventory_id = self.get_inventory_core(redemption_id).await?.ok_or(sqlx::Error::RowNotFound)?.0;
+        self.attach_delivery_order(inventory_id, custom_id, order_id, item_name).await
+    }
+
+    pub async fn attach_delivery_order(&self, inventory_id: Uuid, custom_id: &str, order_id: Option<&str>, item_name: &str) -> DbResult<()> {
         let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT id FROM inventory_items WHERE id=$1 FOR UPDATE")
+            .bind(inventory_id).fetch_one(&mut *tx).await?;
         sqlx::query("UPDATE inventory_order_attempts SET market_order_id = COALESCE(market_order_id, $2),
                     status = CASE WHEN status IN ('CALLING','RECONCILIATION_REQUIRED') THEN 'ORDER_CREATED' ELSE status END,
                     last_checked_at = NOW() WHERE custom_id = $1")
@@ -414,12 +459,12 @@ impl Db {
             "UPDATE inventory_items i SET market_custom_id = $2, market_order_id = COALESCE($3, i.market_order_id),
                  lifecycle_status = CASE WHEN lifecycle_status = 'RECONCILIATION_REQUIRED' OR lifecycle_status = 'ORDER_PENDING' THEN 'ORDER_PENDING' ELSE lifecycle_status END
              FROM inventory_order_attempts a
-             WHERE i.redemption_id = $1 AND a.inventory_id = i.id AND a.custom_id = $2
-             AND i.lifecycle_status NOT IN ('DELIVERED','REFUNDING','REFUNDED')
+             WHERE i.id = $1 AND a.inventory_id = i.id AND a.custom_id = $2
+             AND i.lifecycle_status NOT IN ('DELIVERED','REFUNDING','REFUNDED','CANCELLED','DISCARDED')
              AND (i.market_custom_id IS NULL OR
                   (SELECT old.attempt_id FROM inventory_order_attempts old WHERE old.custom_id = i.market_custom_id) <= a.attempt_id)"
         )
-            .bind(redemption_id).bind(custom_id).bind(order_id).execute(&mut *tx).await?;
+            .bind(inventory_id).bind(custom_id).bind(order_id).execute(&mut *tx).await?;
         let _ = item_name;
         tx.commit().await?;
         Ok(())
@@ -435,13 +480,13 @@ impl Db {
                 WHERE a.next_poll_at <= NOW()
                   AND a.status IN ('CALLING','ORDER_CREATED','TRADE_WAITING','TRADE_ACCEPTED','RECONCILIATION_REQUIRED')
                   AND i.fulfillment_mode != 'LEGACY_REVIEW'
-                  AND i.lifecycle_status NOT IN ('DELIVERED','REFUNDING','REFUNDED')
+                  AND i.lifecycle_status NOT IN ('DELIVERED','REFUNDING','REFUNDED','CANCELLED','DISCARDED')
                 ORDER BY a.next_poll_at, a.attempt_id LIMIT 100 FOR UPDATE OF a SKIP LOCKED
              )
              UPDATE inventory_order_attempts a SET next_poll_at = NOW() + INTERVAL '2 minutes'
              FROM due, inventory_items i
              WHERE a.attempt_id = due.attempt_id AND i.id = a.inventory_id
-             RETURNING i.redemption_id, a.custom_id"
+             RETURNING i.id, a.custom_id"
         ).fetch_all(&self.pool).await?)
     }
 
@@ -465,16 +510,21 @@ impl Db {
     /// the inventory lock. Final stages are monotonic; a stale stage 1 cannot undo
     /// a terminal result. Null fields never erase previous Market evidence.
     pub async fn observe_market_attempt(&self, redemption_id: Uuid, custom_id: &str, data: &GetBuyInfoData) -> DbResult<MarketTransition> {
+        let inventory_id = self.get_inventory_core(redemption_id).await?.ok_or(sqlx::Error::RowNotFound)?.0;
+        self.observe_delivery_attempt(inventory_id, custom_id, data).await
+    }
+
+    pub async fn observe_delivery_attempt(&self, inventory_id: Uuid, custom_id: &str, data: &GetBuyInfoData) -> DbResult<MarketTransition> {
         let mut tx = self.pool.begin().await?;
-        let inventory = sqlx::query("SELECT id, item_name, lifecycle_status, market_custom_id FROM inventory_items WHERE redemption_id = $1 FOR UPDATE")
-            .bind(redemption_id).fetch_one(&mut *tx).await?;
+        let inventory = sqlx::query("SELECT id, item_name, lifecycle_status, market_custom_id FROM inventory_items WHERE id = $1 FOR UPDATE")
+            .bind(inventory_id).fetch_one(&mut *tx).await?;
         let id: Uuid = inventory.try_get("id")?;
         let item_name: String = inventory.try_get("item_name")?;
         let lifecycle: String = inventory.try_get("lifecycle_status")?;
         let active_custom_id: Option<String> = inventory.try_get("market_custom_id")?;
         let mut transition = MarketTransition::default();
         if item_name != data.market_hash_name || active_custom_id.as_deref() != Some(custom_id)
-            || matches!(lifecycle.as_str(), "DELIVERED" | "REFUNDING" | "REFUNDED") {
+            || matches!(lifecycle.as_str(), "DELIVERED" | "REFUNDING" | "REFUNDED" | "CANCELLED" | "DISCARDED") {
             return Ok(transition);
         }
         let previous = sqlx::query(
@@ -489,8 +539,8 @@ impl Db {
         let prior_trade: Option<DateTime<Utc>> = previous.try_get("trade_created_at")?;
         let prior_settlement: Option<DateTime<Utc>> = previous.try_get("settlement")?;
         let evidence_complete: bool = previous.try_get("evidence_complete")?;
-        let redemption_status: String = sqlx::query_scalar("SELECT status FROM redemptions WHERE fulfillment_id = $1")
-            .bind(redemption_id).fetch_one(&mut *tx).await?;
+        let redemption_status: String = sqlx::query_scalar("SELECT COALESCE((SELECT status FROM redemptions WHERE fulfillment_id=i.redemption_id), 'PENDING') FROM inventory_items i WHERE i.id=$1")
+            .bind(inventory_id).fetch_one(&mut *tx).await?;
         transition.chat_eligible = redemption_status != "COMPLETED";
         let observed_trade = data.has_active_trade();
         let observed_settlement = data.settlement.filter(|at| *at > DateTime::<Utc>::UNIX_EPOCH);
@@ -517,7 +567,7 @@ impl Db {
                  last_market_stage = $10, causer = COALESCE($11, causer),
                  cancellation_reason = COALESCE($12, cancellation_reason), market_refund = COALESCE($13, market_refund),
                  outcome_kind = CASE WHEN $10 IN ('1','2') THEN NULL ELSE COALESCE($14, outcome_kind) END,
-                 last_checked_at = NOW(), resolved_at = CASE WHEN $10 IN ('2','5') THEN NOW() ELSE resolved_at END,
+                 paid_price = COALESCE($15, paid_price), last_checked_at = NOW(), resolved_at = CASE WHEN $10 IN ('2','5') THEN NOW() ELSE resolved_at END,
                  next_poll_at = CASE WHEN $10 IN ('2','5') THEN NULL
                      WHEN NOW() - created_at < INTERVAL '30 minutes' THEN NOW() + INTERVAL '1 minute'
                      ELSE NOW() + INTERVAL '5 minutes' END
@@ -526,7 +576,7 @@ impl Db {
             .bind(data.send_until.filter(|at| *at > DateTime::<Utc>::UNIX_EPOCH))
             .bind(data.receive_until.filter(|at| *at > DateTime::<Utc>::UNIX_EPOCH))
             .bind(observed_settlement).bind(observed_trade).bind(&data.stage)
-            .bind(&data.causer).bind(&data.cancellation_reason).bind(refund).bind(kind)
+            .bind(&data.causer).bind(&data.cancellation_reason).bind(refund).bind(kind).bind(crate::steam::market::major_to_minor(data.paid, &data.currency))
             .execute(&mut *tx).await?;
         let inventory_status = match next_status {
             "DELIVERED" => "DELIVERED",
@@ -543,12 +593,12 @@ impl Db {
             .bind(id).bind(inventory_status).bind(&data.item_id).execute(&mut *tx).await?;
         if data.stage == "2" {
             sqlx::query("UPDATE redemptions SET status = 'COMPLETED', fail_cause = NULL, fail_description = NULL, updated_at = NOW()
-                         WHERE fulfillment_id = $1 AND status NOT IN ('FAILED_REFUND','COMPLETED')")
-                .bind(redemption_id).execute(&mut *tx).await?;
+                         WHERE fulfillment_id = (SELECT redemption_id FROM inventory_items WHERE id = $1) AND status NOT IN ('FAILED_REFUND','COMPLETED')")
+                .bind(inventory_id).execute(&mut *tx).await?;
         } else if data.stage == "5" {
             sqlx::query("UPDATE redemptions SET status = 'PENDING', fail_cause = NULL, fail_description = NULL, updated_at = NOW()
-                         WHERE fulfillment_id = $1 AND status = 'ORDER_CREATED'")
-                .bind(redemption_id).execute(&mut *tx).await?;
+                         WHERE fulfillment_id = (SELECT redemption_id FROM inventory_items WHERE id = $1) AND status = 'ORDER_CREATED'")
+                .bind(inventory_id).execute(&mut *tx).await?;
         }
         transition.order_created = matches!(previous_status.as_str(), "CALLING" | "RECONCILIATION_REQUIRED");
         transition.trade_created = observed_trade && prior_trade.is_none();
@@ -882,7 +932,7 @@ mod tests {
 
         let (delivered, delivered_custom) = new_tracking_attempt(&db, reward, &viewer, false).await;
         let due = db.claim_due_market_attempts().await.unwrap();
-        assert!(due.contains(&(delivered, delivered_custom.clone())));
+        assert!(due.contains(&(db.get_inventory_core(delivered).await.unwrap().unwrap().0, delivered_custom.clone())));
         let order = market_observation("1", false, false, false, None, None);
         assert!(db.observe_market_attempt(delivered, &delivered_custom, &order).await.unwrap().order_created);
         assert!(!db.observe_market_attempt(delivered, &delivered_custom, &order).await.unwrap().trade_created);
@@ -931,7 +981,7 @@ mod tests {
         assert!((slow_poll - Utc::now()).num_seconds() <= 305);
         sqlx::query("UPDATE inventory_order_attempts SET next_poll_at = NOW() - INTERVAL '1 second' WHERE custom_id=$1")
             .bind(&delivered_custom).execute(db.pool()).await.unwrap();
-        assert!(db.claim_due_market_attempts().await.unwrap().contains(&(delivered, delivered_custom.clone())));
+        assert!(db.claim_due_market_attempts().await.unwrap().contains(&(db.get_inventory_core(delivered).await.unwrap().unwrap().0, delivered_custom.clone())));
         let attempt_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM inventory_order_attempts WHERE custom_id=$1")
             .bind(&delivered_custom).fetch_one(db.pool()).await.unwrap();
         assert_eq!(attempt_count, 1);
@@ -1107,8 +1157,8 @@ mod tests {
         let mut files: Vec<_> = std::fs::read_dir(&migration_dir).unwrap().map(|entry| entry.unwrap().path()).collect();
         files.sort();
         for path in files.iter().filter(|path| {
-            let name = path.to_string_lossy();
-            !name.contains("20260923140000") && !name.contains("20260925120000") && !name.contains("20260928")
+            let name = path.file_name().unwrap().to_string_lossy();
+            name.as_ref() < "20260928000000" && !name.starts_with("20260923140000") && !name.starts_with("20260925120000")
         }) {
             let sql = std::fs::read_to_string(path).unwrap();
             sqlx::raw_sql(sqlx::AssertSqlSafe(sql)).execute(&pool).await.unwrap();
@@ -1144,7 +1194,7 @@ mod tests {
         let audit_migration = migration_dir.join("20260925120000_fulfillment_audit.sql");
         sqlx::raw_sql(sqlx::AssertSqlSafe(std::fs::read_to_string(audit_migration).unwrap())).execute(db.pool()).await.unwrap();
         sqlx::query("ALTER TABLE redemptions DROP COLUMN fulfillment_id").execute(db.pool()).await.unwrap();
-        for path in files.iter().filter(|p|p.to_string_lossy().contains("20260928")) {
+        for path in files.iter().filter(|p|p.file_name().unwrap().to_string_lossy().as_ref() >= "20260928000000") {
             sqlx::raw_sql(sqlx::AssertSqlSafe(std::fs::read_to_string(path).unwrap())).execute(db.pool()).await.unwrap();
         }
         let invented_history: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM fulfillment_audit_events")
@@ -1156,7 +1206,7 @@ mod tests {
             .into_iter().find(|item| item.redemption_id == premature).unwrap();
         assert_eq!(delivered_item.lifecycle_status, "RECONCILIATION_REQUIRED");
         assert_eq!(delivered_item.redemption_status, "COMPLETED");
-        assert!(db.claim_due_market_attempts().await.unwrap().contains(&(premature, premature_custom.clone())));
+        assert!(db.claim_due_market_attempts().await.unwrap().contains(&(db.get_inventory_core(premature).await.unwrap().unwrap().0, premature_custom.clone())));
         let terminal = db.observe_market_attempt(premature, &premature_custom,
             &market_observation("5", false, false, false, Some("seller"), None)).await.unwrap();
         assert!(!terminal.chat_eligible);

@@ -201,7 +201,7 @@ impl MarketClient {
         self.limiter.until_key_ready(&api_key.to_string()).await;
 
         let res = self.http_client
-            .get("https://market.csgo.com/api/v2/buy-for")
+            .get(format!("{}/buy-for", self.api_base))
             .query(&params)
             .send()
             .await?;
@@ -224,10 +224,11 @@ impl MarketClient {
         self.limiter.until_key_ready(&api_key.to_string()).await;
 
         let res = self.http_client
-            .get("https://market.csgo.com/api/v2/get-buy-info-by-custom-id")
+            .get(format!("{}/get-buy-info-by-custom-id", self.api_base))
             .query(&params)
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
 
         let status = res.status();
         let text = res.text().await?;
@@ -238,7 +239,6 @@ impl MarketClient {
                 tracing::warn!(
                     error = %e,
                     status = status.as_u16(),
-                    raw_body = %text,
                     custom_id = %custom_id,
                     "Failed to deserialize Market get-buy-info response"
                 );

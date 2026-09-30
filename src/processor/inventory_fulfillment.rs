@@ -14,6 +14,51 @@ use crate::state::AppState;
 use crate::steam::market::errors::{classify_market_buy_for_error, MarketBuyForErrorKind};
 use crate::steam::trade_link::TradeLink;
 
+/// All Market effects use an inventory identity. Only the source adapter may
+/// interact with Twitch; a manual context has no reward, redemption or viewer.
+pub(crate) struct DeliveryContext {
+    pub inventory: (Uuid, String, i64, String, String, bool),
+    pub channel_id: String,
+    pub api_key: String,
+    pub chance_to_transfer: i16,
+    pub redemption: Option<crate::db::redemptions::Redemption>,
+}
+
+impl DeliveryContext {
+    pub async fn load(state: &Arc<AppState>, inventory_id: Uuid) -> Result<Self, String> {
+        let inventory = state.db.get_delivery_core(inventory_id).await.map_err(|e| e.to_string())?.ok_or("Inventory item not found")?;
+        let (channel_id, redemption_id, _) = state.db.delivery_source(inventory_id).await.map_err(|e| e.to_string())?;
+        let settings = state.db.get_broadcaster_setting(&channel_id).await.map_err(|e| e.to_string())?.ok_or("Channel settings not found")?;
+        let redemption = match redemption_id {
+            Some(id) => Some(state.db.get_redemption(id).await.map_err(|e| e.to_string())?.ok_or("Fulfillment source not found")?),
+            None => None,
+        };
+        Ok(Self { inventory, channel_id, api_key: settings.market_api_key,
+            chance_to_transfer: settings.market_chance_to_transfer, redemption })
+    }
+}
+
+async fn send_delivery_notice(state: &Arc<AppState>, context: &DeliveryContext, template: &str, item: &str, extra: &[(&str, &str)]) {
+    if let Some(redemption) = context.redemption.as_ref() {
+        send_fulfillment_chat(state, &redemption.origin, Some(redemption.fulfillment_id), &context.channel_id,
+            template, &redemption.user_login, item, extra).await;
+    }
+}
+
+async fn send_delivery_attempt_notice(state: &Arc<AppState>, context: &DeliveryContext, custom: &str, template: &str, item: &str, extra: &[(&str, &str)]) {
+    if let Some(redemption) = context.redemption.as_ref() {
+        send_attempt_chat(state, redemption, custom, &context.channel_id, template, item, extra).await;
+    }
+}
+
+fn safe_market_detail(detail: &str, api_key: &str, token: &str) -> String {
+    let mut safe = detail.to_owned();
+    for value in [api_key, token] {
+        if !value.is_empty() { safe = safe.replace(value, "[redacted]"); }
+    }
+    safe.chars().take(2000).collect()
+}
+
 fn resolve_trade_link(message: &str, saved: Option<&str>, use_saved_link: bool) -> Option<TradeLink> {
     if use_saved_link {
         saved.and_then(TradeLink::parse)
@@ -174,46 +219,61 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
         return Ok("TRADE_LINK_REQUIRED");
     };
     let trade_link_text = format!("https://steamcommunity.com/tradeoffer/new/?partner={}&token={}", trade_link.partner, trade_link.token);
-    let max_price = i32::try_from(inventory.2).map_err(|_| "Inventory fixed price exceeds Market request range")?;
     let initiator = match (viewer_action, actor_user_id) {
         (true, Some(_)) => "viewer",
         (false, Some(_)) => "operator",
         _ => "system",
     };
-    let Some(custom_id) = state.db.begin_inventory_attempt_as(redemption_id, &trade_link_text, viewer_action,
-        initiator, actor_user_id).await.map_err(|e| e.to_string())? else {
+    let Some(custom_id) = state.db.begin_inventory_attempt_with_chance(redemption_id, &trade_link_text, viewer_action,
+        initiator, actor_user_id, setting.market_chance_to_transfer).await.map_err(|e| e.to_string())? else {
         return Ok("BLOCKED");
     };
 
+    let context = DeliveryContext { inventory, channel_id: reward.streamer_id,
+        api_key: setting.market_api_key, chance_to_transfer: setting.market_chance_to_transfer,
+        redemption: Some(redemption) };
+    submit_delivery_attempt(state, context, custom_id, trade_link).await
+}
+
+pub(crate) async fn submit_delivery_attempt(state: &Arc<AppState>, context: DeliveryContext,
+    custom_id: String, trade_link: TradeLink) -> Result<&'static str, String> {
+    let inventory = &context.inventory;
+    let inventory_id = inventory.0;
+    let max_price = i32::try_from(inventory.2).map_err(|_| "Price exceeds Market request range")?;
     let market_result = state.market_client.buy_for(
-        &setting.market_api_key, &inventory.1, max_price, setting.market_chance_to_transfer,
-        trade_link, &custom_id,
+        &context.api_key, &inventory.1, max_price, context.chance_to_transfer,
+        trade_link.clone(), &custom_id,
     ).await;
     match market_result {
         Ok(response) if response.success => {
-            if let Err(e) = state.db.attach_inventory_order(redemption_id, &custom_id, response.id.as_deref(), &inventory.1).await {
-                error!(error = %e, %redemption_id, "Market order may exist but local attachment failed");
+            if let Err(e) = state.db.attach_delivery_order(inventory_id, &custom_id, response.id.as_deref(), &inventory.1).await {
+                error!(error = %e, %inventory_id, "Market order may exist but local attachment failed");
                 return Err(e.to_string());
             }
-            let retry_count = custom_id.strip_prefix(&format!("{redemption_id}-"))
-                .and_then(|n| n.parse::<i32>().ok()).unwrap_or(0);
-            state.db.set_redemption_order_created(redemption_id, response.price.unwrap_or(inventory.2), Some(&inventory.1), retry_count).await.map_err(|e| e.to_string())?;
-            crate::processor::redemption::check_and_pause_if_global_limit_reached(state, &reward.streamer_id, redemption.twitch_reward_id).await;
-            let current = state.db.latest_inventory_attempt(redemption_id).await.map_err(|e| e.to_string())?
+            if let Some(redemption) = context.redemption.as_ref() {
+                let id = redemption.fulfillment_id;
+                let retry_count = custom_id.strip_prefix(&format!("{id}-")).and_then(|n| n.parse::<i32>().ok()).unwrap_or(0);
+                state.db.set_redemption_order_created(id, response.price.unwrap_or(inventory.2), Some(&inventory.1), retry_count).await.map_err(|e| e.to_string())?;
+                crate::processor::redemption::check_and_pause_if_global_limit_reached(state, &context.channel_id, redemption.twitch_reward_id).await;
+            }
+            sqlx::query("UPDATE inventory_order_attempts SET paid_price=COALESCE(paid_price,$2) WHERE custom_id=$1")
+                .bind(&custom_id).bind(response.price).execute(state.db.pool()).await.map_err(|e| e.to_string())?;
+            let current = state.db.latest_delivery_attempt(inventory_id).await.map_err(|e| e.to_string())?
                 .ok_or("Market attempt disappeared after order creation")?;
             if current.custom_id != custom_id { return Ok("RECONCILIATION_REQUIRED"); }
             if matches!(current.status.as_str(), "ORDER_CREATED" | "TRADE_WAITING" | "TRADE_ACCEPTED") {
-                send_attempt_chat(state, &redemption, &custom_id, &reward.streamer_id, MSG_ORDERS_CREATED,
+                send_delivery_attempt_notice(state, &context, &custom_id, MSG_ORDERS_CREATED,
                     &inventory.1, &[]).await;
             }
             Ok(attempt_result(&current.status))
         }
         Ok(response) => {
-            let detail = response.error.unwrap_or_else(|| "Market rejected purchase".to_string());
-            let kind = classify_market_buy_for_error(response.code.unwrap_or(0), &detail);
+            let raw_detail = response.error.unwrap_or_else(|| "Market rejected purchase".to_string());
+            let detail = safe_market_detail(&raw_detail, &context.api_key, &trade_link.token);
+            let kind = classify_market_buy_for_error(response.code.unwrap_or(0), &raw_detail);
             if !is_definitive_rejection(kind, response.id.as_deref()) {
-                state.db.mark_attempt_ambiguous(redemption_id, &custom_id, &detail).await.map_err(|e| e.to_string())?;
-                let current = state.db.latest_inventory_attempt(redemption_id).await.map_err(|e| e.to_string())?;
+                state.db.mark_delivery_ambiguous(inventory_id, &custom_id, &detail).await.map_err(|e| e.to_string())?;
+                let current = state.db.latest_delivery_attempt(inventory_id).await.map_err(|e| e.to_string())?;
                 if let Some(ref current) = current {
                     if current.custom_id == custom_id && current.status != "RECONCILIATION_REQUIRED" {
                         return Ok(attempt_result(&current.status));
@@ -224,8 +284,8 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
                 } else {
                     MSG_ORDERS_RECONCILIATION_REQUIRED
                 };
-                send_fulfillment_chat(state, &redemption.origin, Some(redemption_id), &reward.streamer_id, template,
-                    &redemption.user_login, &inventory.1, &[]).await;
+                send_delivery_notice(state, &context, template,
+                    &inventory.1, &[]).await;
                 return Ok("RECONCILIATION_REQUIRED");
             }
             let label = match kind {
@@ -234,9 +294,9 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
                 k if k.is_buyer_terminal_error() => "trade_link",
                 _ => "market_rejected",
             };
-            let changed = state.db.mark_attempt_rejected(redemption_id, &custom_id, label, &detail).await.map_err(|e| e.to_string())?;
+            let changed = state.db.mark_delivery_rejected(inventory_id, &custom_id, label, &detail).await.map_err(|e| e.to_string())?;
             if !changed {
-                if let Some(current) = state.db.latest_inventory_attempt(redemption_id).await.map_err(|e| e.to_string())? {
+                if let Some(current) = state.db.latest_delivery_attempt(inventory_id).await.map_err(|e| e.to_string())? {
                     if current.status == "REJECTED" {
                         return Ok(match current.outcome_kind.as_deref() {
                             Some("no_money") => "INSUFFICIENT_FUNDS",
@@ -251,24 +311,24 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
             if changed {
                 if let Some(template) = rejected_order_template(kind) {
                     let price = format_inventory_price(inventory.2, &inventory.3);
-                    send_fulfillment_chat(state, &redemption.origin, Some(redemption_id), &reward.streamer_id, template,
-                        &redemption.user_login, &inventory.1, &[("price", &price)]).await;
+                    send_delivery_notice(state, &context, template,
+                        &inventory.1, &[("price", &price)]).await;
                 } else {
-                    warn!(?kind, %redemption_id, "No chat template for definitive Market rejection");
+                    warn!(?kind, %inventory_id, "No chat template for definitive Market rejection");
                 }
             }
             Ok(match label { "no_money" => "INSUFFICIENT_FUNDS", "trade_link" => "TRADE_LINK_REQUIRED", _ => "RETRY_AVAILABLE" })
         }
-        Err(e) => {
-            warn!(error = %e, %redemption_id, "Market buy-for outcome is unknown; no automatic retry");
-            state.db.mark_attempt_ambiguous(redemption_id, &custom_id, &e.to_string()).await.map_err(|e| e.to_string())?;
-            if let Some(current) = state.db.latest_inventory_attempt(redemption_id).await.map_err(|e| e.to_string())? {
+        Err(_e) => {
+            warn!(%inventory_id, "Market buy-for outcome is unknown; no automatic retry");
+            state.db.mark_delivery_ambiguous(inventory_id, &custom_id, "Market transport or response error; result is unknown").await.map_err(|e| e.to_string())?;
+            if let Some(current) = state.db.latest_delivery_attempt(inventory_id).await.map_err(|e| e.to_string())? {
                 if current.custom_id == custom_id && current.status != "RECONCILIATION_REQUIRED" {
                     return Ok(attempt_result(&current.status));
                 }
             }
-            send_fulfillment_chat(state, &redemption.origin, Some(redemption_id), &reward.streamer_id, MSG_ORDERS_RECONCILIATION_REQUIRED,
-                &redemption.user_login, &inventory.1, &[]).await;
+            send_delivery_notice(state, &context, MSG_ORDERS_RECONCILIATION_REQUIRED,
+                &inventory.1, &[]).await;
             Ok("RECONCILIATION_REQUIRED")
         }
     }
@@ -277,28 +337,34 @@ pub async fn purchase(state: &Arc<AppState>, redemption_id: Uuid, viewer_action:
 /// Returns true only when the previous attempt is confirmed terminal and cannot
 /// still deliver. Missing/unsuccessful lookup is never proof of non-creation.
 pub async fn reconcile(state: &Arc<AppState>, redemption_id: Uuid, custom_id: &str) -> Result<bool, String> {
-    let redemption = state.db.get_redemption(redemption_id).await.map_err(|e| e.to_string())?.ok_or("Redemption not found")?;
-    let reward = state.db.get_reward_by_twitch_id(redemption.twitch_reward_id).await.map_err(|e| e.to_string())?.ok_or("Reward not found")?;
-    let setting = state.db.get_broadcaster_setting(&reward.streamer_id).await.map_err(|e| e.to_string())?.ok_or("Channel settings not found")?;
-    let info = match state.market_client.get_buy_info(&setting.market_api_key, custom_id).await {
+    let core = state.db.get_inventory_core(redemption_id).await.map_err(|e| e.to_string())?.ok_or("Inventory item not found")?;
+    reconcile_delivery(state, core.0, custom_id).await
+}
+
+pub async fn reconcile_delivery(state: &Arc<AppState>, inventory_id: Uuid, custom_id: &str) -> Result<bool, String> {
+    let context = DeliveryContext::load(state, inventory_id).await?;
+    let info = match state.market_client.get_buy_info(&context.api_key, custom_id).await {
         Ok(info) if info.success => info,
         _ => return Ok(false),
     };
     let Some(data) = info.data else { return Ok(false); };
-    let inventory = state.db.get_inventory_core(redemption_id).await.map_err(|e| e.to_string())?.ok_or("Inventory item not found")?;
-    if data.market_hash_name != inventory.1 {
-        state.db.require_inventory_reconciliation(redemption_id, custom_id).await.map_err(|e| e.to_string())?;
+    let inventory = &context.inventory;
+    if data.market_hash_name != inventory.1 || (context.redemption.is_none() && (!data.currency.eq_ignore_ascii_case(&inventory.3) || !data.paid.is_finite() || data.paid < 0.0)) {
+        state.db.require_delivery_reconciliation(inventory_id, custom_id).await.map_err(|e| e.to_string())?;
         return Ok(false);
     }
     if !matches!(data.stage.as_str(), "1" | "2" | "5") {
-        state.db.require_inventory_reconciliation(redemption_id, custom_id).await.map_err(|e| e.to_string())?;
+        state.db.require_delivery_reconciliation(inventory_id, custom_id).await.map_err(|e| e.to_string())?;
         return Ok(false);
     }
-    let transition = state.db.observe_market_attempt(redemption_id, custom_id, &data).await.map_err(|e| e.to_string())?;
+    let transition = state.db.observe_delivery_attempt(inventory_id, custom_id, &data).await.map_err(|e| e.to_string())?;
     if transition.chat_eligible && transition.order_created && data.stage == "1" {
-        let retry_count = custom_id.strip_prefix(&format!("{redemption_id}-")).and_then(|n| n.parse::<i32>().ok()).unwrap_or(0);
-        state.db.set_redemption_order_created(redemption_id, crate::steam::market::major_to_minor(data.paid, &inventory.3), Some(&inventory.1), retry_count).await.map_err(|e| e.to_string())?;
-        send_attempt_chat(state, &redemption, custom_id, &reward.streamer_id, MSG_ORDERS_CREATED,
+        if let Some(redemption) = context.redemption.as_ref() {
+            let id = redemption.fulfillment_id;
+            let retry_count = custom_id.strip_prefix(&format!("{id}-")).and_then(|n| n.parse::<i32>().ok()).unwrap_or(0);
+            state.db.set_redemption_order_created(id, crate::steam::market::major_to_minor(data.paid, &inventory.3), Some(&inventory.1), retry_count).await.map_err(|e| e.to_string())?;
+        }
+        send_delivery_attempt_notice(state, &context, custom_id, MSG_ORDERS_CREATED,
             &inventory.1, &[]).await;
     }
     if transition.chat_eligible && transition.trade_created {
@@ -306,23 +372,23 @@ pub async fn reconcile(state: &Arc<AppState>, redemption_id: Uuid, custom_id: &s
             use crate::datetime::DateTimeExt;
             let tradeoffer = format!("https://steamcommunity.com/tradeoffer/{trade_id}/");
             let remaining = data.receive_until.map(|at| at.remaining_pretty()).unwrap_or_else(|| "a limited time".to_string());
-            send_attempt_chat(state, &redemption, custom_id, &reward.streamer_id, MSG_TRADES_CREATED,
+            send_delivery_attempt_notice(state, &context, custom_id, MSG_TRADES_CREATED,
                 &inventory.1,
                 &[("tradeoffer", &tradeoffer), ("remaining", &remaining)]).await;
         }
     }
     if transition.chat_eligible && transition.trade_accepted {
-        send_attempt_chat(state, &redemption, custom_id, &reward.streamer_id, MSG_TRADES_ACCEPTED,
+        send_delivery_attempt_notice(state, &context, custom_id, MSG_TRADES_ACCEPTED,
             &inventory.1, &[]).await;
     }
-    if data.stage == "2" {
-        if let Err(e) = fulfill_delivered_twitch(state, redemption_id).await {
-            error!(error = %e, %redemption_id, "Twitch fulfillment remains pending for recovery");
+    if data.stage == "2" && let Some(redemption) = context.redemption.as_ref() {
+        if let Err(e) = fulfill_delivered_twitch(state, redemption.fulfillment_id).await {
+            error!(error = %e, %inventory_id, "Twitch fulfillment remains pending for recovery");
         }
     }
     if let Some(kind) = transition.terminal_kind.as_deref().filter(|_| transition.chat_eligible) {
         if let Some(template) = terminal_trade_template(kind) {
-            send_attempt_chat(state, &redemption, custom_id, &reward.streamer_id, template,
+            send_delivery_attempt_notice(state, &context, custom_id, template,
                 &inventory.1, &[]).await;
         }
     }

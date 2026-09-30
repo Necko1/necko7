@@ -59,7 +59,7 @@ pub struct MarketPricesResponse {
 impl MarketClient {
     pub async fn get_prices(&self, currency: &str) -> Result<MarketPricesResponse, reqwest::Error> {
         let currency_upper = currency.to_uppercase();
-        let url = format!("https://market.csgo.com/api/v2/prices/{}.json", currency_upper);
+        let url = format!("{}/prices/{}.json", self.api_base, currency_upper);
 
         let res = self.http_client.get(&url).send().await?;
         let status = res.status();

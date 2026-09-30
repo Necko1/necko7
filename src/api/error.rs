@@ -32,6 +32,8 @@ pub enum ApiError {
         message: String,
         param: String,
     },
+    #[response(status = CONFLICT, description = "Action conflicts with the current state or request identity")]
+    Conflict { message: String },
     #[response(status = INTERNAL_SERVER_ERROR, description = "An internal server error occurred. This is not your fault.")]
     Internal {
         message: String,
@@ -66,6 +68,7 @@ impl ApiError {
             ApiError::Forbidden { .. } => StatusCode::FORBIDDEN,
             ApiError::NotFound { .. } => StatusCode::NOT_FOUND,
             ApiError::UnprocessableEntity { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+            ApiError::Conflict { .. } => StatusCode::CONFLICT,
             ApiError::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -78,6 +81,7 @@ impl ApiError {
             ApiError::Forbidden { .. } => ("authorization_error", "authorization_error"),
             ApiError::NotFound { .. } => ("not_found", "not_found"),
             ApiError::UnprocessableEntity { .. } => ("validation_error", "validation_error"),
+            ApiError::Conflict { .. } => ("conflict_error", "conflict_error"),
             ApiError::Internal { .. } => ("api_error", "api_error"),
         }
     }
@@ -90,6 +94,7 @@ impl ApiError {
             ApiError::Forbidden { message } => message,
             ApiError::NotFound { message } => message,
             ApiError::UnprocessableEntity { message, .. } => message,
+            ApiError::Conflict { message } => message,
             ApiError::Internal { message } => message,
         }
     }

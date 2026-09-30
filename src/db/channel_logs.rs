@@ -38,6 +38,7 @@ impl ChannelLogLevel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ChannelLogCategory {
+    Manual,
     Redemption,
     Reward,
     Market,
@@ -49,6 +50,7 @@ pub enum ChannelLogCategory {
 impl ChannelLogCategory {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::Manual => "MANUAL",
             Self::Redemption => "REDEMPTION",
             Self::Reward => "REWARD",
             Self::Market => "MARKET",
@@ -60,6 +62,7 @@ impl ChannelLogCategory {
 
     pub fn from_str_case_insensitive(s: &str) -> Option<Self> {
         match s.trim().to_uppercase().as_str() {
+            "MANUAL" => Some(Self::Manual),
             "REDEMPTION" => Some(Self::Redemption),
             "REWARD" => Some(Self::Reward),
             "MARKET" => Some(Self::Market),

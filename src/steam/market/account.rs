@@ -21,7 +21,7 @@ impl MarketClient {
         self.limiter.until_key_ready(&api_key.to_string()).await;
 
         let res = self.http_client
-            .get("https://market.csgo.com/api/v2/get-money")
+            .get(format!("{}/get-money", self.api_base))
             .query(&[("key", api_key)])
             .send()
             .await?;
@@ -35,7 +35,6 @@ impl MarketClient {
                 tracing::warn!(
                     error = %e,
                     status = status.as_u16(),
-                    raw_body = %text,
                     "Failed to deserialize Market get-money response"
                 );
                 Ok(MarketGetMoney {
