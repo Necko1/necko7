@@ -1,4 +1,5 @@
 use super::runtime::{self, Files, MessageMode, MessageOperation, UserFilter};
+use super::limits::ExecutionLimits;
 use crate::state::AppState;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -74,6 +75,7 @@ pub fn audit_message(action: &str, details: &Value) -> String {
             details["previous_name"].as_str().unwrap_or("unknown")
         ),
         "script.project_enabled" => format!("{actor} enabled script project \"{project}\""),
+        "script.project_limits_changed" => format!("{actor} changed execution limits for script project \"{project}\""),
         "script.project_disabled" => format!("{actor} disabled script project \"{project}\""),
         "script.project_deleted" => {
             format!("{actor} deleted script project \"{project}\" and cancelled its pending jobs")
@@ -128,9 +130,23 @@ pub async fn run(
     state: Arc<AppState>,
     files: Files,
     entry: String,
-    mut context: Value,
+    context: Value,
     attr: Attribution,
     dry: bool,
+) -> Report {
+    let limits = match super::limits::load(state.db.pool(), attr.project_id, &attr.channel_id).await {
+        Ok(limits) => limits,
+        Err(error) => {
+            tracing::error!(%error, project_id=%attr.project_id, "Could not load script execution limits");
+            return Report { error: Some("service_unavailable".into()), dry_run: dry, ..Default::default() };
+        }
+    };
+    run_with_limits(state, files, entry, context, attr, dry, limits).await
+}
+
+pub(super) async fn run_with_limits(
+    state: Arc<AppState>, files: Files, entry: String, mut context: Value,
+    attr: Attribution, dry: bool, limits: ExecutionLimits,
 ) -> Report {
     let report = Arc::new(Mutex::new(Report {
         dry_run: dry,
@@ -140,27 +156,27 @@ pub async fn run(
     let handle = tokio::runtime::Handle::current();
     let overlay = Arc::new(Mutex::new(BTreeMap::<String, Option<Value>>::new()));
     let meta = json!({"project_id":attr.project_id,"revision":attr.revision,"execution_id":attr.execution_id,
-        "channel_id":attr.channel_id,"timestamp":chrono::Utc::now(),"source":context.get("source")});
+        "channel_id":attr.channel_id,"timestamp":chrono::Utc::now(),"source":context.get("source"),"execution_limits":limits});
     context["meta"] = meta;
     report.lock().meta = context["meta"].clone();
     let start = Instant::now();
+    let deadline = limits.deadline(start);
     let result=tokio::task::spawn_blocking(move || {
         let host:runtime::Host=Arc::new(move |method,args| {
+            if Instant::now() >= deadline { return Err("Execution deadline exceeded".into()); }
             if method.starts_with("log.") {
                 if args[0].as_str().is_some_and(|s|s.len()>2048) {return Err("log_message_limit".into());}
                 output.lock().logs.push(json!({"level":method.trim_start_matches("log."),"message":args[0]}));
                 return Ok(Value::Null);
             }
             let value=handle.block_on(async {
-                let remaining=std::time::Duration::from_secs(3).saturating_sub(start.elapsed()).min(std::time::Duration::from_secs(2));
-                tokio::time::timeout(remaining,call(&state,&attr,method,&args,dry,&overlay)).await
-                    .map_err(|_|"host_timeout".to_owned())?
+                await_host_call(limits, deadline, call(&state,&attr,method,&args,dry,&overlay)).await
             });
             let value=if method=="rewards.trigger" {Ok(value.unwrap_or_else(|code|json!({"ok":false,"code":code})))} else {value};
             output.lock().actions.push(json!({"method":method,"args":preview(&args),"dry_run":dry,"result":value.as_ref().ok().map(preview),"error":value.as_ref().err()}));
             value
         });
-        runtime::execute(files,&entry,context,host)
+        runtime::execute_with_deadline(files,&entry,context,host,deadline)
     }).await;
     let mut report = std::mem::take(&mut *report.lock());
     report.duration_ms = start.elapsed().as_millis() as u64;
@@ -170,6 +186,54 @@ pub async fn run(
         Err(_) => Some("Runtime worker failed".into()),
     };
     report
+}
+
+async fn await_host_call<T>(limits: ExecutionLimits, deadline: Instant,
+    future: impl std::future::Future<Output = Result<T, String>>) -> Result<T, String> {
+    let budget = limits.call_budget(deadline);
+    if budget.is_zero() { return Err("Execution deadline exceeded".into()); }
+    tokio::time::timeout(budget, future).await.map_err(|_| "host_timeout".to_owned())?
+}
+
+#[cfg(test)]
+mod execution_timeout_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn external_work_can_take_more_than_the_old_two_seconds() {
+        let limits = ExecutionLimits::default();
+        let value = await_host_call(limits, limits.deadline(Instant::now()), async {
+            tokio::time::sleep(Duration::from_millis(2100)).await;
+            Ok(42)
+        }).await.unwrap();
+        assert_eq!(value, 42);
+    }
+
+    #[tokio::test]
+    async fn call_timeout_and_shared_deadline_both_cancel_waiting() {
+        let limits = ExecutionLimits { execution_timeout_secs: 5, host_timeout_secs: 1 };
+        let result = await_host_call(limits, limits.deadline(Instant::now()), async {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            Ok(())
+        }).await;
+        assert_eq!(result, Err("host_timeout".into()));
+        let deadline = Instant::now() + Duration::from_millis(100);
+        await_host_call(limits, deadline, async {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            Ok(())
+        }).await.unwrap();
+        assert!(await_host_call(limits, deadline, async {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            Ok(())
+        }).await.is_err());
+        let called = std::sync::atomic::AtomicBool::new(false);
+        assert!(await_host_call(limits, deadline, async {
+            called.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }).await.is_err());
+        assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+    }
 }
 
 fn db(error: impl std::fmt::Display) -> String {

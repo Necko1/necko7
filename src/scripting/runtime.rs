@@ -568,18 +568,33 @@ pub fn execute(
     context: Value,
     host: Host,
 ) -> std::result::Result<(), String> {
+    execute_with_deadline(files, entry, context, host,
+        super::limits::ExecutionLimits::default().deadline(Instant::now()))
+}
+
+pub fn execute_with_deadline(
+    files: Files,
+    entry: &str,
+    context: Value,
+    host: Host,
+    deadline: Instant,
+) -> std::result::Result<(), String> {
     // Never run module initialization with live capabilities during compilation.
-    let start = Instant::now();
     validate(&files)?;
+    if Instant::now() >= deadline { return Err("Execution deadline exceeded".into()); }
     let mut e = engine(files.clone(), host);
     e.on_progress(move |_| {
-        (start.elapsed().as_secs() >= 3).then(|| Dynamic::from("Execution deadline exceeded"))
+        (Instant::now() >= deadline).then(|| Dynamic::from("Execution deadline exceeded"))
     });
     let ast = e.compile(&files["main.rhai"]).map_err(|e| e.to_string())?;
     let context = rhai::serde::to_dynamic(context).map_err(|e| e.to_string())?;
-    e.call_fn::<Dynamic>(&mut Scope::new(), &ast, entry, (context,))
+    let result = e.call_fn::<Dynamic>(&mut Scope::new(), &ast, entry, (context,))
         .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    if result.is_ok() && Instant::now() >= deadline {
+        return Err("Execution deadline exceeded".into());
+    }
+    result
 }
 
 #[cfg(test)]
@@ -590,6 +605,21 @@ mod tests {
     }
     fn host() -> Host {
         Arc::new(|_, _| Ok(Value::Null))
+    }
+    #[test]
+    fn execution_deadline_covers_short_handlers_and_keeps_instruction_guard() {
+        let error = execute_with_deadline(files("fn on_event(ctx) {}"), "on_event", json!({}), host(), Instant::now()).unwrap_err();
+        assert!(error.contains("Execution deadline exceeded"), "{error}");
+        let slow: Host = Arc::new(|_, _| {
+            std::thread::sleep(std::time::Duration::from_millis(80));
+            Ok(Value::Null)
+        });
+        let error = execute_with_deadline(files("fn on_event(ctx) { storage.get(\"slow\"); }"), "on_event", json!({}), slow,
+            Instant::now() + std::time::Duration::from_millis(40)).unwrap_err();
+        assert!(error.contains("Execution deadline exceeded"), "{error}");
+        let error = execute_with_deadline(files("fn on_event(ctx) { loop {} }"), "on_event", json!({}), host(),
+            Instant::now() + std::time::Duration::from_secs(120)).unwrap_err();
+        assert!(error.to_lowercase().contains("operations"), "{error}");
     }
     #[test]
     fn paths_are_project_relative() {

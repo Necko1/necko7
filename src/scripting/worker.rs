@@ -161,6 +161,7 @@ pub(super) async fn step(state: Arc<AppState>) -> Result<bool, sqlx::Error> {
         json!({"timer":job,"source":"timer"})
     };
     context["actor_type"] = json!(actor);
+    let limits = super::limits::load(state.db.pool(), project, &channel).await?;
     // Commit the running marker on a separate connection while retaining project exclusivity.
     sqlx::query("UPDATE script_executions SET status='running' WHERE id=$1")
         .bind(id)
@@ -173,12 +174,13 @@ pub(super) async fn step(state: Arc<AppState>) -> Result<bool, sqlx::Error> {
         channel_id: channel.clone(),
     };
     let report = if context["timer"]["host_action"] == "hide_reward" {
+        let started = std::time::Instant::now();
         let reward = context["timer"]["payload"]["reward_id"]
             .as_str()
             .and_then(|s| Uuid::parse_str(s).ok());
         let result = if let Some(reward) = reward {
             tokio::time::timeout(
-                std::time::Duration::from_secs(2),
+                limits.call_budget(limits.deadline(started)),
                 service::mutate_reward(&state, &channel, reward, Some(false), None),
             )
             .await
@@ -187,12 +189,14 @@ pub(super) async fn step(state: Arc<AppState>) -> Result<bool, sqlx::Error> {
             Err("invalid_reward".into())
         };
         service::Report {
+            meta: json!({"execution_limits":limits}),
+            duration_ms: started.elapsed().as_millis() as u64,
             error: result.err(),
             actions: vec![json!({"method":"rewards.set_visible","value":false,"reward_id":reward})],
             ..Default::default()
         }
     } else {
-        service::run(
+        service::run_with_limits(
             state.clone(),
             files,
             if source == "cs2" {
@@ -204,6 +208,7 @@ pub(super) async fn step(state: Arc<AppState>) -> Result<bool, sqlx::Error> {
             context,
             attr.clone(),
             false,
+            limits,
         )
         .await
     };

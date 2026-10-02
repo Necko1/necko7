@@ -96,6 +96,11 @@ pub enum Command {
         project_id: Uuid,
         name: String,
     },
+    ExecutionLimits {
+        project_id: Uuid,
+        execution_timeout_secs: i32,
+        host_timeout_secs: i32,
+    },
     Enable {
         project_id: Uuid,
         enabled: bool,
@@ -162,6 +167,7 @@ impl Command {
         match self {
             Self::Create { .. } => None,
             Self::Rename { project_id, .. }
+            | Self::ExecutionLimits { project_id, .. }
             | Self::Enable { project_id, .. }
             | Self::Delete { project_id, .. }
             | Self::Save { project_id, .. }
@@ -196,6 +202,7 @@ pub async fn command(
     let mut audit_action = match &cmd {
         Command::Create { .. } => Some("script.project_created"),
         Command::Rename { .. } => Some("script.project_renamed"),
+        Command::ExecutionLimits { .. } => Some("script.project_limits_changed"),
         Command::Enable { enabled, .. } => Some(if *enabled {
             "script.project_enabled"
         } else {
@@ -224,6 +231,11 @@ pub async fn command(
         Command::Rename { name, .. } => {
             audit_details["previous_name"] = audit_details["project_name"].clone();
             audit_details["project_name"] = json!(name.trim());
+        }
+        Command::ExecutionLimits { execution_timeout_secs, host_timeout_secs, .. } => {
+            audit_details["execution_limits"] = json!(super::limits::ExecutionLimits {
+                execution_timeout_secs: *execution_timeout_secs, host_timeout_secs: *host_timeout_secs,
+            });
         }
         Command::Rollback { revision, .. } => audit_details["revision"] = json!(revision),
         Command::RunJob { job_id, .. } | Command::CancelJob { job_id, .. } => {
@@ -384,6 +396,18 @@ pub async fn command(
             let (files,version,enabled):(Value,i64,bool)=sqlx::query_as("SELECT draft,draft_version,enabled FROM script_projects WHERE id=$1 AND deleted_at IS NULL FOR NO KEY UPDATE").bind(id).fetch_one(&mut *tx).await.map_err(db)?;
             let mut result = json!({"ok":true});
             match cmd {
+                Command::ExecutionLimits { execution_timeout_secs, host_timeout_secs, .. } => {
+                    let limits = super::limits::ExecutionLimits { execution_timeout_secs, host_timeout_secs };
+                    limits.validate().map_err(bad)?;
+                    let previous: super::limits::ExecutionLimits = sqlx::query_as(
+                        "SELECT execution_timeout_secs,host_timeout_secs FROM script_projects WHERE id=$1"
+                    ).bind(id).fetch_one(&mut *tx).await.map_err(db)?;
+                    audit_details["previous_limits"] = json!(previous);
+                    sqlx::query("UPDATE script_projects SET execution_timeout_secs=$2,host_timeout_secs=$3 WHERE id=$1")
+                        .bind(id).bind(execution_timeout_secs).bind(host_timeout_secs)
+                        .execute(&mut *tx).await.map_err(db)?;
+                    result = json!({"ok":true,"execution_limits":limits});
+                }
                 Command::Rename { name, .. } => {
                     if name.trim().is_empty() || name.len() > 80 {
                         return Err(bad("Name must be 1–80 characters"));

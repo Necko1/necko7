@@ -17,6 +17,8 @@ The static site's handwritten guides explain behavior not captured by signatures
 
 ## Access and compatibility
 
+Owner/Editor can configure project execution limits from the editor's three-dot menu: whole-run wall time 1..120 seconds (default 30) and per-host-call time 1..60 seconds (default 10, no greater than whole-run time). These settings are independent of draft/live revisions and captured at the start of event, timer, internal visibility-job and dry-run execution. Reports/context metadata preserve the actual values. Calls use at most the remaining total budget; operation/container/host-count/compiler guards remain bounded. Delays belong in durable scheduler jobs. Timeouts do not undo previous effects or guarantee cancellation at an external service.
+
 Owner and Editor can operate normal Scripts. Creating/replacing pairing codes and dashboard device revocation remain Owner-only. A native desktop claims an Owner-issued one-shot code and uses its Ed25519 signature for device requests; an authenticated Editor session cannot claim or unpair a device through those endpoints. Viewer/unrelated users have no operator workspace.
 
 Rhai is pinned to 1.26.1. Use native `ctx.current_match`, `UserFilter::create()` and `RewardFilter::create()`. There is no syntax rewriting. Rhai reserves `debug` in method position: use the working native `debug(log, "message")` operation, not `log.debug(...)`. Other report levels use `log.info/warn/error`.

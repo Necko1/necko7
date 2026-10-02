@@ -16,6 +16,9 @@ mod message_filter_tests;
 #[cfg(test)]
 mod filter_window_tests;
 pub mod matches;
+pub mod limits;
+#[cfg(test)]
+mod limits_tests;
 pub mod runtime;
 pub mod service;
 #[cfg(test)]
